@@ -626,6 +626,7 @@ LIVE_SETTINGS = {
 # Settings that only take effect while the backend is built. A condition using
 # one of these needs --fresh-arms; applying it to a live backend is a no-op.
 LOAD_TIME_SETTINGS = {
+    "FLASHNEXT_EXPERT_PACK", "FLASHNEXT_EXPERT_PACK_NATIVE", "FLASHNEXT_EXPERT_PACK_READ",
     "FLASHNEXT_STREAM_EMBED",
     "FLASHNEXT_PREWARM",
     "FLASHNEXT_SLAB_GLOBAL",
@@ -1110,6 +1111,7 @@ def arm(backend, tokens, meter, run_began, condition=None,
             "decode_counters": counters,
             "memory": sampler.summary(),
             "shape_trace": trace.shape_rows() if trace.capture_shapes else None,
+            "memory_budget": getattr(backend, "last_memory_budget", None),
             "prefix_cache": ({"outcome": prefix.outcome, "restored_tokens": prefix.hit_tokens}
                              if (prefix := getattr(backend, "last_prefix", None)) is not None else None),
         }
@@ -1375,8 +1377,13 @@ def main() -> None:
     )
     parser.add_argument("--telemetry", choices=("off", "timing", "shapes", "paired"), default="off",
                         help="Stage 0 trace or paired timing/off overhead measurement")
+    parser.add_argument("--expert-pack", type=Path,
+                        help="pair original shards with this sidecar using a fresh backend per arm")
+    parser.add_argument("--expert-pack-read", choices=("record", "coalesced", "mmap"), default="coalesced")
     parser.add_argument("--expect-token-sha256", help="require a previously recorded full arm token digest")
     args = parser.parse_args()
+    if args.expert_pack is not None and (args.compare != "none" or args.telemetry == "paired" or not args.fresh_arms):
+        parser.error("--expert-pack requires --fresh-arms, --compare none and a single telemetry mode")
     if args.telemetry == "paired" and args.compare != "none":
         parser.error("--telemetry paired requires --compare none")
     if args.telemetry != "off" and args.min_arms - args.drop < 5:
@@ -1393,12 +1400,26 @@ def main() -> None:
     conditions = ({"baseline": {}, "telemetry": {}} if args.telemetry == "paired"
                   else COMPARISONS[args.compare])
 
+    if args.expert_pack is not None:
+        pack_path = str(args.expert_pack.expanduser().resolve(strict=True))
+        conditions = {
+            "checkpoint": {"FLASHNEXT_EXPERT_PACK": "", "FLASHNEXT_EXPERT_PACK_NATIVE": "0"},
+            "sidecar": {"FLASHNEXT_EXPERT_PACK": pack_path, "FLASHNEXT_EXPERT_PACK_NATIVE": "0",
+                        "FLASHNEXT_EXPERT_PACK_READ": args.expert_pack_read},
+        }
+
     def telemetry_for(name):
         if args.telemetry == "paired":
             return "off" if name == "baseline" else "timing"
         return args.telemetry
     routing_altering = args.compare in ROUTING_ALTERING_COMPARISONS
     effective_environment = effective_chat_environment()
+    if args.telemetry != "off":
+        for key in ("VEYSTRIX_MEMORY_POLICY", "FLASHNEXT_MEMORY_MANAGER", "FLASHNEXT_NATIVE_MTP",
+                    "FLASHNEXT_PREFIX_CACHE", "FLASHNEXT_PROMPT_LOOKUP", "FLASHNEXT_EXPERT_PACK",
+                    "FLASHNEXT_EXPERT_PACK_READ"):
+            if key in os.environ:
+                effective_environment[key] = os.environ[key]
     if args.compare in {"qsa", "qsa-cache", "qsa-scatter"}:
         effective_environment.update({
             "FLASHNEXT_METAL_RUNTIME": "1", "FLASHNEXT_METAL_G64": "0",
@@ -1642,8 +1663,17 @@ def main() -> None:
                             on_raw_result=preserve_raw, provenance=provenance, prompt=prompt,
                             telemetry=telemetry_for(name),
                         )
+                        if args.expert_pack is not None:
+                            pool = getattr(backend.store, "_flashnext_expert_pool", None)
+                            records = getattr(pool, "packed_reads", 0)
+                            row["packed_records"] = records
+                            if name == "sidecar" and not records:
+                                raise RuntimeError("sidecar arm completed without reading any packed experts")
                     finally:
                         store = backend.store
+                        if args.expert_pack is not None:
+                            from models.flashnext import gpu_sync, pool_lifecycle
+                            pool_lifecycle.release_decode_pool(store, synchronize=gpu_sync.synchronize)
                         del backend
                         gc.collect()
                         store.close()

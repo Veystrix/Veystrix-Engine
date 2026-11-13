@@ -340,7 +340,7 @@ class BackendWiringTests(unittest.TestCase):
         self.assertIn("decoder is None and (self._replay_needed or not self.tape) and self.cache_tokens == 0",
                       source[decide:extend])
 
-    def test_only_the_backend_and_the_bench_import_the_module(self):
+    def test_pool_lifecycle_callers_are_explicit(self):
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parents[4]
@@ -350,6 +350,7 @@ class BackendWiringTests(unittest.TestCase):
         self.assertEqual(users, [
             "models/flashnext/auto_reclaim.py",
             "models/flashnext/gpu_sync.py",
+            "models/flashnext/memory_budget.py",
             "models/flashnext/memory_manager.py",
             "models/flashnext/prefill.py",        # reads the store only to switch to uncached reads while the controller is ELEVATED
             "models/flashnext/prefill_ring.py",

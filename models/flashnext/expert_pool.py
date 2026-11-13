@@ -24,8 +24,10 @@ victim is chosen.
 from __future__ import annotations
 
 import fcntl
+import logging
 import mmap
 import os
+from pathlib import Path
 import threading
 from collections import OrderedDict
 
@@ -81,6 +83,7 @@ class ExpertPool:
         policy = os.environ.get(POLICY_FLAG, "lru").strip().lower() or "lru"
         if policy not in ("lru", "s3fifo"):
             raise ValueError(f"{POLICY_FLAG} must be 'lru' or 's3fifo'")
+        self.policy = policy
         layout = get_slab_layout(group_size)
         self.store = store
         self.stride = layout.record_stride
@@ -115,6 +118,31 @@ class ExpertPool:
         self._fd_lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        self.pack = None
+        self.packed_reads = 0
+        self._packed_stats_lock = threading.Lock()
+        self.pack_mode = os.environ.get("FLASHNEXT_EXPERT_PACK_READ", "record")
+        self.pack_extents = 0
+        self.pack_extent_bytes = 0
+        path = os.environ.get("FLASHNEXT_EXPERT_PACK")
+        if path:
+            from models.nemotron35.safetensors_index import index_checkpoint
+            from models.shared.expert_pack import ExpertPack
+
+            if self.pack_mode not in ("record", "coalesced", "mmap"):
+                raise ValueError("FLASHNEXT_EXPERT_PACK_READ must be record, coalesced or mmap")
+            try:
+                pack = ExpertPack(Path(path).expanduser(), store.dir, index_checkpoint(store.dir), "flashnext",
+                                  uncached=self.pack_mode != "mmap" and not buffered_fill_enabled(),
+                                  mapped=self.pack_mode == "mmap")
+                expected = {f"{projection}.{part}": self._row_sizes[projection, part]
+                            for projection, part in _PARTS}
+                if pack.parts != expected or pack.payload != self.stride or not any(layer > 0 for layer in pack.layers):
+                    pack.close()
+                    raise ValueError("packed experts do not match the Metal pool slot layout")
+                self.pack = pack
+            except (OSError, ValueError) as error:
+                logging.getLogger(__name__).warning("Expert pack unavailable, using checkpoint shards: %s", error)
 
     @property
     def usable_slots(self) -> int:
@@ -266,6 +294,16 @@ class ExpertPool:
         misses = sorted(misses, key=lambda target: target[0])
         futures = []
         try:
+            if self.pack is not None:
+                layer = int(prefix.split(".")[3])
+                if layer in self.pack.layers:
+                    if self.pack_mode == "record":
+                        for expert, slot in misses:
+                            futures.append(submit(self._fill_packed, layer, expert, slot))
+                    else:
+                        for extent in packed_extents(misses):
+                            futures.append(submit(self._fill_extent, layer, extent))
+                    return futures
             for projection, part in _PARTS:
                 name = f"{prefix}.{projection}.{part}"
                 offset = HEADER + self.offsets[(projection, part)]
@@ -288,11 +326,68 @@ class ExpertPool:
             raise
         return futures
 
+    def _fill_packed(self, layer, expert, slot):
+        from .store import _profiled_preadv
+
+        offset = HEADER + slot * self.stride
+        with self._view[offset:offset + self.stride] as destination:
+            try:
+                self.pack.read_into(layer, expert, [destination], read=_profiled_preadv)
+            except OSError:
+                self._fill_checkpoint_records(layer, [(expert, slot)])
+                return
+        with self._packed_stats_lock:
+            self.packed_reads += 1
+            self.pack_extents += 1
+            self.pack_extent_bytes += self.stride
+
+    def _fill_extent(self, layer, extent):
+        from contextlib import ExitStack
+        from .store import _profiled_preadv
+
+        padding = self.pack.stride - self.stride
+        with ExitStack() as stack:
+            buffers = []
+            for _, slot in extent:
+                offset = HEADER + slot * self.stride
+                buffers.append(stack.enter_context(self._view[offset:offset + self.stride]))
+                if padding:
+                    buffers.append(memoryview(bytearray(padding)))
+            try:
+                size = self.pack.read_extent(layer, extent[0][0], buffers, read=_profiled_preadv)
+            except OSError:
+                self._fill_checkpoint_records(layer, extent)
+                return
+        with self._packed_stats_lock:
+            self.packed_reads += len(extent)
+            self.pack_extents += 1
+            self.pack_extent_bytes += size
+
+    def _fill_checkpoint_records(self, layer, records):
+        for projection, part in _PARTS:
+            name = f"language_model.model.layers.{layer}.mlp.switch_mlp.{projection}.{part}"
+            offset = HEADER + self.offsets[(projection, part)]
+            self._fill_part(name, [(expert, offset + slot * self.stride) for expert, slot in records])
+
     def close(self) -> None:
+        if self.pack is not None:
+            self.pack.close()
         for fd in (*self._fds.values(), *self._fill_fds.values()):
             os.close(fd)
         self._fds.clear()
         self._fill_fds.clear()
+
+
+def packed_extents(misses, limit=8):
+    """Group adjacent file offsets, retaining caller-owned destination slots."""
+    start = 0
+    while start < len(misses):
+        end = start + 1
+        while (end < min(len(misses), start + limit) and
+               misses[end][0] == misses[end - 1][0] + 1):
+            end += 1
+        yield misses[start:end]
+        start = end
 
 
 class _S3FIFO:
@@ -411,16 +506,18 @@ def _auto_allows(store, size_bytes: int) -> bool:
 def for_store(store, group_size: int = 32):
     """The process's pool for this store, created on first use (``None``: run without a pool)."""
     pool = getattr(store, "_flashnext_expert_pool", None)
-    if pool is None and enabled():
+    planned = getattr(store, "_flashnext_elastic_pool_bytes", None)
+    target_bytes = round(configured_gb() * 1e9) if planned is None else planned
+    if pool is None and target_bytes > 0:
         if getattr(store, "_flashnext_pool_declined", None) is not None:
             return None                       # refused for this request; reset_decline() lets the next one retry
-        target_gb = configured_gb()
-        if auto_enabled() and not _auto_allows(store, int(target_gb * 1e9)):
+        target_gb = target_bytes / 1e9
+        if planned is None and auto_enabled() and not _auto_allows(store, target_bytes):
             return None
         lock = os.environ.get(LOCK_FLAG, "0") == "1"
         try:
             pool = ExpertPool(
-                store, int(target_gb * 1e9), group_size,
+                store, target_bytes, group_size,
                 lock=lock,
             )
         except (MemoryError, RuntimeError, OSError):
@@ -429,7 +526,7 @@ def for_store(store, group_size: int = 32):
             if os.environ.get("FLASHNEXT_CHAT_GUARD") == "1":
                 raise
             # Recovery from allocation failure: fall back to 1 GB if larger
-            if target_gb > 1.0:
+            if planned is None and target_gb > 1.0:
                 try:
                     pool = ExpertPool(
                         store, int(1.0 * 1e9), group_size,

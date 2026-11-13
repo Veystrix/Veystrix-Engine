@@ -5,7 +5,9 @@ checkpoint and a short prompt whose greedy digest you can identify in
 `production.json`. The example selects the pool-off 16 GiB configuration.
 
 ```sh
-FLASHNEXT_EXPERT_POOL_GB=0 FLASHNEXT_NATIVE_MTP=off FLASHNEXT_PREFIX_CACHE=0 \
+VEYSTRIX_MEMORY_POLICY=legacy FLASHNEXT_EXPERT_POOL_GB=0 \
+  FLASHNEXT_SLAB_GLOBAL=0 FLASHNEXT_SLAB_PACK=0 \
+  FLASHNEXT_NATIVE_MTP=off FLASHNEXT_PREFIX_CACHE=0 \
   FLASHNEXT_PROMPT_LOOKUP=0 \
   .venv/bin/python -m models.flashnext.tests.bench.bench_production \
   --telemetry paired --tokens 32 --arms 5 --min-arms 5 --drop 0 \
@@ -25,10 +27,9 @@ excluded from throughput comparisons.
 Use `--fresh-arms` to reload the backend in the same process per arm. Start a
 new invocation for a cold process and use separate controlled prefix state
 when comparing prefix hits with cold prefixes. The harness leaves the OS page
-cache as found. Available-memory samples are evidence, and a run that goes
-below 3 GiB or shows sustained swap growth is unsuitable as a 16 GiB baseline.
-The roofline reports the sampled floor check for retained instrumented arms.
-Use the existing runtime guards for long or high-memory requests.
+cache as found. The benchmark records available memory and swap throughout
+instrumented arms. The roofline reports whether retained arms stayed above
+3 GiB as a diagnostic. The sampled floor does not stop the benchmark.
 
 ## Reading the artifacts
 

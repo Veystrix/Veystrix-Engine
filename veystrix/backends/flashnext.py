@@ -536,7 +536,7 @@ class FlashNextBackend(Conversation):
                  on_prefill_progress=None, on_decode_token=None,
                  should_cancel=None) -> tuple[str, Stats]:
         """Feed everything pending through the model, then decode a reply (see ``_generate``)."""
-        from models.flashnext import pool_lifecycle, purge_recovery
+        from models.flashnext import memory_budget, pool_lifecycle, purge_recovery
 
         # The activity record covers the whole call (prefill, decode, GPU work, expert reads and the cleanup in
         # the finally below), so the optional cache-purge recovery never runs during any of it and a purge that
@@ -556,7 +556,7 @@ class FlashNextBackend(Conversation):
             self.turn_memory_before = self._turn_memory()
         except Exception:
             self.turn_memory_before = None
-        with purge_recovery.ACTIVITY.request(), pool_lifecycle.exclusive_request():
+        with purge_recovery.ACTIVITY.request(), pool_lifecycle.exclusive_request(elastic=memory_budget.enabled()):
             trace = benchmark_trace.get()
             if trace is not None:
                 trace.mark("engine_admission_start")
@@ -652,6 +652,9 @@ class FlashNextBackend(Conversation):
                 "kv_dtype": quantized_kv.kv_dtype(), "qsa_kernel": qsa_chunk.kernel_mode(),
                 "logical_resident_weight_bytes": getattr(self.language, "_flashnext_resident_weight_bytes", None),
                 "expert_pool_mapped_bytes": pool_lifecycle.pool_bytes(pool),
+                "expert_pack_records": pool.packed_reads if pool is not None else 0,
+                "expert_pack_extents": pool.pack_extents if pool is not None else 0,
+                "expert_pack_extent_bytes": pool.pack_extent_bytes if pool is not None else 0,
                 "mlx_active_bytes": active, "mlx_cached_bytes": cached,
                 "mlx_working_set_bytes": active + cached, "mlx_peak_active_bytes": int(mx.get_peak_memory()),
                 "metal_recommended_working_set_bytes": mx.device_info().get("max_recommended_working_set_size")}
@@ -967,6 +970,29 @@ class FlashNextBackend(Conversation):
                 self._mark_replay_needed()
 
         trace = benchmark_trace.get()
+        from models.flashnext import memory_budget, memory_manager, pool_lifecycle, prefill, prefill_ring
+
+        elastic_store = pool_lifecycle.store_of(self.language) if memory_budget.enabled() else None
+        elastic_prefix = None
+        if elastic_store is not None and (fresh_prefix_cache or getattr(self, "_prefix", None) is not None):
+            elastic_prefix = self._prefix_session().store()
+        workspace_width = (decoder.depth if decoder is not None else
+                           8 if os.environ.get("FLASHNEXT_PROMPT_LOOKUP") == "1" else 0)
+
+        def budget(phase, tokens):
+            from dataclasses import asdict
+
+            value = memory_budget.apply(
+                elastic_store, phase=phase, tokens=tokens,
+                chunk=prefill.chunk_tokens() or max(1, tokens),
+                ring=prefill_ring.enabled() and tokens >= prefill_ring.min_tokens(),
+                verification_width=workspace_width if phase == "decode" else 0,
+                resident=getattr(self.language, "_flashnext_resident_weight_bytes", 0) or 0,
+                cache=self.cache, prefix_store=elastic_prefix,
+                synchronize=gpu_sync.synchronize, clear_cache=mx.clear_cache,
+            )
+            return {**asdict(value), "projected_available_bytes": value.projected_available_bytes}
+
         prefill_began = time.perf_counter()
         self.routing.reset()
         def layer_completed(layer_id):
@@ -987,8 +1013,15 @@ class FlashNextBackend(Conversation):
             check_cancel()
             self.last_pool_release = None
             self.last_memory_report = None
-            from models.flashnext import memory_manager
-
+            self.last_memory_budget = {}
+            if elastic_store is not None:
+                reusable = 0
+                if fresh_prefix_cache:
+                    try:
+                        reusable = self._prefix_session().reusable_tokens(prompt)
+                    except (OSError, ValueError):
+                        pass
+                self.last_memory_budget["prefill"] = budget("prefill", prompt_tokens - reusable)
             if fresh_for_pool or memory_manager.enabled():
                 try:
                     self._make_room_for_prefill(prompt, fresh_prefix_cache, fresh_for_pool)
@@ -1034,6 +1067,12 @@ class FlashNextBackend(Conversation):
         if gate_probe is not None:
             try:
                 gate_probe.prefilled(self, token, prefill_seconds)
+            except Exception:
+                self._mark_replay_needed()
+                raise
+        if elastic_store is not None and generation_horizon:
+            try:
+                self.last_memory_budget["decode"] = budget("decode", generation_horizon)
             except Exception:
                 self._mark_replay_needed()
                 raise

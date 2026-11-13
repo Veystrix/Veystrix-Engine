@@ -1393,7 +1393,11 @@ class StreamingSwitchGLU(nn.Module):
         # experts itself, so the static slab pack stays off beside it.
         from . import expert_pool as _expert_pool
 
-        self._expert_pool_on = _expert_pool.enabled() and self._metal_runtime_capable
+        from . import memory_budget
+
+        pool_requested = (_expert_pool.enabled() or
+                          (memory_budget.enabled() and memory_budget.requested_cap() > 0))
+        self._expert_pool_on = pool_requested and self._metal_runtime_capable
         if self._expert_pool_on:
             self._slab_pack_disabled_reason = "expert pool enabled"
         else:

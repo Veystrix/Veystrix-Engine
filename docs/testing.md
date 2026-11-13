@@ -44,7 +44,9 @@ as modules from the repository root:
 ```
 
 The [Stage 0 Flash-Next benchmark guide](performance/stage-0.md) describes
-optional telemetry, digest replay and the roofline report.
+optional telemetry, digest replay and the roofline report. The
+[Stage 1 and 2 guide](performance/stages-1-2.md) covers elastic pool sizing
+and expert-pack comparisons.
 
 One benchmark can serve several cases. Helpers that only benchmarks use, such
 as `gpustat` or `metal_trace`, live here too.

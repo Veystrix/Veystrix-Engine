@@ -1010,6 +1010,9 @@ class FlashNextBackend(Conversation):
         tune_token = None
         try:
             check_cancel()
+            self.last_pool_release = None
+            self.last_memory_report = None
+            self.last_memory_budget = {}
             if decoder is None:
                 categories = (getattr(self, "turn_memory_before", None) or {}).get("categories", {})
                 tune_token = prefill_autotune.start(
@@ -1019,9 +1022,6 @@ class FlashNextBackend(Conversation):
             self.last_prefill_choice = prefill_autotune.CURRENT.get()
             if elastic_store is not None and (fresh_prefix_cache or getattr(self, "_prefix", None) is not None):
                 elastic_prefix = self._prefix_session().store()
-            self.last_pool_release = None
-            self.last_memory_report = None
-            self.last_memory_budget = {}
             if elastic_store is not None:
                 reusable = 0
                 if fresh_prefix_cache:

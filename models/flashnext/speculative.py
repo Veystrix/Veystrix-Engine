@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Iterable
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 import mlx.core as mx
 
 from . import mtp
@@ -326,18 +328,22 @@ class FastDraftGreedy:
         stops: set[int],
         produced: int,
     ):
+        trace = benchmark_trace.get()
         while produced < max_tokens and self.next_main is not None:
             value = int(self.next_main.item())
             if value in stops:
                 self.next_main = None
                 return
             yield value
+            started = trace.clock() if trace is not None else None
             token = mx.array([[value]], dtype=mx.uint32)
             output = self.language(token, cache=self.target_cache)
             self.next_main = mx.argmax(
                 output.logits[:, -1, :], axis=-1
             ).astype(mx.uint32)
             mx.eval(self.next_main)
+            if trace is not None:
+                trace.end_round("target_round", started, positions=1)
             produced += 1
 
     def _generate_external(self, max_tokens: int, stops: set[int]):
@@ -363,6 +369,8 @@ class FastDraftGreedy:
             draft_cache_has_last = False
             token = self.next_main
             room = min(self.depth, max_tokens - produced)
+            trace = benchmark_trace.get()
+            draft_ns = trace.clock() if trace is not None else None
             draft_started = time.perf_counter()
             trace_draft = os.environ.get("FLASHNEXT_SPEC_TRACE") == "1"
             draft_token_arrays = []
@@ -424,6 +432,8 @@ class FastDraftGreedy:
                     int(value.item()) for value in draft_token_arrays
                 )
             self.stats.draft_seconds += time.perf_counter() - draft_started
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(candidates) - 1)
 
             if self.release_draft_before_verify:
                 out = None
@@ -457,6 +467,7 @@ class FastDraftGreedy:
                 return
             block_ids = mx.array(candidates, dtype=mx.uint32).reshape(1, -1)
             self._exact_profile()
+            verify_ns = trace.clock() if trace is not None else None
             verify_started = time.perf_counter()
             out = self.language(
                 block_ids,
@@ -478,6 +489,9 @@ class FastDraftGreedy:
                     break
                 accepted += 1
             self.stats.accepted += accepted
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(candidates),
+                                verification=True, accepted=accepted)
             all_accepted = accepted == len(candidates) - 1
             if all_accepted:
                 committed = candidates
@@ -594,6 +608,7 @@ class FastDraftGreedy:
                 self.route_observer = None
             return
         produced = 0
+        trace = benchmark_trace.get()
         try:
             while produced < max_tokens and self.next_main is not None:
                 first = int(self.next_main.item())
@@ -602,13 +617,17 @@ class FastDraftGreedy:
                     return
 
                 snapshot = snapshot_cache(self.target_cache)
+                draft_ns = trace.clock() if trace is not None else None
                 drafts = self._draft(snapshot)
+                if trace is not None:
+                    trace.end_round("draft_round", draft_ns, proposed=len(drafts))
                 self.stats.cycles += 1
                 self.stats.drafted += len(drafts)
 
                 block = [first, *drafts]
                 block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
                 self._exact_profile()
+                verify_ns = trace.clock() if trace is not None else None
                 out = self.language(
                     block_ids,
                     cache=self.target_cache,
@@ -628,6 +647,9 @@ class FastDraftGreedy:
                         break
                     accepted += 1
                 self.stats.accepted += accepted
+                if trace is not None:
+                    trace.end_round("target_round", verify_ns, positions=len(block),
+                                    verification=True, accepted=accepted)
                 exact = block[: accepted + 1]
 
                 stop_at = next(
@@ -899,6 +921,7 @@ class MTPGreedy:
         max_tokens = _normalize_max_tokens(max_tokens)
         stops = set(stops)
         produced = 0
+        trace = benchmark_trace.get()
         while produced < max_tokens and self.next_main is not None:
             if int(self.next_main.item()) in stops:
                 trim_cache(self.mtp_cache, self.hist_offset - 1)
@@ -908,12 +931,16 @@ class MTPGreedy:
 
             target_snapshot = snapshot_cache(self.target_cache)
             base_hist = self.hist_offset
+            draft_ns = trace.clock() if trace is not None else None
             drafts = self._draft_chain()
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
             self.stats.cycles += 1
             self.stats.drafted += len(drafts)
 
             block = [int(self.next_main.item()), *drafts]
             block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
+            verify_ns = trace.clock() if trace is not None else None
             target_ids, hidden = self._target_verify(block_ids)
             host_targets = target_ids.tolist()
 
@@ -924,6 +951,9 @@ class MTPGreedy:
                 accepted += 1
             self.stats.accepted += accepted
 
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(block),
+                                verification=True, accepted=accepted)
             processed = block[: accepted + 1]
             stop_at = next(
                 (i for i, token in enumerate(processed) if token in stops),
@@ -988,17 +1018,25 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
     produced = 0
     value = int(first.item())
 
+    trace = benchmark_trace.get()
+
     def singleton(current, want_logits=True):
+        started = trace.clock() if trace is not None else None
         ids = mx.array([[current]], dtype=mx.uint32)
         out = language(ids, cache=cache, skip_logits=not want_logits)
         if not want_logits:
             mx.eval([entry.state for entry in cache])
-            return None
-        return int(mx.argmax(out.logits[0, -1]).item())
+            result = None
+        else:
+            result = int(mx.argmax(out.logits[0, -1]).item())
+        if trace is not None:
+            trace.end_round("target_round", started, positions=1, cache_commit_only=not want_logits)
+        return result
 
     while produced < horizon and value not in stops:
         check_cancel()
         began = time.perf_counter()
+        draft_ns = trace.clock() if trace is not None else None
         lookup.append(value)
         drafts = (
             lookup.propose(min(4, horizon - produced - 1))
@@ -1009,6 +1047,8 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
             if draft in stops:
                 drafts = drafts[:index]
                 break
+        if trace is not None:
+            trace.end_round("draft_round", draft_ns, proposed=len(drafts))
         if not drafts:
             yield value
             produced += 1
@@ -1019,10 +1059,20 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
 
         snapshot = snapshot_cache(cache)
         ids = mx.array([[value, *drafts]], dtype=mx.uint32)
+        verify_ns = trace.clock() if trace is not None else None
         out = language(ids, cache=cache, speculative_verify=True, return_hidden=True, skip_logits=True)
         predictions = language.speculative_argmax_from_hidden(out.hidden_states[-1])[0].tolist()
         committed = [value]
-        if predictions[:len(drafts)] == drafts:
+        matched = predictions[:len(drafts)] == drafts
+        if trace is not None:
+            accepted = 0
+            for predicted, draft in zip(predictions, drafts):
+                if predicted != draft:
+                    break
+                accepted += 1
+            trace.end_round("target_round", verify_ns, positions=len(drafts) + 1,
+                            verification=True, accepted=accepted)
+        if matched:
             committed.extend(drafts)
             value = predictions[-1]
         else:

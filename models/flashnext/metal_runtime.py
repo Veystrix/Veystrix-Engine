@@ -20,6 +20,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from .boundary_profiler import BoundaryProfiler
 
 
@@ -617,6 +619,12 @@ class MetalMoEExecutor:
 
     def _launch(self, label, kernel, inputs, x, grid, threadgroup, output_shape):
         """Dispatch one kernel, timing it only when its boundary is profiled."""
+        trace = benchmark_trace.get()
+        if trace is not None and trace.capture_shapes:
+            trace.counts["custom_metal_dispatches"] += 1
+            trace.shape("metal." + (label or "projection"), inputs[:5],
+                        bits=BITS, group_size=self.group_size, output_shape=output_shape,
+                        grid=grid, threadgroup=threadgroup)
         profiler = self._boundary_profiler
         if label is None or not profiler.enabled or not profiler.selected_for(label):
             result = kernel(

@@ -14,6 +14,7 @@ import time
 import mlx.core as mx
 
 from veystrix.backends.base import DecodeTimer, GenerationCancelled
+from veystrix.bench.telemetry import current as benchmark_trace
 from veystrix.checkpoints import resolve_flashnext
 from veystrix.conversation import Conversation
 from veystrix.model_settings import FLASHNEXT_DEFAULTS
@@ -556,6 +557,9 @@ class FlashNextBackend(Conversation):
         except Exception:
             self.turn_memory_before = None
         with purge_recovery.ACTIVITY.request(), pool_lifecycle.exclusive_request():
+            trace = benchmark_trace.get()
+            if trace is not None:
+                trace.mark("engine_admission_start")
             from models.flashnext import request_admission
             if request_admission.enabled():
                 try:
@@ -576,6 +580,8 @@ class FlashNextBackend(Conversation):
             fault = pool_lifecycle.lifecycle_fault() or getattr(self, "_memory_cleanup_error", None)
             if fault:
                 raise RuntimeError("previous memory cleanup failed; restart the process: " + fault)
+            if trace is not None:
+                trace.mark("engine_admission_end")
             with pool_lifecycle.in_flight():
                 try:
                     from models.flashnext import expert_pool
@@ -960,6 +966,7 @@ class FlashNextBackend(Conversation):
             else:
                 self._mark_replay_needed()
 
+        trace = benchmark_trace.get()
         prefill_began = time.perf_counter()
         self.routing.reset()
         def layer_completed(layer_id):
@@ -995,12 +1002,20 @@ class FlashNextBackend(Conversation):
                     self.language, prompt, self.cache, sampler=Sampler(self.sampling)
                 )
             elif decoder is None:
+                if trace is not None:
+                    trace.mark("prefill_start")
+                    trace.prefill_tokens = prompt_tokens
                 self.last_prefix = None
                 _, token = prefill_language(
                     self.language, ids, self.cache, sampler=Sampler(self.sampling)
                 )
             else:
+                if trace is not None:
+                    trace.mark("prefill_start")
+                    trace.prefill_tokens = prompt_tokens
                 decoder.append(ids)
+                if trace is not None:
+                    trace.mark("first_logits_ready", boundary="speculative_prefill_return")
                 self.cache = decoder.target_cache
         except GenerationCancelled:
             preserve_or_replay()
@@ -1043,6 +1058,8 @@ class FlashNextBackend(Conversation):
         timer = DecodeTimer()
         finish = "length"
         self.routing.begin_decode()
+        if trace is not None:
+            trace.mark("decode_start")
         flight_recorder.record("decode_enter")
         if os.environ.get("VEYSTRIX_BENCH_TOKEN_DIGEST") == "1":
             flight_recorder.record("flashnext_decode_mode", native_mtp=self._is_native_mtp_decoder(decoder),
@@ -1082,16 +1099,21 @@ class FlashNextBackend(Conversation):
                 if budget_state is not None:
                     budget_state["forced_close"] = force_close
                 yield value
+                started = trace.clock() if trace is not None else None
                 if _index + 1 == generation_horizon:
                     # Commit the final token to the live cache without
                     # projecting or sampling a token the caller cannot use.
                     self.language(token[None], cache=self.cache, skip_logits=True)
                     mx.eval([entry.state for entry in self.cache])
+                    if trace is not None:
+                        trace.end_round("target_round", started, positions=1, cache_commit_only=True)
                     return
                 sampler.observe(value)
                 step = self.language(token[None], cache=self.cache)
                 token = sampler(step.logits[:, -1, :])
                 mx.eval(token)
+                if trace is not None:
+                    trace.end_round("target_round", started, positions=1)
 
         from models.flashnext import quantized_kv
         from models.flashnext.routing import swap_enabled
@@ -1144,6 +1166,8 @@ class FlashNextBackend(Conversation):
                 if out is not None:
                     with timer.emitting():
                         out(piece)
+            if trace is not None:
+                trace.decode_commit()
             if budget_state is not None and budget_state["answer_limited"]:
                 finish = "length"
                 self.turn_closed = False

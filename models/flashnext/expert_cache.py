@@ -25,6 +25,8 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from mlx_vlm.models.switch_layers import _gather_sort, _scatter_unsort
 
 from . import hostwindow
@@ -176,14 +178,18 @@ def _submit_read(*args):
     track_pool = _SCORE_SYNC_PROFILE
     if track_pool:
         _pool_submit()
+    trace = benchmark_trace.get()
     try:
         if _PROFILE:
             future = _POOL.submit(
                 _profiled_read_call,
                 time.perf_counter(),
                 track_pool,
+                trace if trace is not None and trace.capture_shapes else None,
                 *args,
             )
+        elif trace is not None and trace.capture_shapes:
+            future = _POOL.submit(_trace_read_call, trace, track_pool, *args)
         elif track_pool:
             future = _POOL.submit(_tracked_read_call, *args)
         else:
@@ -398,7 +404,7 @@ class _ProfiledRead:
         self.pread_bytes = stats["pread_bytes"]
 
 
-def _profiled_read_call(submitted, track_pool, function, *args):
+def _profiled_read_call(submitted, track_pool, trace, function, *args):
     started = time.perf_counter()
     if track_pool:
         _pool_started()
@@ -407,6 +413,8 @@ def _profiled_read_call(submitted, track_pool, function, *args):
         value = function(*args)
     finally:
         stats = finish_read_profile()
+        if trace is not None:
+            trace.record_reads(stats)
         if track_pool:
             _pool_finished()
     ended = time.perf_counter()
@@ -521,6 +529,18 @@ def set_shared_buffer(enabled) -> None:
 def stream_pack_enabled() -> bool:
     """Return whether cold experts use one expert-major destination buffer."""
     return os.environ.get("FLASHNEXT_STREAM_PACK", "0") == "1"
+
+
+def _trace_read_call(trace, track_pool, function, *args):
+    if track_pool:
+        _pool_started()
+    begin_read_profile()
+    try:
+        return function(*args)
+    finally:
+        trace.record_reads(finish_read_profile())
+        if track_pool:
+            _pool_finished()
 
 
 class _StreamedPackRead:
@@ -1583,6 +1603,9 @@ class StreamingSwitchGLU(nn.Module):
             if hits:
                 return self._read_weights_with_pool(projections, wanted, pool, hits)
 
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_misses"] += len(wanted)
         pending = submit_projection_tasks(projections, wanted)
         if _PROFILE:
             timings = []
@@ -1593,6 +1616,8 @@ class StreamingSwitchGLU(nn.Module):
             _TIMERS["io_wait"] += ended - began
             _TIMERS["io_calls"] += 1
             _record_read_timing(timings, began, ended)
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((ended - began) * 1e9)
             began = time.perf_counter()
             with hostwindow.window("to_mx_host"):
                 weights = [
@@ -1601,8 +1626,11 @@ class StreamingSwitchGLU(nn.Module):
                 ]
             _TIMERS["to_mx"] += time.perf_counter() - began
             return weights
+        started = trace.clock() if trace is not None else None
         with hostwindow.window("io_await"):
             raw = _await_projection_tasks(pending)
+        if trace is not None:
+            trace.counts["expert_wait_ns"] += trace.clock() - started
         with hostwindow.window("to_mx_host"):
             weights = [
                 projection.cache.to_mx(chunks)
@@ -1626,6 +1654,10 @@ class StreamingSwitchGLU(nn.Module):
         from . import expert_io_stats, expert_pool
 
         misses = [e for e in wanted if e not in hits]
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_hits"] += len(hits)
+            trace.counts["expert_misses"] += len(misses)
         dest_indices = [wanted.index(e) for e in misses] if misses else None
         hit_indices_and_bases = [
             (i, expert_pool.HEADER + hits[expert] * pool.stride)
@@ -1672,6 +1704,8 @@ class StreamingSwitchGLU(nn.Module):
             with hostwindow.window("io_await"):
                 raw_misses = _await_projection_tasks(pending, timings)
             t_io = time.perf_counter() - began_io
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round(t_io * 1e9)
 
             for p_idx, (projection, part_buffers) in enumerate(zip(projections, proj_buffers)):
                 for part_idx, (part, buf) in enumerate(zip(("weight", "scales", "biases"), part_buffers)):
@@ -1779,7 +1813,12 @@ class StreamingSwitchGLU(nn.Module):
         miss = [e for e in routed if e not in expert_to_slot]
         self.hits += len(routed) - len(miss)
         self.misses += len(miss)
+        trace = benchmark_trace.get()
         wanted = list(dict.fromkeys(miss))
+        if trace is not None:
+            trace.counts["expert_hits"] += len(set(routed) & expert_to_slot.keys())
+            if stream_pack_enabled():
+                trace.counts["expert_misses"] += len(wanted)
         projections = (self.gate_proj, self.up_proj, self.down_proj)
         hidden_size = flat_input.shape[-1]
         streamed_record = None
@@ -1791,6 +1830,8 @@ class StreamingSwitchGLU(nn.Module):
             began = time.perf_counter()
             pending.wait(timings)
             ended = time.perf_counter()
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((ended - began) * 1e9)
             if _PROFILE:
                 _TIMERS["io_wait"] += ended - began
                 _TIMERS["io_wait_packed"] += ended - began
@@ -1861,6 +1902,10 @@ class StreamingSwitchGLU(nn.Module):
         slots, misses = pool.assign(self.layer_id, wanted)
         self.hits += len(routed) - len(misses)
         self.misses += len(misses)
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_misses"] += len(misses)
+            trace.counts["expert_hits"] += len(wanted) - len(misses)
         resident_activation = None
         if misses:
             prefix = self.gate_proj.cache.prefix.rsplit(".", 1)[0]
@@ -1904,6 +1949,8 @@ class StreamingSwitchGLU(nn.Module):
                 if resident_activation is not None:
                     mx.eval(resident_activation)  # finish using the shared buffer before unwinding
                 raise
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((time.perf_counter() - began) * 1e9)
             if _PROFILE:
                 ended = time.perf_counter()
                 _TIMERS["io_wait"] += ended - began

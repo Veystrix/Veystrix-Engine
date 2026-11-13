@@ -273,6 +273,11 @@ class PrefixSession:
         if system is not None and system >= int(_number(FLAG_MIN_TOKENS, "512")):
             store.observe(prompt[:system])               # an exact system prompt seen again is a recognised profile
         rejected_before = store.stats.rejected_plan
+        from veystrix.bench.telemetry import current as benchmark_trace
+
+        trace_probe = benchmark_trace.get()
+        if trace_probe is not None:
+            trace_probe.mark("prefix_lookup_start")
         lookup_began = time.perf_counter()
         if restore:
             res = store.lookup(prompt, language.make_cache, language=language,
@@ -283,6 +288,8 @@ class PrefixSession:
             hit, restored = None, None
             outcome = "COLD"
         report.lookup_seconds = time.perf_counter() - lookup_began
+        if trace_probe is not None:
+            trace_probe.mark("prefix_lookup_end")
         report.outcome = outcome
         report.plan_rejections = store.stats.rejected_plan - rejected_before
         offset = 0
@@ -377,6 +384,9 @@ class PrefixSession:
             with held:                                   # leases end however the prefill ends
                 if hit is not None:
                     held.enter_context(store.lease(hit.chain))
+                if trace_probe is not None:
+                    trace_probe.mark("prefill_start")
+                    trace_probe.prefill_tokens = report.prefilled_tokens
                 _, _, token = prefill_module.prefill_target(
                     language, suffix, cache, sampler=sampler, boundaries=boundaries,
                     on_boundary=snapshot, offset=offset, anchors=self.anchors(prompt), trace=trace,

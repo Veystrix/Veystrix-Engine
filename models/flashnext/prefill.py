@@ -268,14 +268,21 @@ def _prefill_target(
     logits = output.logits if full_logits else None
     hidden_states = output.hidden_states if (want_hidden or not full_logits) else None
 
+    from veystrix.bench.telemetry import current as benchmark_trace
+
+    trace = benchmark_trace.get()
     if full_logits:
         flight_recorder.record("prefill_logits_eval_begin")
         mx.eval(logits)
         flight_recorder.record("prefill_logits_eval_end")
         if hidden_states:
             mx.eval(hidden_states)
+        if trace is not None:
+            trace.mark("first_logits_ready", boundary="evaluated_logits")
         token = pick(logits[:, -1, :])
         mx.eval(token)
+        if trace is not None:
+            trace.mark("first_sample_ready")
         if _LOGITS_HOOK[0] is not None:
             _LOGITS_HOOK[0](logits[:, -1, :])
         elif os.environ.get("VEYSTRIX_LAYER_GATE_PROBE"):
@@ -303,6 +310,10 @@ def _prefill_target(
         flight_recorder.record("prefill_token_state_eval_begin")
         mx.eval(token, [entry.state for entry in cache])
         flight_recorder.record("prefill_token_state_eval_end")
+        if trace is not None:
+            # This path evaluates logits and the first sample in one existing call.
+            trace.mark("first_logits_ready", boundary="joint_sample_eval")
+            trace.mark("first_sample_ready")
         if _LOGITS_HOOK[0] is not None:
             if sampler is None:
                 raise RuntimeError("layer gate requires the actual sampler logits")

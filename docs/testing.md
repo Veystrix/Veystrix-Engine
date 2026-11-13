@@ -43,6 +43,9 @@ as modules from the repository root:
 .venv/bin/python -m models.flashnext.tests.bench.bench_production --compare none
 ```
 
+The [Stage 0 Flash-Next benchmark guide](performance/stage-0.md) describes
+optional telemetry, digest replay and the roofline report.
+
 One benchmark can serve several cases. Helpers that only benchmarks use, such
 as `gpustat` or `metal_trace`, live here too.
 

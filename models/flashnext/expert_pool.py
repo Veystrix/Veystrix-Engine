@@ -199,6 +199,8 @@ class ExpertPool:
         return fd
 
     def _fill_part(self, name, targets) -> None:
+        from .store import _profiled_preadv
+
         ref = self.store.refs[name]
         fd = self._fill_fd(ref.shard)
         view = self._view
@@ -212,7 +214,7 @@ class ExpertPool:
                 end += 1
             buffers = [view[base:base + size] for _, base in targets[start:end]]
             try:
-                if os.preadv(fd, buffers, ref.start + expert * size) != size * len(buffers):
+                if _profiled_preadv(fd, buffers, ref.start + expert * size) != size * len(buffers):
                     raise OSError(f"short expert pool read for {name} row {expert}")
             finally:
                 for buffer in buffers:

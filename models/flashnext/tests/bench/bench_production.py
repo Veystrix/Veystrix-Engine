@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+from contextlib import nullcontext
 import gc
 import hashlib
 import json
@@ -941,7 +942,7 @@ def validate_qsa_state(state, condition, phase="after"):
 def arm(backend, tokens, meter, run_began, condition=None,
         validate_metal_runtime: bool = False, on_raw_result=None,
         provenance: dict | None = None, prompt: str = PROMPT,
-        validate_g64_runtime: bool = False):
+        validate_g64_runtime: bool = False, telemetry: str = "off"):
     from models.flashnext.diskio import free_memory_mb, vm_counters
 
     require_source_freeze(provenance)
@@ -963,7 +964,23 @@ def arm(backend, tokens, meter, run_began, condition=None,
     qsa_condition = condition and "FLASHNEXT_QSA_CACHE_POOLED_KEYS" in condition
     if qsa_condition:
         validate_qsa_state(qsa_runtime_state(backend), condition, phase="before")
+    trace = None
+    decode_counts = None
+    if telemetry != "off":
+        from veystrix.bench.memory import MemorySampler
+        from veystrix.bench.telemetry import Trace, mlx_shapes
+
+        # Take the legacy host snapshots before timing admission.
+        memory_before = memory_snapshot()
+        vm_before = vm_counters()
+        trace = Trace(capture_shapes=telemetry == "shapes")
+        sampler = MemorySampler(trace.origin)
+        sampler.prepare()
+        trace.mark("admission")
+        trace.mark("tokenization_start")
     backend.append_text(prompt)
+    if trace is not None:
+        trace.mark("tokenization_end")
     prompt_ids = tuple(getattr(backend, "pending", ()))
     if qsa_condition:
         for layer in backend.language.model.layers:
@@ -972,8 +989,9 @@ def arm(backend, tokens, meter, run_began, condition=None,
                 raise RuntimeError("QSA comparison needs a prompt above the sparse attention threshold")
         if backend.resident_experts != 32 or backend.routing_profile != "exact-quality":
             raise RuntimeError("QSA comparison requires exact-quality with 32 resident experts")
-    memory_before = memory_snapshot()
-    vm_before = vm_counters()
+    if trace is None:
+        memory_before = memory_snapshot()
+        vm_before = vm_counters()
     vm_prefilled = {}
     prefill_memory = {}
     prefill_read = -1
@@ -983,6 +1001,10 @@ def arm(backend, tokens, meter, run_began, condition=None,
 
     def on_prefilled():
         nonlocal prefilled, vm_prefilled, prefill_memory, prefill_read, prefill_wall
+        nonlocal decode_counts
+        if trace is not None:
+            trace.mark("prefill_callback")
+            decode_counts = trace.counts + trace.read_snapshot()
         prefill_wall = time.perf_counter() - began
         prefill_read = meter.bytes_since()
         vm_prefilled = vm_counters()
@@ -991,13 +1013,34 @@ def arm(backend, tokens, meter, run_began, condition=None,
         # this callback after prefill and before the first decoded token.
         meter.reset()
         prefilled = True
+        if trace is not None:
+            trace.mark("prefill_callback_end")
+            trace.decode_read_meter = meter.bytes_since
 
-    began = time.perf_counter()
-    _text, stats = backend.generate(
-        max_tokens=tokens, on_prefilled=on_prefilled
-    )
-    wall = time.perf_counter() - began
-    read = meter.bytes_since()
+    if trace is None:
+        began = time.perf_counter()
+        _text, stats = backend.generate(max_tokens=tokens, on_prefilled=on_prefilled)
+        wall = time.perf_counter() - began
+        read = meter.bytes_since()
+    else:
+        # The benchmark drives the backend directly. This sink observes token
+        # delivery before HTTP/SSE framing and also sees empty text pieces.
+        def emitted(_token, piece):
+            trace.mark("token_emitted", text_ready=bool(piece))
+
+        dispatch = nullcontext()
+        if trace.capture_shapes:
+            import mlx.core as mx
+
+            dispatch = mlx_shapes(mx, trace)
+        with sampler, trace.activate(), dispatch:
+            began = time.perf_counter()
+            _text, stats = backend.generate(
+                max_tokens=tokens, on_prefilled=on_prefilled, on_decode_token=emitted
+            )
+            wall = time.perf_counter() - began
+            read = meter.bytes_since()
+            trace.mark("backend_return")
     generated_tokens = int(getattr(stats, "tokens", 0) or 0)
     generated_rate = float(getattr(stats, "rate", 0.0) or 0.0)
     ids = tuple(backend.tape[-generated_tokens:]) if generated_tokens else ()
@@ -1044,6 +1087,32 @@ def arm(backend, tokens, meter, run_began, condition=None,
         "wall": wall,
         "ids": ids,
     }
+    if trace is not None:
+        from veystrix.bench.roofline import SCHEMA_VERSION, arm_metrics
+
+        before = decode_counts or {}
+        counters = {key: value - before.get(key, 0)
+                    for key, value in (trace.counts + trace.read_snapshot()).items()}
+        for key in ("expert_hits", "expert_misses"):
+            counters.setdefault(key, 0)
+        wait = counters.get("expert_wait_ns", 0) + counters.get("ngram_host_ns", 0)
+        reads = counters.get("positioned_read_calls", 0)
+        counters["positioned_average_read_bytes"] = counters["positioned_read_bytes"] / reads if reads else None
+        for key in ("positioned_read_calls", "positioned_read_bytes", "custom_metal_dispatches",
+                    "mlx_eval_calls", "mlx_async_eval_calls", "mlx_synchronize_calls"):
+            counters.setdefault(key, 0 if trace.capture_shapes else None)
+        raw["stage0"] = {
+            "schema_version": SCHEMA_VERSION,
+            "mode": telemetry,
+            "events": trace.events,
+            "metrics": arm_metrics(trace.events, trace.prefill_tokens, trace.decode_read_bytes,
+                                   wait if wait > 0 else None),
+            "decode_counters": counters,
+            "memory": sampler.summary(),
+            "shape_trace": trace.shape_rows() if trace.capture_shapes else None,
+            "prefix_cache": ({"outcome": prefix.outcome, "restored_tokens": prefix.hit_tokens}
+                             if (prefix := getattr(backend, "last_prefix", None)) is not None else None),
+        }
     if provenance:
         raw.update(provenance)
     if on_raw_result is not None:
@@ -1304,10 +1373,30 @@ def main() -> None:
         "--record", default="",
         help="write canonical append-only JSONL evidence under FlashNext measurements",
     )
+    parser.add_argument("--telemetry", choices=("off", "timing", "shapes", "paired"), default="off",
+                        help="Stage 0 trace or paired timing/off overhead measurement")
+    parser.add_argument("--expect-token-sha256", help="require a previously recorded full arm token digest")
     args = parser.parse_args()
+    if args.telemetry == "paired" and args.compare != "none":
+        parser.error("--telemetry paired requires --compare none")
+    if args.telemetry != "off" and args.min_arms - args.drop < 5:
+        parser.error("Stage 0 requires at least five retained runs per condition")
+    if args.expect_token_sha256 is not None:
+        expected = args.expect_token_sha256.lower()
+        if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
+            parser.error("--expect-token-sha256 requires 64 hexadecimal characters")
+        args.expect_token_sha256 = expected
+    if args.telemetry != "off" and Path(args.json).name == "roofline.json":
+        parser.error("--json must not name the roofline sidecar")
     args.json = str(output_path("flashnext", "bench_production", "production.json", args.json))
 
-    conditions = COMPARISONS[args.compare]
+    conditions = ({"baseline": {}, "telemetry": {}} if args.telemetry == "paired"
+                  else COMPARISONS[args.compare])
+
+    def telemetry_for(name):
+        if args.telemetry == "paired":
+            return "off" if name == "baseline" else "timing"
+        return args.telemetry
     routing_altering = args.compare in ROUTING_ALTERING_COMPARISONS
     effective_environment = effective_chat_environment()
     if args.compare in {"qsa", "qsa-cache", "qsa-scatter"}:
@@ -1365,6 +1454,20 @@ def main() -> None:
         resident_experts = int(args.resident_experts)
     evidence["resident_experts"] = resident_experts
     provenance = benchmark_provenance(checkpoint)
+    if args.telemetry != "off":
+        from veystrix.bench.provenance import checkpoint_metadata, collect
+        from veystrix.bench.roofline import SCHEMA_VERSION
+
+        provenance["stage0_provenance"] = collect(Path(__file__).resolve().parents[4], checkpoint)
+        provenance["stage0_provenance"]["checkpoint_metadata_sha256"] = checkpoint_metadata(checkpoint)
+        evidence.update({
+            "schema_version": SCHEMA_VERSION,
+            "telemetry": args.telemetry,
+            "expected_token_sha256": args.expect_token_sha256,
+            "protocol": {"concurrency": 1, "arms_ceiling": args.arms, "min_arms": args.min_arms,
+                         "discard_first_per_condition": args.drop, "reload_backend_per_arm": args.fresh_arms,
+                         "process": "in-process", "page_cache": "as found"},
+        })
     evidence.update(provenance)
     evidence["runtime_source_fingerprints"] = provenance["source_fingerprints"]
     if args.record:
@@ -1471,6 +1574,11 @@ def main() -> None:
             token_digest=row.get("token_sha256"),
         )
 
+    def validate_expected(row):
+        expected = args.expect_token_sha256
+        if expected is not None and row["token_sha256"] != expected:
+            raise RuntimeError("generated token digest differs from --expect-token-sha256")
+
     if args.fresh_arms:
         # Fresh mode creates a new backend for every arm, while the arm order
         # still alternates in reversed rounds. Stop only after a full round so
@@ -1532,6 +1640,7 @@ def main() -> None:
                             validate_metal_runtime=args.compare == "metal-runtime",
                             validate_g64_runtime=args.compare == "g64-kernel",
                             on_raw_result=preserve_raw, provenance=provenance, prompt=prompt,
+                            telemetry=telemetry_for(name),
                         )
                     finally:
                         store = backend.store
@@ -1549,6 +1658,7 @@ def main() -> None:
                     # post-generation checks. Persist once more to capture
                     # validated executor metadata on successful completion.
                     persist_progress(round_index, name)
+                    validate_expected(row)
                     if first_ids is None:
                         first_ids = row["ids"]
                     if row["ids"] != first_ids:
@@ -1599,10 +1709,12 @@ def main() -> None:
                     validate_metal_runtime=args.compare == "metal-runtime",
                     validate_g64_runtime=args.compare == "g64-kernel",
                     on_raw_result=preserve_raw, provenance=provenance, prompt=prompt,
+                    telemetry=telemetry_for(name),
                 )
                 # ``arm`` already published this same dict before its
                 # post-generation checks. Persist once more after validation.
                 persist_progress(round_index, name)
+                validate_expected(row)
                 if first_ids is None:
                     first_ids = row["ids"]
                 if row["ids"] != first_ids:
@@ -1663,6 +1775,17 @@ def main() -> None:
         print(f"\n  {other['condition']} vs {base['condition']}: {change:+.1f}% gen median")
         print(f"  {resolution_note(base, other, args.drop)}")
     report_drift(results)
+
+    if args.telemetry != "off":
+        from veystrix.bench.roofline import report as roofline_report
+
+        roofline_path = output_path(
+            "flashnext", "bench_production", "roofline.json", Path(args.json).with_name("roofline.json")
+        )
+        write_evidence(roofline_path, roofline_report(
+            evidence, collected, args.drop, paired=args.telemetry == "paired"
+        ))
+        evidence["roofline"] = roofline_path.name
 
     if args.json:
         payload = _ACTIVE_EVIDENCE["payload"]

@@ -23,6 +23,7 @@ QSA_CACHE_POOLED_KEYS = os.environ.get("FLASHNEXT_QSA_CACHE_POOLED_KEYS", "0") =
 QSA_SCATTER_DECODE = os.environ.get("FLASHNEXT_QSA_SCATTER_DECODE", "0") == "1"
 FLAG_KERNEL = "FLASHNEXT_QSA_KERNEL"
 FLAG_GATHER_TILE = "FLASHNEXT_QSA_GATHER_TILE"
+FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
 
 _ORIGINAL_CALL = None
 _ORIGINAL_INDEXER_CALL = None
@@ -43,10 +44,11 @@ def gather_tile():
 
 
 def fingerprint_parts():
-    if kernel_mode() == "reference":
-        return {}
-    return {"qsa_kernel": "gather-v1", "qsa_gather_tile": gather_tile(),
-            "qsa_pooled_indexer": QSA_CACHE_POOLED_KEYS}
+    parts = {"qsa_prefill_tile_eval": 1} if os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" else {}
+    if kernel_mode() == "gather":
+        parts.update(qsa_kernel="gather-v1", qsa_gather_tile=gather_tile(),
+                     qsa_pooled_indexer=QSA_CACHE_POOLED_KEYS)
+    return parts
 
 
 def _selected_blocks(indexer, query, pooled_keys, past_len, blocks, start, end):
@@ -413,6 +415,7 @@ def _chunked_call(
     from mlx_vlm.models.qwen3_5.language import scaled_dot_product_attention
 
     outputs = []
+    materialize = os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" and length > QSA_QUERY_CHUNK
     for start in range(0, length, QSA_QUERY_CHUNK):
         end = min(start + QSA_QUERY_CHUNK, length)
         qsa_mask = _chunk_mask(
@@ -425,16 +428,15 @@ def _chunked_call(
             start,
             end,
         )
-        outputs.append(
-            scaled_dot_product_attention(
-                queries[:, :, start:end],
-                keys,
-                values,
-                cache=cache,
-                scale=self.scale,
-                mask=qsa_mask,
-            )
+        tile = scaled_dot_product_attention(
+            queries[:, :, start:end], keys, values, cache=cache,
+            scale=self.scale, mask=qsa_mask,
         )
+        if materialize:
+            # Keep the reference query tile and reduction order. Evaluating
+            # one tile at a time bounds the live mask and score graph.
+            mx.eval(tile)
+        outputs.append(tile)
     output = mx.concatenate(outputs, axis=2)
     output = output.transpose(0, 2, 1, 3).reshape(x.shape[0], length, -1)
     return self.o_proj(output * mx.sigmoid(gate))

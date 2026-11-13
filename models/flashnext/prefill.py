@@ -73,6 +73,13 @@ def get_logits_hook():
 
 
 def chunk_tokens() -> int:
+    from .prefill_autotune import CURRENT
+
+    choice = CURRENT.get()
+    return choice.cap if choice is not None else configured_chunk_tokens()
+
+
+def configured_chunk_tokens() -> int:
     """Requested chunk size from the environment (0 = off). Bad values raise."""
     raw = os.environ.get(FLAG_CHUNK_TOKENS, "0") or "0"
     try:
@@ -88,6 +95,10 @@ def chunk_tokens() -> int:
 
 def chunk_policy() -> str:
     """Chunking policy from the environment ("grid" when unset). Bad values raise."""
+    from .prefill_autotune import CURRENT
+
+    if CURRENT.get() is not None:
+        return "balanced"
     value = (os.environ.get(FLAG_CHUNK_POLICY, "") or "grid").strip().lower()
     if value not in CHUNK_POLICIES:
         raise ValueError(f"{FLAG_CHUNK_POLICY} must be one of {', '.join(CHUNK_POLICIES)}")

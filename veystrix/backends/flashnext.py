@@ -637,7 +637,7 @@ class FlashNextBackend(Conversation):
         stressed = reading.pressure >= 2 or reading.available < 3.5e9
         if store is not None and stressed:
             try:
-                freed += int(self._prefix_session().store().shrink_ram(0))
+                freed += int(self._prefix_session().active_store().shrink_ram(0))
             except Exception:
                 pass
         return freed
@@ -711,7 +711,7 @@ class FlashNextBackend(Conversation):
             except Exception:
                 pass
             if memory_controller.elevated() and getattr(self, "_prefix", None) is not None:
-                prefix_store = self._prefix_session().store()
+                prefix_store = self._prefix_session().active_store()
                 released["snapshots_moved_bytes"] = int(prefix_store.shrink_ram(0))
                 invalidated = prefix_store.invalidate_unbacked_under_pressure(0)
                 released["snapshots_invalidated"] = invalidated
@@ -742,7 +742,7 @@ class FlashNextBackend(Conversation):
             try:
                 from models.flashnext import prefix_session
                 if prefix_session.enabled() or getattr(self, "_prefix", None) is not None:
-                    prefix_store = self._prefix_session().store()
+                    prefix_store = self._prefix_session().active_store()
             except Exception:
                 prefix_store = None
 
@@ -970,12 +970,10 @@ class FlashNextBackend(Conversation):
                 self._mark_replay_needed()
 
         trace = benchmark_trace.get()
-        from models.flashnext import memory_budget, memory_manager, pool_lifecycle, prefill, prefill_ring
+        from models.flashnext import memory_budget, memory_manager, pool_lifecycle, prefill, prefill_autotune, prefill_ring
 
         elastic_store = pool_lifecycle.store_of(self.language) if memory_budget.enabled() else None
         elastic_prefix = None
-        if elastic_store is not None and (fresh_prefix_cache or getattr(self, "_prefix", None) is not None):
-            elastic_prefix = self._prefix_session().store()
         workspace_width = (decoder.depth if decoder is not None else
                            8 if os.environ.get("FLASHNEXT_PROMPT_LOOKUP") == "1" else 0)
 
@@ -1009,8 +1007,18 @@ class FlashNextBackend(Conversation):
             on_prefill_progress(0, prompt_tokens)
         set_prefill_progress(layer_completed)
         set_chunk_progress(chunk_completed)
+        tune_token = None
         try:
             check_cancel()
+            if decoder is None:
+                categories = (getattr(self, "turn_memory_before", None) or {}).get("categories", {})
+                tune_token = prefill_autotune.start(
+                    prompt_tokens, max(0, len(self.tape) - prompt_tokens),
+                    available_bytes=categories.get("available"),
+                )
+            self.last_prefill_choice = prefill_autotune.CURRENT.get()
+            if elastic_store is not None and (fresh_prefix_cache or getattr(self, "_prefix", None) is not None):
+                elastic_prefix = self._prefix_session().store()
             self.last_pool_release = None
             self.last_memory_report = None
             self.last_memory_budget = {}
@@ -1059,6 +1067,8 @@ class FlashNextBackend(Conversation):
             self._mark_replay_needed()
             raise
         finally:
+            if tune_token is not None:
+                prefill_autotune.CURRENT.reset(tune_token)
             set_prefill_progress(None)
             set_chunk_progress(None)
         prefill_seconds = time.perf_counter() - prefill_began

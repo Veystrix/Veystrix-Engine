@@ -4,16 +4,18 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import hashlib
+import math
 import json
 import os
 from collections import defaultdict
 import statistics
 from pathlib import Path
 import tempfile
+import time
 from unittest.mock import patch
 
 from models.flashnext.tests.bench.bench_production import benchmark_provenance, write_evidence
-from veystrix.bench.memory import MemorySampler
+from veystrix.bench.memory import MemorySampler, system_sample
 from veystrix.bench.provenance import collect
 from veystrix.bench.roofline import arm_metrics, resolution
 from veystrix.bench.telemetry import Trace
@@ -41,8 +43,9 @@ def digest(ids):
     return hashlib.sha256(str(tuple(ids)).encode()).hexdigest()
 
 
-def one(backend, ids, tokens, state_check):
+def one(backend, ids, tokens, state_check, *, memory_floor=0, deadline_seconds=0):
     import mlx.core as mx
+    from veystrix.backends.base import GenerationCancelled
     from models.flashnext.diskio import ReadMeter
     from models.flashnext.tests.bench.layer_gate_probe import state_record
 
@@ -51,6 +54,20 @@ def one(backend, ids, tokens, state_check):
     trace = Trace()
     memory = MemorySampler(trace.origin)
     memory.prepare()
+    deadline = time.monotonic() + deadline_seconds if deadline_seconds else None
+    stop_reason = None
+
+    def should_cancel():
+        nonlocal stop_reason
+        available = memory.samples[-1]["available_bytes"]
+        if memory_floor and (available is None or available < memory_floor):
+            stop_reason = f"available memory {available} fell below {memory_floor} bytes"
+        elif deadline is not None and time.monotonic() >= deadline:
+            stop_reason = f"request reached its {deadline_seconds}-second deadline"
+        return stop_reason is not None
+
+    if should_cancel():
+        raise RuntimeError(stop_reason)
     mx.reset_peak_memory()
 
     def prefilled():
@@ -65,10 +82,16 @@ def one(backend, ids, tokens, state_check):
     with memory, trace.activate():
         trace.mark("admission")
         backend.append_tokens(ids)
-        _, stats = backend.generate(
-            tokens, on_prefilled=prefilled,
-            on_decode_token=lambda _token, _piece: trace.mark("token_emitted"),
-        )
+        try:
+            _, stats = backend.generate(
+                tokens, on_prefilled=prefilled,
+                on_decode_token=lambda _token, _piece: trace.mark("token_emitted"),
+                should_cancel=should_cancel if memory_floor or deadline else None,
+            )
+        except GenerationCancelled as error:
+            if stop_reason:
+                raise RuntimeError(stop_reason) from error
+            raise
     prefix = backend.last_prefix
     choice = backend.last_prefill_choice
     row = {
@@ -97,6 +120,13 @@ def summarize(rows):
             controls = {r["round"]: r for r in rows if r["size"] == size and r["cache"] == cache and r["arm"] == "reference"}
             pairs = [(controls[r["round"]], r) for r in rows
                      if r["size"] == size and r["cache"] == cache and r["arm"] == "candidate" and r["round"] in controls]
+            bands = {
+                key: resolution([b["metrics"][key] - a["metrics"][key] for a, b in pairs
+                                 if a["metrics"][key] is not None and b["metrics"][key] is not None])
+                for key in ("ttft_ns", "prefill_ns", "stream_decode_tok_s")
+            }
+            reference_decode = resolution([a["metrics"]["stream_decode_tok_s"] for a, _ in pairs
+                                           if a["metrics"]["stream_decode_tok_s"] is not None])
             groups[f"{size}/{cache}"] = {
                 "diagnostics": [{
                     "round": a["round"], "ttft_ns": [a["metrics"]["ttft_ns"], b["metrics"]["ttft_ns"]],
@@ -107,11 +137,13 @@ def summarize(rows):
                 "token_parity": all(a["token_sha256"] == b["token_sha256"] for a, b in pairs) if pairs else None,
                 "state_parity": (all(a["state_sha256"] == b["state_sha256"] for a, b in pairs)
                                  if pairs and all("state_sha256" in r for pair in pairs for r in pair) else None),
-                "candidate_minus_reference": {
-                    key: resolution([b["metrics"][key] - a["metrics"][key] for a, b in pairs
-                                     if a["metrics"][key] is not None and b["metrics"][key] is not None])
-                    for key in ("ttft_ns", "prefill_ns", "stream_decode_tok_s")
-                },
+                "candidate_minus_reference": bands,
+                "ttft_win": bands["ttft_ns"]["p90"] < 0 if bands["ttft_ns"] is not None else None,
+                "prefill_win": bands["prefill_ns"]["p90"] < 0 if bands["prefill_ns"] is not None else None,
+                "decode_within_reference_noise": (
+                    bands["stream_decode_tok_s"]["p10"] >= -reference_decode["resolution_half_width"]
+                    if bands["stream_decode_tok_s"] is not None and reference_decode is not None else None
+                ),
             }
     return groups
 
@@ -138,6 +170,9 @@ def main():
     parser.add_argument("--shape-profile", type=Path, help="optional measured shape profile for the autotuner")
     parser.add_argument("--tokens", type=int, default=8)
     parser.add_argument("--candidate", choices=("autotune", "layer", "kernels"), default="autotune")
+    parser.add_argument("--available-floor-gib", type=float, default=0, help="cooperative available-memory stop")
+    parser.add_argument("--deadline-seconds", type=int, default=0, help="per-request cooperative deadline")
+    parser.add_argument("--mlx-limit-gib", type=float, default=0, help="MLX allocator limit plus 512 MiB free cache cap")
     parser.add_argument("--chunk-log", action="store_true", help="write progress at completed chunk boundaries")
     parser.add_argument("--state-check", action="store_true", help="hash full continuation state outside timing")
     args = parser.parse_args()
@@ -145,11 +180,17 @@ def main():
         parser.error("--chunk-tokens must be between 64 and 2048")
     if args.rounds < 1 or args.tokens < 2:
         parser.error("rounds must be positive and tokens must be at least two")
+    if (not all(math.isfinite(value) and value >= 0 for value in (args.available_floor_gib, args.mlx_limit_gib))
+            or args.deadline_seconds < 0):
+        parser.error("resource limits must be finite and nonnegative")
+    memory_floor = round(args.available_floor_gib * 2**30)
     out = output_path("flashnext", "stage6-prefill", "stage6.json")
     checkpoint = args.checkpoint.expanduser().resolve(strict=True)
     evidence = {"schema_version": 1, "status": "running", "rows": [],
                 "candidate": args.candidate, "sizes": args.sizes, "rounds": args.rounds,
                 "output_limit": args.tokens, "state_check": args.state_check,
+                "limits": {"available_floor_bytes": memory_floor, "deadline_seconds": args.deadline_seconds,
+                           "mlx_limit_bytes": round(args.mlx_limit_gib * 2**30)},
                 "provenance": {**benchmark_provenance(checkpoint), **collect(ROOT, checkpoint)}}
     candidate = {
         "autotune": {"FLASHNEXT_PREFILL_AUTOTUNE": "1"},
@@ -194,6 +235,15 @@ def main():
             evidence["environment"] = {**env, **{
                 name: os.environ[name] for name in apply_chat_environment({})
             }}
+            import mlx.core as mx
+
+            if memory_floor:
+                available = system_sample()["available_bytes"]
+                if available is None or available < memory_floor:
+                    raise RuntimeError(f"available memory {available} is below the {memory_floor}-byte start floor")
+            if args.mlx_limit_gib:
+                mx.set_memory_limit(evidence["limits"]["mlx_limit_bytes"])
+                mx.set_cache_limit(512 * 2**20)
             backend = FlashNextBackend(model_path=str(checkpoint))
             corpus = "\n".join((ROOT / path).read_text() for path in (
                 "models/flashnext/prefill.py", "models/flashnext/prefix_session.py",
@@ -218,7 +268,8 @@ def main():
                                     backend._prefix = None
                                     for cache in ("cold", "prefix-hit"):
                                         print(size, index + 1, arm, cache, "started", flush=True)
-                                        row = one(backend, ids, args.tokens, args.state_check)
+                                        row = one(backend, ids, args.tokens, args.state_check,
+                                                  memory_floor=memory_floor, deadline_seconds=args.deadline_seconds)
                                         evidence["rows"].append({**row, "size": size, "round": index + 1,
                                                                  "arm": arm, "cache": cache})
                                         write_evidence(out, evidence)

@@ -18,6 +18,25 @@ class SelectionTests(unittest.TestCase):
         long = tune.choose(1024, 8192, 8 * 2**30, 1024, (512, 256))
         self.assertGreater(long.estimated_bytes, short.estimated_bytes)
 
+    def test_existing_prefix_keeps_its_shape_when_only_suffix_fits(self):
+        with mock.patch.dict("os.environ", {tune.FLAG: "1", prefill.FLAG_CHUNK_TOKENS: "2048",
+                                           tune.SHAPES_FLAG: ""}):
+            def peek():
+                self.assertEqual(prefill.chunk_tokens(), 2048)
+                return 7936
+
+            token = tune.start(8192, 0, available_bytes=2 * 2**30, prior_prefix=(2048, peek))
+            try:
+                self.assertEqual(tune.CURRENT.get().reusable_tokens, 7936)
+                self.assertEqual(prefill.chunk_tokens(), 2048)
+            finally:
+                tune.CURRENT.reset(token)
+            token = tune.start(8192, 0, available_bytes=2 * 2**30, prior_prefix=(2048, lambda: 0))
+            try:
+                self.assertLess(prefill.chunk_tokens(), 2048)
+            finally:
+                tune.CURRENT.reset(token)
+
     def test_context_reset_restores_configured_plan(self):
         with mock.patch.dict("os.environ", {prefill.FLAG_CHUNK_TOKENS: "1024", prefill.FLAG_CHUNK_POLICY: "grid"}):
             token = tune.CURRENT.set(tune.Choice(512, 0, 0, False))

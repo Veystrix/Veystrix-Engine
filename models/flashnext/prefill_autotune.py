@@ -20,6 +20,7 @@ class Choice:
     available_bytes: int
     estimated_bytes: int
     measured: bool
+    reusable_tokens: int = 0
 
 
 def choose(total, offset, available, cap, candidates, *, seconds=None):
@@ -56,8 +57,12 @@ def load_profile(path):
     return seconds
 
 
-def start(total, offset, *, available_bytes=None):
-    if os.environ.get(FLAG) != "1":
+def enabled():
+    return os.environ.get(FLAG) == "1"
+
+
+def start(total, offset, *, available_bytes=None, prior_prefix=None):
+    if not enabled():
         return None
     from . import memory_manager, prefill
 
@@ -67,4 +72,23 @@ def start(total, offset, *, available_bytes=None):
     available = memory_manager.read_system()["available"] if available_bytes is None else available_bytes
     profile = os.environ.get(SHAPES_FLAG)
     seconds = load_profile(profile) if profile else None
-    return CURRENT.set(choose(total, offset, available, cap, prefill.CANDIDATE_CHUNKS, seconds=seconds))
+    choice = choose(total, offset, available, cap, prefill.CANDIDATE_CHUNKS, seconds=seconds)
+    if prior_prefix is not None and offset == 0:
+        prior_cap, peek = prior_prefix
+        if 0 < prior_cap <= cap and prior_cap != choice.cap:
+            from .prefill_budget import chunk_increment_bytes
+
+            marker = CURRENT.set(Choice(prior_cap, available, 0, False))
+            try:
+                try:
+                    reused = peek()
+                except (OSError, ValueError):
+                    reused = 0
+            finally:
+                CURRENT.reset(marker)
+            if 0 < reused < total:
+                width = min(prior_cap, total - reused)
+                extra = chunk_increment_bytes(width, total - width)
+                if extra <= available // 2:
+                    choice = Choice(prior_cap, available, extra, False, reused)
+    return CURRENT.set(choice)

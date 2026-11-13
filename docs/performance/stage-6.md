@@ -22,7 +22,9 @@ the same chunk history at the restore boundary. Switching widths opens a
 different namespace. Returning to an earlier width can reuse its compatible
 SSD snapshots. The autotuned prefill uses one selected plan from lookup
 through snapshot creation, even if available memory changes during the
-request.
+request. When the last tuned namespace has an exact compatible prefix,
+the planner can keep that width across a headroom change if the suffix
+fits the estimated budget.
 
 `FLASHNEXT_QSA_PREFILL_TILE_EVAL=1` evaluates each reference QSA query tile
 before constructing the next tile's live mask and score graph. The query
@@ -54,3 +56,14 @@ benchmark records TTFT, computed prefill tokens and time, reused tokens,
 stream decode, physical bytes, MLX peak and sampled OS memory. Paired bands
 appear after five rounds. The benchmark runs in-process with the external
 guards disabled and the OS page cache as found.
+
+
+For a bounded long-context run, use one size and one pair with
+`--available-floor-gib 3 --mlx-limit-gib 8 --deadline-seconds 480`.
+The host floor and deadline cancel at existing model progress boundaries.
+The MLX setting is an allocator guideline and also caps the free allocator
+cache at 512 MiB. Run these comparisons serially.
+
+The report checks for a TTFT or computed-prefill win using the p90 paired
+delta. It checks decode against the reference run-to-run resolution band.
+A null gate means fewer than five usable paired observations.

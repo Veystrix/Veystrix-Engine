@@ -1015,9 +1015,14 @@ class FlashNextBackend(Conversation):
             self.last_memory_budget = {}
             if decoder is None:
                 categories = (getattr(self, "turn_memory_before", None) or {}).get("categories", {})
+                prior_prefix = None
+                session = getattr(self, "_prefix", None)
+                if (fresh_prefix_cache and prefill_autotune.enabled() and session is not None
+                        and (prior_cap := session.last_tuned_cap()) is not None):
+                    prior_prefix = (prior_cap, lambda: session.reusable_tokens(prompt))
                 tune_token = prefill_autotune.start(
                     prompt_tokens, max(0, len(self.tape) - prompt_tokens),
-                    available_bytes=categories.get("available"),
+                    available_bytes=categories.get("available"), prior_prefix=prior_prefix,
                 )
             self.last_prefill_choice = prefill_autotune.CURRENT.get()
             if elastic_store is not None and (fresh_prefix_cache or getattr(self, "_prefix", None) is not None):

@@ -188,6 +188,9 @@ class PrefixSession:
         self._active_store = previous
         return previous
 
+    def last_tuned_cap(self) -> int | None:
+        return self._tuned_store[0] if self._tuned_store is not None else None
+
     def active_store(self):
         return self._active_store if self._active_store is not None else self.store()
 

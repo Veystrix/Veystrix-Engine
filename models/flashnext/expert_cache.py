@@ -1918,6 +1918,7 @@ class StreamingSwitchGLU(nn.Module):
             futures = []
             try:
                 futures = pool.fill(prefix, misses, _submit_read, chunk)
+                pool.prefetch_ahead(self.layer_id)   # after fill, so the demand gate is already shut
                 if (os.environ.get("FLASHNEXT_DECODE_OVERLAP") == "1" and len(misses) < len(wanted)
                         and flat_input.shape[0] == 1):
                     hidden_size = flat_input.shape[-1]
@@ -1953,6 +1954,8 @@ class StreamingSwitchGLU(nn.Module):
                 if resident_activation is not None:
                     mx.eval(resident_activation)  # finish using the shared buffer before unwinding
                 raise
+            if pool.wants_refill_cost:
+                pool.observe_refill(self.layer_id, (time.perf_counter() - began) / len(misses))
             if trace is not None:
                 trace.counts["expert_wait_ns"] += round((time.perf_counter() - began) * 1e9)
             if _PROFILE:
@@ -1960,6 +1963,8 @@ class StreamingSwitchGLU(nn.Module):
                 _TIMERS["io_wait"] += ended - began
                 _TIMERS["io_calls"] += 1
                 _record_read_timing(timings, began, ended)
+        else:
+            pool.prefetch_ahead(self.layer_id)
         hidden_size = flat_input.shape[-1]
         width = indices.shape[-1]
         tokens = flat_input.shape[0]

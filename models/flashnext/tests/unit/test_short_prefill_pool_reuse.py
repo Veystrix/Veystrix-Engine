@@ -80,6 +80,51 @@ class ShortPrefillPoolReuseTests(unittest.TestCase):
         self.assertEqual(stats.ssd_reads, 0)
         self.assertGreater(stats.pool_bytes_saved, 0)
 
+    def test_aligned_pack_fills_the_metal_pool_with_exact_bytes(self):
+        from models.nemotron35.safetensors_index import index_checkpoint
+        from models.shared.expert_pack import ALIGNMENT, build
+
+        root = Path(self.directory.name)
+        config = root / "config.json"
+        config.write_text("{}")
+        self.addCleanup(config.unlink)
+        with tempfile.TemporaryDirectory() as folder:
+            pack = Path(folder) / "experts.pack"
+            size = build(root, index_checkpoint(root), "flashnext", pack, layers=[1])
+            self.assertEqual(size % ALIGNMENT, 0)
+            with mock.patch.dict(os.environ, {"FLASHNEXT_EXPERT_PACK": str(pack),
+                                              expert_pool.NATIVE_PACK_FLAG: "0"}):
+                candidate = expert_pool.ExpertPool(self.store, 64 * 1024 * 1024, 32)
+            self.addCleanup(candidate.close)
+            for layer in (1, 2):
+                baseline_slots, misses = self.pool.assign(layer, [1, 3])
+                for future in self.pool.fill(prefix_of(layer), misses, expert_cache._submit_read):
+                    future.result()
+                candidate_slots, misses = candidate.assign(layer, [1, 3])
+                futures = candidate.fill(prefix_of(layer), misses, expert_cache._submit_read)
+                if layer == 1:
+                    self.assertEqual(len(futures), 2)
+                for future in futures:
+                    future.result()
+                for expert in (1, 3):
+                    a = expert_pool.HEADER + baseline_slots[expert] * self.pool.stride
+                    b = expert_pool.HEADER + candidate_slots[expert] * candidate.stride
+                    np.testing.assert_array_equal(self.pool.array[a:a + self.pool.stride],
+                                                  candidate.array[b:b + candidate.stride])
+            candidate.native_pack = True
+            slots, misses = candidate.assign(1, [5, 7])
+            baseline_slots, baseline_misses = self.pool.assign(1, [5, 7])
+            for future in self.pool.fill(prefix_of(1), baseline_misses, expert_cache._submit_read):
+                future.result()
+            pending = candidate.fill(prefix_of(1), misses, expert_cache._submit_read)
+            self.assertEqual(len(pending), 1)
+            pending[0].result()
+            for expert in (5, 7):
+                a = expert_pool.HEADER + baseline_slots[expert] * self.pool.stride
+                b = expert_pool.HEADER + slots[expert] * candidate.stride
+                np.testing.assert_array_equal(self.pool.array[a:a + self.pool.stride],
+                                              candidate.array[b:b + candidate.stride])
+
     def test_content_addressed_coalesced_and_mapped_records_match_shards(self):
         import hashlib
         from models.nemotron35.safetensors_index import index_checkpoint
@@ -98,6 +143,7 @@ class ShortPrefillPoolReuseTests(unittest.TestCase):
             for mode in ("coalesced", "mmap"):
                 with self.subTest(mode=mode), mock.patch.dict(os.environ, {
                     "FLASHNEXT_EXPERT_PACK": str(pack), "FLASHNEXT_EXPERT_PACK_READ": mode,
+                    expert_pool.NATIVE_PACK_FLAG: "0",
                 }):
                     candidate = expert_pool.ExpertPool(self.store, 64 * 2**20, 32)
                     try:

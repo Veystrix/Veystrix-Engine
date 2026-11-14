@@ -100,8 +100,9 @@ def apply(store, *, phase, tokens, chunk, ring, verification_width, resident, ca
     pool = getattr(store, "_flashnext_expert_pool", None)
     # An anonymous mmap can be sparsely touched. Count at most the
     # populated slots as reclaimable when comparing alternative capacities.
+    # Staging slots (decode prefetch) are touched as soon as prefetch runs, so they count too.
     existing = min(pool_lifecycle.pool_bytes(pool),
-                   len(getattr(pool, "_slot_of", ())) * getattr(pool, "stride", 0))
+                   (len(getattr(pool, "_slot_of", ())) + getattr(pool, "staging_slots", 0)) * getattr(pool, "stride", 0))
     now = time.monotonic()
     sample = memory_manager.read_system()
     scratch = 0

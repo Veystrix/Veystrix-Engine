@@ -652,6 +652,8 @@ class FlashNextBackend(Conversation):
                 "kv_dtype": quantized_kv.kv_dtype(), "qsa_kernel": qsa_chunk.kernel_mode(),
                 "logical_resident_weight_bytes": getattr(self.language, "_flashnext_resident_weight_bytes", None),
                 "expert_pool_mapped_bytes": pool_lifecycle.pool_bytes(pool),
+                "expert_pool_policy": pool.policy if pool is not None else None,
+                "expert_pool_stats": pool.stats() if pool is not None else None,
                 "expert_pack_records": pool.packed_reads if pool is not None else 0,
                 "expert_pack_extents": pool.pack_extents if pool is not None else 0,
                 "expert_pack_extent_bytes": pool.pack_extent_bytes if pool is not None else 0,

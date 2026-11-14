@@ -1,0 +1,751 @@
+{
+  "gb": [
+    0.5,
+    1.0,
+    2.0
+  ],
+  "slots": [
+    155,
+    311,
+    622
+  ],
+  "train_turns": [
+    0,
+    1
+  ],
+  "holdout_turns": [
+    2
+  ],
+  "weights": {
+    "version": 1,
+    "recent": 0.1,
+    "frequency": 0.5,
+    "reuse": 0.5,
+    "refill": 0.0,
+    "size": 0.0,
+    "alpha": 0.2
+  },
+  "trajectory": [
+    {
+      "pass": 0,
+      "coordinate": null,
+      "value": null,
+      "mean": 0.3764460475275085,
+      "per_size": [
+        0.232285702474214,
+        0.3726048492114347,
+        0.5244475908968768
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "recent",
+      "value": 0.0,
+      "mean": 0.3770230885301474,
+      "per_size": [
+        0.23656441844601997,
+        0.3702432873767544,
+        0.5242615597676678
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "recent",
+      "value": 0.05,
+      "mean": 0.37652011547710096,
+      "per_size": [
+        0.2333915541867339,
+        0.37174703900452677,
+        0.5244217532400421
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.05,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "recent",
+      "value": 0.2,
+      "mean": 0.37597407966266355,
+      "per_size": [
+        0.2322391946919118,
+        0.3711992806796337,
+        0.5244837636164451
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.2,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "recent",
+      "value": 0.4,
+      "mean": 0.37342820920922987,
+      "per_size": [
+        0.23225986481737945,
+        0.3635306641311313,
+        0.524494098679179
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.4,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "frequency",
+      "value": 0.0,
+      "mean": 0.2972484617981631,
+      "per_size": [
+        0.0,
+        0.3675303334091238,
+        0.5242150519853656
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.0,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "frequency",
+      "value": 0.1,
+      "mean": 0.3770006958942241,
+      "per_size": [
+        0.23656441844601997,
+        0.3702174497199198,
+        0.5242202195167325
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.1,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "frequency",
+      "value": 0.5,
+      "mean": 0.37711265907384056,
+      "per_size": [
+        0.23656441844601997,
+        0.3704809938196325,
+        0.5242925649558693
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "frequency",
+      "value": 1.0,
+      "mean": 0.3770937114588286,
+      "per_size": [
+        0.23656441844601997,
+        0.37050166394510015,
+        0.5242150519853656
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 1.0,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "reuse",
+      "value": 0.0,
+      "mean": 0.3726944197551279,
+      "per_size": [
+        0.22850306951363195,
+        0.36671386345315116,
+        0.5228663262986006
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 0.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "reuse",
+      "value": 0.5,
+      "mean": 0.3770937114588286,
+      "per_size": [
+        0.23656441844601997,
+        0.37050166394510015,
+        0.5242150519853656
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "reuse",
+      "value": 2.0,
+      "mean": 0.3770230885301474,
+      "per_size": [
+        0.23656441844601997,
+        0.37023295231402054,
+        0.5242718948304016
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 2.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "alpha",
+      "value": 0.1,
+      "mean": 0.3664640994370836,
+      "per_size": [
+        0.23299882180284834,
+        0.36237313710494223,
+        0.5040203394034601
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.1
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "alpha",
+      "value": 0.2,
+      "mean": 0.3777482654319712,
+      "per_size": [
+        0.2383833894871742,
+        0.3731319374108601,
+        0.5217294693978792
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "alpha",
+      "value": 0.4,
+      "mean": 0.37354706243066893,
+      "per_size": [
+        0.2319498129353645,
+        0.3708685586721511,
+        0.5178228156844912
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.4
+      }
+    },
+    {
+      "pass": 1,
+      "coordinate": "alpha",
+      "value": 0.5,
+      "mean": 0.36465890847957444,
+      "per_size": [
+        0.2251286715310362,
+        0.35727278364579673,
+        0.5115752702618905
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.0,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.5
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "recent",
+      "value": 0.05,
+      "mean": 0.3798049429160035,
+      "per_size": [
+        0.23944790094875876,
+        0.3752557928026623,
+        0.5247111349965894
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.05,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "recent",
+      "value": 0.1,
+      "mean": 0.3810675430799865,
+      "per_size": [
+        0.23958225676429856,
+        0.37555034209057647,
+        0.5280700303850845
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "recent",
+      "value": 0.2,
+      "mean": 0.3806644756333671,
+      "per_size": [
+        0.23663159635378986,
+        0.37614460819777173,
+        0.5292172223485396
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.2,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "recent",
+      "value": 0.4,
+      "mean": 0.37946044082487584,
+      "per_size": [
+        0.23513817978875132,
+        0.3739845800864011,
+        0.529258562599475
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.4,
+        "frequency": 0.5,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "frequency",
+      "value": 0.0,
+      "mean": 0.3006934827094401,
+      "per_size": [
+        0.0,
+        0.37326629322639987,
+        0.5288141549019203
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.0,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "frequency",
+      "value": 0.1,
+      "mean": 0.37948627848171035,
+      "per_size": [
+        0.23513817978875132,
+        0.37456334359949567,
+        0.5287573120568841
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.1,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "frequency",
+      "value": 0.2,
+      "mean": 0.3798566182296727,
+      "per_size": [
+        0.23571694330184584,
+        0.37509043179892104,
+        0.5287624795882511
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.2,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "frequency",
+      "value": 1.0,
+      "mean": 0.3808332816580196,
+      "per_size": [
+        0.23944790094875876,
+        0.37571053556295086,
+        0.5273414084623493
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 1.0,
+        "reuse": 1.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "reuse",
+      "value": 0.0,
+      "mean": 0.37661829857307233,
+      "per_size": [
+        0.23061658984270034,
+        0.37121478327373447,
+        0.5280235226027822
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "reuse",
+      "value": 0.5,
+      "mean": 0.38151195077754124,
+      "per_size": [
+        0.23958225676429856,
+        0.3760257549763327,
+        0.5289278405919924
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "reuse",
+      "value": 2.0,
+      "mean": 0.37974982258142304,
+      "per_size": [
+        0.23958225676429856,
+        0.37473387213460385,
+        0.5249333388453667
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 2.0,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.2
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "alpha",
+      "value": 0.1,
+      "mean": 0.3774227109558555,
+      "per_size": [
+        0.24069844353955228,
+        0.3748888980756113,
+        0.5166807912524028
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.1
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "alpha",
+      "value": 0.3,
+      "mean": 0.3772366798266466,
+      "per_size": [
+        0.2340219930134976,
+        0.3732559581636661,
+        0.524432088302776
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.3
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "alpha",
+      "value": 0.4,
+      "mean": 0.3715541178334953,
+      "per_size": [
+        0.2294590628165113,
+        0.36747349056408773,
+        0.5177298001198867
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.4
+      }
+    },
+    {
+      "pass": 2,
+      "coordinate": "alpha",
+      "value": 0.5,
+      "mean": 0.36464512839592933,
+      "per_size": [
+        0.22512350399966927,
+        0.3573657992104012,
+        0.5114460819777176
+      ],
+      "weights": {
+        "version": 1,
+        "recent": 0.1,
+        "frequency": 0.5,
+        "reuse": 0.5,
+        "refill": 0.0,
+        "size": 0.0,
+        "alpha": 0.5
+      }
+    }
+  ],
+  "train": {
+    "default": [
+      0.232285702474214,
+      0.3726048492114347,
+      0.5244475908968768
+    ],
+    "calibrated": [
+      0.23958225676429856,
+      0.3760257549763327,
+      0.5289278405919924
+    ]
+  },
+  "holdout": {
+    "default": {
+      "per_size": [
+        0.23359063568218932,
+        0.38036455110714396,
+        0.542992483796038
+      ],
+      "mean": 0.38564922352845715
+    },
+    "calibrated": {
+      "per_size": [
+        0.23971720409384603,
+        0.3852029172203232,
+        0.5449602888819013
+      ],
+      "mean": 0.3899601367320235
+    },
+    "lru": {
+      "per_size": [
+        0.0,
+        0.0,
+        0.4800734376743384
+      ],
+      "mean": 0.16002447922477947
+    },
+    "s3fifo": {
+      "per_size": [
+        0.0,
+        0.3250529988740909,
+        0.4825788389949993
+      ],
+      "mean": 0.2692106126230301
+    },
+    "least-stale": {
+      "per_size": [
+        0.0,
+        0.2456916226277298,
+        0.450901234442675
+      ],
+      "mean": 0.23219761902346825
+    },
+    "belady": {
+      "per_size": [
+        0.34864637325408016,
+        0.5433373568523233,
+        0.6867842616166432
+      ],
+      "mean": 0.5262559972410156
+    }
+  },
+  "decision": {
+    "gain": 0.004310913203566358,
+    "minimum_gain": 0.005,
+    "write_weights": false
+  },
+  "trace": "/Users/vincent/Documents/Veystrix/results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7",
+  "record_bytes": 3211264,
+  "grid": {
+    "recent": [
+      0.0,
+      0.05,
+      0.1,
+      0.2,
+      0.4
+    ],
+    "frequency": [
+      0.0,
+      0.1,
+      0.2,
+      0.5,
+      1.0
+    ],
+    "reuse": [
+      0.0,
+      0.5,
+      1.0,
+      2.0
+    ],
+    "alpha": [
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5
+    ]
+  },
+  "passes": 2,
+  "out": null
+}

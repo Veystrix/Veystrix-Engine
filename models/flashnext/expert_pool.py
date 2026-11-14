@@ -1,4 +1,4 @@
-"""Application-owned LRU pool of expert records (research, off by default).
+"""Application-owned pool of expert records (research, off by default).
 
 Every cached expert row the production path reads is copied out of the file
 cache, about 880 MB/token and about 37 ms/token in the 2026-09-23 read replay.
@@ -33,6 +33,9 @@ from collections import OrderedDict
 
 import numpy as np
 
+from models.shared.cost_aware import CostAwarePolicy, CostWeights, RouteFrequency
+from models.shared.least_stale import LeastStale
+
 from .slab_pack import get_slab_layout, libc_mlock
 
 SIZE_FLAG = "FLASHNEXT_EXPERT_POOL_GB"
@@ -42,6 +45,19 @@ SIZE_FLAG = "FLASHNEXT_EXPERT_POOL_GB"
 BUFFERED_FILL_FLAG = "FLASHNEXT_EXPERT_POOL_BUFFERED_FILL"
 LOCK_FLAG = "FLASHNEXT_EXPERT_POOL_LOCK"
 POLICY_FLAG = "FLASHNEXT_EXPERT_POOL_POLICY"
+NATIVE_PACK_FLAG = "FLASHNEXT_EXPERT_PACK_NATIVE"
+FLAT_SLOTS_FLAG = "FLASHNEXT_EXPERT_POOL_FLAT_SLOTS"
+POLICIES = ("lru", "s3fifo", "least-stale", "cost-aware")
+# Opt-in decode prefetch: predicted records are read into staging slots carved from the pool's own mapping (total
+# memory unchanged) and copied into the decode slot if the router asks for them. See decode_prefetch.py.
+PREFETCH_FLAG = "FLASHNEXT_EXPERT_PREFETCH"
+PREFETCH_SLOTS_FLAG = "FLASHNEXT_EXPERT_PREFETCH_SLOTS"
+PREFETCH_DEPTH_FLAG = "FLASHNEXT_EXPERT_PREFETCH_DEPTH"
+PREFETCH_WIDTH_FLAG = "FLASHNEXT_EXPERT_PREFETCH_WIDTH"
+PREFETCH_MIN_P_FLAG = "FLASHNEXT_EXPERT_PREFETCH_MIN_P"
+PREFETCH_WORKERS_FLAG = "FLASHNEXT_EXPERT_PREFETCH_WORKERS"
+PREFETCH_GATE_FLAG = "FLASHNEXT_EXPERT_PREFETCH_GATE"
+MIN_DECODE_SLOTS = 16
 HEADER = 4096
 SLOT_BIT = 0x80000000
 _PARTS = (
@@ -77,12 +93,46 @@ def enabled() -> bool:
     return configured_gb() > 0
 
 
+def _flag(name, default, kind):
+    raw = os.environ.get(name, "").strip() or default
+    try:
+        if kind == "bool":
+            if raw not in ("0", "1"):
+                raise ValueError
+            return raw == "1"
+        if kind == "int":
+            value = int(raw)
+            if value < 1:
+                raise ValueError
+            return value
+        value = float(raw)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError
+        return value
+    except ValueError:
+        want = {"bool": "0 or 1", "int": "a positive integer", "prob": "a number from 0 to 1"}[kind]
+        raise ValueError(f"{name} must be {want}, got {raw!r}") from None
+
+
+def prefetch_settings():
+    """The decode-prefetch flags (validated), or None when ``FLASHNEXT_EXPERT_PREFETCH`` is off."""
+    enabled_ = _flag(PREFETCH_FLAG, "0", "bool")
+    settings = {
+        "slots": _flag(PREFETCH_SLOTS_FLAG, "16", "int"), "depth": _flag(PREFETCH_DEPTH_FLAG, "2", "int"),
+        "width": _flag(PREFETCH_WIDTH_FLAG, "2", "int"), "min_probability": _flag(PREFETCH_MIN_P_FLAG, "0.5", "prob"),
+        "workers": _flag(PREFETCH_WORKERS_FLAG, "2", "int"), "gate": _flag(PREFETCH_GATE_FLAG, "1", "bool"),
+    }
+    return settings if enabled_ else None
+
+
 class ExpertPool:
     def __init__(self, store, size_bytes: int, group_size: int = 32,
                  lock: bool = False):
         policy = os.environ.get(POLICY_FLAG, "lru").strip().lower() or "lru"
-        if policy not in ("lru", "s3fifo"):
-            raise ValueError(f"{POLICY_FLAG} must be 'lru' or 's3fifo'")
+        if policy not in POLICIES:
+            raise ValueError(f"{POLICY_FLAG} must be 'lru', 's3fifo', 'least-stale', or 'cost-aware'")
+        weights = CostWeights.from_env() if policy == "cost-aware" else None
+        prefetch = prefetch_settings()
         self.policy = policy
         layout = get_slab_layout(group_size)
         self.store = store
@@ -92,10 +142,20 @@ class ExpertPool:
             key: layout.shape(*key)[0] * layout.shape(*key)[1] * (4 if key[1] == "weight" else 2)
             for key in _PARTS
         }
-        self.slots = (int(size_bytes) - HEADER) // self.stride
-        if self.slots < 16:
+        total = (int(size_bytes) - HEADER) // self.stride
+        if total < MIN_DECODE_SLOTS:
             raise ValueError("expert pool is too small for one decode layer")
-        length = -(-(HEADER + self.slots * self.stride) // mmap.PAGESIZE) * mmap.PAGESIZE
+        # Staging slots are the physical slots [self.slots, total): never in _free, _slot_of, the flat table or the
+        # policy, so everything else sees self.slots as the decode capacity and the mapping length is unchanged.
+        staging, self.prefetch_disabled = 0, None
+        if prefetch is not None:
+            staging = max(0, min(prefetch["slots"], total // 8, total - MIN_DECODE_SLOTS))
+            if staging == 0:
+                self.prefetch_disabled = (f"no staging slots: {total} slots leave none after the one-eighth cap "
+                                          f"and the {MIN_DECODE_SLOTS}-slot decode floor")
+        self.slots = total - staging
+        self.staging_slots = staging
+        length = -(-(HEADER + total * self.stride) // mmap.PAGESIZE) * mmap.PAGESIZE
         self._mm = mmap.mmap(-1, length)
         self.array = np.frombuffer(self._mm, dtype=np.uint8)
         self.locked = bool(lock) and libc_mlock(
@@ -112,7 +172,15 @@ class ExpertPool:
         self._view = memoryview(self._mm)
         self._slot_of: "OrderedDict[tuple, int]" = OrderedDict()
         self._s3 = _S3FIFO(self.slots) if policy == "s3fifo" else None
+        self._least_stale = LeastStale() if policy == "least-stale" else None
+        self._cost = (CostAwarePolicy(self.slots, layers=48, experts=512, weights=weights)
+                      if policy == "cost-aware" else None)
+        self.wants_refill_cost = self._cost is not None and self._cost.weights.refill != 0.0
+        self.evictions = 0
         self._free = list(range(self.slots - 1, -1, -1))
+        self._flat_slots = None
+        if os.environ.get(FLAT_SLOTS_FLAG) == "1":
+            self._flat_slots = np.full((48, 512), -1, dtype=np.int32)
         self._fds: dict = {}
         self._fill_fds: dict = {}
         self._fd_lock = threading.Lock()
@@ -121,6 +189,7 @@ class ExpertPool:
         self.pack = None
         self.packed_reads = 0
         self._packed_stats_lock = threading.Lock()
+        self.native_pack = os.environ.get(NATIVE_PACK_FLAG) == "1"
         self.pack_mode = os.environ.get("FLASHNEXT_EXPERT_PACK_READ", "record")
         self.pack_extents = 0
         self.pack_extent_bytes = 0
@@ -131,6 +200,8 @@ class ExpertPool:
 
             if self.pack_mode not in ("record", "coalesced", "mmap"):
                 raise ValueError("FLASHNEXT_EXPERT_PACK_READ must be record, coalesced or mmap")
+            if self.native_pack and self.pack_mode != "record":
+                raise ValueError("native expert pack reads require record mode")
             try:
                 pack = ExpertPack(Path(path).expanduser(), store.dir, index_checkpoint(store.dir), "flashnext",
                                   uncached=self.pack_mode != "mmap" and not buffered_fill_enabled(),
@@ -143,6 +214,18 @@ class ExpertPool:
                 self.pack = pack
             except (OSError, ValueError) as error:
                 logging.getLogger(__name__).warning("Expert pack unavailable, using checkpoint shards: %s", error)
+        self.prefetch = self._frequency = None
+        self.prefetch_errors = 0
+        if staging:
+            from .decode_prefetch import DecodePrefetch
+
+            self._frequency = self._cost.frequency if self._cost is not None else RouteFrequency(48, 512, alpha=0.3)
+            self.prefetch = DecodePrefetch(
+                first_slot=self.slots, slots=staging, read_record=self._read_record, copy_record=self._copy_record,
+                frequency=self._frequency, depth=prefetch["depth"], width=prefetch["width"],
+                min_probability=prefetch["min_probability"], workers=prefetch["workers"], gate=prefetch["gate"],
+                record_bytes=self.stride,
+            )
 
     @property
     def usable_slots(self) -> int:
@@ -155,18 +238,32 @@ class ExpertPool:
         distinct = list(dict.fromkeys(experts))
         if len(distinct) > self.usable_slots:
             raise ValueError("requested experts exceed expert pool capacity")
+        if self.prefetch is not None:
+            self.prefetch.observe(layer)
+        if self._cost is not None:
+            return self._assign_cost(layer, distinct)
         slot_of = self._slot_of
-        policy = self._s3
-        protected = {(layer, expert) for expert in distinct} if policy else None
-        slots, misses = {}, []
+        table = self._flat_slots
+        flat_layer = table[layer] if table is not None and 0 <= layer < table.shape[0] else None
+        s3, least_stale = self._s3, self._least_stale
+        protected = {(layer, expert) for expert in distinct} if s3 or least_stale else None
+        if least_stale is not None:
+            least_stale.advance(layer)
+        slots, misses, evicted = {}, [], 0
         for expert in distinct:
             key = (layer, expert)
-            slot = slot_of.get(key)
+            if flat_layer is not None and 0 <= expert < len(flat_layer):
+                entry = int(flat_layer[expert])
+                slot = entry if entry >= 0 else None
+            else:
+                slot = slot_of.get(key)
             if slot is not None:
-                if policy is None:
+                if least_stale is not None:
+                    least_stale.touch(key)
+                elif s3 is None:
                     slot_of.move_to_end(key)
                 else:
-                    policy.hit(key)
+                    s3.hit(key)
                 slots[expert] = slot
         self.hits += len(slots)
         for expert in distinct:
@@ -174,16 +271,65 @@ class ExpertPool:
                 continue
             if self._free:
                 slot = self._free.pop()
-            elif policy is None:
-                _old, slot = slot_of.popitem(last=False)
+            elif least_stale is not None:
+                slot = self.discard_slot(least_stale.victim(protected))
+                evicted += 1
+            elif s3 is None:
+                if table is None:
+                    _, slot = slot_of.popitem(last=False)
+                else:
+                    slot = self.discard_slot(next(iter(slot_of)))
+                evicted += 1
             else:
-                slot = slot_of.pop(policy.victim(protected, self.usable_slots))
-            slot_of[(layer, expert)] = slot
-            if policy is not None:
-                policy.insert((layer, expert))
+                slot = self.discard_slot(s3.victim(protected, self.usable_slots))
+                evicted += 1
+            key = (layer, expert)
+            self._record_slot(key, slot)
+            if least_stale is not None:
+                least_stale.touch(key)
+            elif s3 is not None:
+                s3.insert(key)
             slots[expert] = slot
             misses.append((expert, slot))
         self.misses += len(misses)
+        self.evictions += evicted
+        if self._frequency is not None:
+            self._frequency.observe(layer, distinct)
+        return slots, misses
+
+    def _assign_cost(self, layer, distinct):
+        """Cost-aware assignment, in the order the offline replay uses: advance, touch hits, evict, insert, observe."""
+        cost, slot_of, table = self._cost, self._slot_of, self._flat_slots
+        flat_layer = table[layer] if table is not None and 0 <= layer < table.shape[0] else None
+        cost.advance(layer)
+        slots, missing = {}, []
+        for expert in distinct:
+            if flat_layer is not None and 0 <= expert < len(flat_layer):
+                entry = int(flat_layer[expert])
+                slot = entry if entry >= 0 else None
+            else:
+                slot = slot_of.get((layer, expert))
+            if slot is None:
+                missing.append(expert)
+            else:
+                cost.touch((layer, expert), slot)
+                slots[expert] = slot
+        self.hits += len(slots)
+        free = self._free
+        need = len(missing) - len(free)
+        if need > 0:
+            for slot in cost.victims(need, protected=slots.values()):
+                free.append(self.discard_slot(cost.key_of(slot)))
+            self.evictions += need
+        misses = []
+        for expert in missing:
+            slot, key = free.pop(), (layer, expert)
+            self._record_slot(key, slot)
+            cost.insert(key, slot)
+            slots[expert] = slot
+            misses.append((expert, slot))
+        self.misses += len(misses)
+        cost.observe(layer, distinct, misses=len(misses))
         return slots, misses
 
     def _fd(self, shard: str) -> int:
@@ -265,7 +411,20 @@ class ExpertPool:
         if self._s3 is not None:
             self._s3.small.pop(key, None)
             self._s3.main.pop(key, None)
+        if self._least_stale is not None:
+            self._least_stale.discard(key)
+        if self._cost is not None:
+            self._cost.discard(key, self._slot_of[key])
+        table = self._flat_slots
+        if table is not None and 0 <= key[0] < table.shape[0] and 0 <= key[1] < table.shape[1]:
+            table[key] = -1
         return self._slot_of.pop(key)
+
+    def _record_slot(self, key, slot):
+        self._slot_of[key] = slot
+        table = self._flat_slots
+        if table is not None and 0 <= key[0] < table.shape[0] and 0 <= key[1] < table.shape[1]:
+            table[key] = slot
 
     def seed_from_ring(self, layer, expert, rows) -> int:
         """Copy one complete, already-loaded expert into a free decode slot."""
@@ -280,23 +439,134 @@ class ExpertPool:
             offset = base + self.offsets[part]
             self._view[offset:offset + len(row)] = row
         self._free.pop()
-        self._slot_of[key] = slot
+        self._record_slot(key, slot)
         if self._s3 is not None:
             self._s3.insert(key)
+        if self._least_stale is not None:
+            self._least_stale.touch(key, seeded=True)
+        if self._cost is not None:
+            self._cost.insert(key, slot, seeded=True)
         return sum(map(len, rows.values()))
 
     def fill(self, prefix: str, misses, submit, chunk: int = 2):
         """Queue the nine row reads of every miss; returns the futures."""
-        from .store import expert_read_batch_rows
-
         if chunk < 1:
             raise ValueError("expert pool fill chunk must be positive")
         misses = sorted(misses, key=lambda target: target[0])
+        if self.prefetch is not None:
+            return self._fill_prefetch(prefix, misses, submit, chunk)
+        return self._fill_direct(prefix, misses, submit, chunk)
+
+    def _fill_prefetch(self, prefix, misses, submit, chunk):
+        """``fill`` with staged records promoted by copy and the demand gate shut while real reads are outstanding."""
+        prefetch, layer = self.prefetch, int(prefix.split(".")[3])
+        reads, claimed, gated = [], [], False
+        try:
+            for expert, slot in misses:
+                entry = prefetch.claim((layer, expert))
+                if entry is None:
+                    reads.append((expert, slot))
+                else:
+                    claimed.append((entry, expert, slot))
+            gated = prefetch.gate and (bool(reads) or any(not entry.ready for entry, _, _ in claimed))
+            if gated:
+                prefetch.demand_begin()
+        except BaseException:
+            for entry, _, _ in claimed:
+                prefetch.release(entry)
+            raise
+        futures = []
+        try:
+            if reads:
+                futures = self._fill_direct(prefix, reads, submit, chunk)   # drains its own workers on failure
+            while claimed:
+                entry, expert, slot = claimed[0]
+                futures.append(submit(self._promote, entry, layer, expert, slot))
+                claimed.pop(0)
+        except BaseException:
+            for future in futures:
+                try:
+                    future.result()
+                except BaseException:
+                    pass
+            for entry, _, _ in claimed:
+                prefetch.release(entry)
+            if gated:
+                prefetch.demand_end()
+            raise
+        if gated:
+            remaining, lock = [len(futures)], threading.Lock()
+
+            def done(_future):
+                with lock:
+                    remaining[0] -= 1
+                    last = remaining[0] == 0
+                if last:
+                    prefetch.demand_end()
+
+            if not futures:
+                prefetch.demand_end()
+            for future in futures:
+                future.add_done_callback(done)
+        return futures
+
+    def _promote(self, entry, layer, expert, slot):
+        """Copy a staged record into its decode slot, or read it directly when the prefetch did not deliver."""
+        try:
+            if not self.prefetch.finish(entry, slot):
+                self._read_record(layer, expert, slot)
+        finally:
+            self.prefetch.release(entry)
+
+    def _read_record(self, layer, expert, slot):
+        """Read one whole record into a physical slot (decode or staging)."""
+        if self.pack is not None and layer in self.pack.layers:
+            self._fill_packed(layer, expert, slot)
+        else:
+            self._fill_checkpoint_records(layer, [(expert, slot)])
+
+    def _copy_record(self, source, destination):
+        size, view = self.stride, self._view
+        a, b = HEADER + source * size, HEADER + destination * size
+        with view[a:a + size] as src, view[b:b + size] as dst:
+            dst[:] = src
+
+    def prefetch_ahead(self, layer) -> None:
+        """Queue predictions for the layers after ``layer`` (no-op unless decode prefetch is on)."""
+        if self.prefetch is not None:
+            try:
+                self.prefetch.issue(layer, self._slot_of.__contains__)
+            except Exception:             # an optimisation must never fail a decode step
+                self.prefetch_errors += 1
+                if self.prefetch_errors == 1:
+                    logging.getLogger(__name__).exception("decode prefetch issue failed")
+
+    def observe_refill(self, layer, seconds_per_record) -> None:
+        if self.wants_refill_cost:
+            self._cost.observe_refill(layer, seconds_per_record)
+
+    def stats(self) -> dict:
+        total = self.hits + self.misses
+        out = {"policy": self.policy, "slots": self.slots, "resident": len(self._slot_of), "hits": self.hits,
+               "misses": self.misses, "evictions": self.evictions, "hit_rate": self.hits / total if total else None,
+               "staging_slots": self.staging_slots, "prefetch_disabled": self.prefetch_disabled,
+               "prefetch_errors": self.prefetch_errors}
+        if self._cost is not None:
+            out["cost"] = self._cost.stats()
+        out["prefetch"] = self.prefetch.stats() if self.prefetch is not None else None
+        return out
+
+    def _fill_direct(self, prefix, misses, submit, chunk):
+        from .store import expert_read_batch_rows
+
         futures = []
         try:
             if self.pack is not None:
                 layer = int(prefix.split(".")[3])
                 if layer in self.pack.layers:
+                    if self.native_pack and misses:
+                        futures.append(submit(self._fill_native, layer, misses))
+                        return futures
                     if self.pack_mode == "record":
                         for expert, slot in misses:
                             futures.append(submit(self._fill_packed, layer, expert, slot))
@@ -369,7 +639,26 @@ class ExpertPool:
             offset = HEADER + self.offsets[(projection, part)]
             self._fill_part(name, [(expert, offset + slot * self.stride) for expert, slot in records])
 
+    def _fill_native(self, layer, misses):
+        from . import native_read
+
+        base = native_read.address(self.array) + HEADER
+        batch = native_read.Batch()
+        batch.add_records(self.pack.fd, [self.pack.offset(layer, expert) for expert, _ in misses],
+                          self.stride, [base + slot * self.stride for _, slot in misses])
+        try:
+            batch.run()
+        except (OSError, RuntimeError):
+            self._fill_checkpoint_records(layer, misses)
+            return
+        with self._packed_stats_lock:
+            self.packed_reads += len(misses)
+            self.pack_extents += len(misses)
+            self.pack_extent_bytes += len(misses) * self.stride
+
     def close(self) -> None:
+        if self.prefetch is not None:
+            self.prefetch.close()         # no prefetch read may write the mapping after this returns
         if self.pack is not None:
             self.pack.close()
         for fd in (*self._fds.values(), *self._fill_fds.values()):

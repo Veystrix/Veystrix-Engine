@@ -1,0 +1,279 @@
+{
+  "trace": "/Users/vincent/Documents/Veystrix/results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7",
+  "record_bytes": 3211264,
+  "turns": null,
+  "decode_rows": 36864,
+  "decode_tokens": 768,
+  "weights": {
+    "version": 1,
+    "recent": 0.1,
+    "frequency": 0.2,
+    "reuse": 1.0,
+    "refill": 0.0,
+    "size": 0.0,
+    "alpha": 0.3
+  },
+  "weights_path": null,
+  "policies": [
+    "lru",
+    "arc",
+    "bip8",
+    "s3fifo",
+    "least-stale",
+    "cost-aware",
+    "belady"
+  ],
+  "prefetch_model": null,
+  "predictor": {
+    "alpha": 0.3,
+    "rows": 36864,
+    "routed": 292103,
+    "frequency": {
+      "4": {
+        "predicted": 147264,
+        "correct": 79169,
+        "routed": 292103,
+        "precision": 0.5375991416775315,
+        "recall": 0.27103110888967247
+      },
+      "8": {
+        "predicted": 294524,
+        "correct": 123681,
+        "routed": 292103,
+        "precision": 0.41993521750349716,
+        "recall": 0.4234157129505688
+      },
+      "12": {
+        "predicted": 441561,
+        "correct": 151107,
+        "routed": 292103,
+        "precision": 0.3422109289543234,
+        "recall": 0.5173072512093337
+      },
+      "16": {
+        "predicted": 588418,
+        "correct": 166983,
+        "routed": 292103,
+        "precision": 0.2837829570135516,
+        "recall": 0.5716579425750505
+      }
+    },
+    "persistence": {
+      "predicted": 291718,
+      "correct": 118831,
+      "routed": 292103,
+      "precision": 0.40734887802603886,
+      "recall": 0.4068119807054361
+    }
+  },
+  "sizes": [
+    {
+      "gb": 0.5,
+      "slots": 155,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "arc": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "bip8": {
+          "decode_hit_rate": 0.1671054388349315,
+          "prefill_resident_rate": 0.005926684715006951,
+          "decode_hits": 48812,
+          "decode_total": 292103,
+          "misses": 243291,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1017.280768
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.2330171206731872,
+          "prefill_resident_rate": 0.005487671032413844,
+          "decode_hits": 68065,
+          "decode_total": 292103,
+          "misses": 224038,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 936.7775573333333
+        },
+        "belady": {
+          "decode_hit_rate": 0.3487536930466308,
+          "prefill_resident_rate": 0.010609497329333431,
+          "decode_hits": 101872,
+          "decode_total": 292103,
+          "misses": 190231,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 795.4192213333333
+        }
+      }
+    },
+    {
+      "gb": 1.0,
+      "slots": 311,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.011268017853223093,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "arc": {
+          "decode_hit_rate": 0.28673105034867835,
+          "prefill_resident_rate": 0.010755835223531133,
+          "decode_hits": 83755,
+          "decode_total": 292103,
+          "misses": 208348,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 871.1724373333334
+        },
+        "bip8": {
+          "decode_hit_rate": 0.28772727428338635,
+          "prefill_resident_rate": 0.010975342064827687,
+          "decode_hits": 84046,
+          "decode_total": 292103,
+          "misses": 208057,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 869.9556693333334
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.32530648435654547,
+          "prefill_resident_rate": 0.00936562522865296,
+          "decode_hits": 95023,
+          "decode_total": 292103,
+          "misses": 197080,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 824.0571733333334
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.24616659192134283,
+          "prefill_resident_rate": 0.011268017853223093,
+          "decode_hits": 71906,
+          "decode_total": 292103,
+          "misses": 220197,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 920.717056
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.3753573225882651,
+          "prefill_resident_rate": 0.00929245628155411,
+          "decode_hits": 109643,
+          "decode_total": 292103,
+          "misses": 182460,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 762.92608
+        },
+        "belady": {
+          "decode_hit_rate": 0.5385463346833138,
+          "prefill_resident_rate": 0.01982878466378869,
+          "decode_hits": 157311,
+          "decode_total": 292103,
+          "misses": 134792,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 563.6102826666666
+        }
+      }
+    },
+    {
+      "gb": 2.0,
+      "slots": 622,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.4663491987415398,
+          "prefill_resident_rate": 0.020706812028974904,
+          "decode_hits": 136222,
+          "decode_total": 292103,
+          "misses": 155881,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 651.7904213333334
+        },
+        "arc": {
+          "decode_hit_rate": 0.48864955169922936,
+          "prefill_resident_rate": 0.01938977098119558,
+          "decode_hits": 142736,
+          "decode_total": 292103,
+          "misses": 149367,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 624.553216
+        },
+        "bip8": {
+          "decode_hit_rate": 0.40377538060204793,
+          "prefill_resident_rate": 0.01924343308699788,
+          "decode_hits": 117944,
+          "decode_total": 292103,
+          "misses": 174159,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 728.216832
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.4728606005415898,
+          "prefill_resident_rate": 0.01748737835662545,
+          "decode_hits": 138124,
+          "decode_total": 292103,
+          "misses": 153979,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 643.8375253333334
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.4286638617200097,
+          "prefill_resident_rate": 0.024292090436818615,
+          "decode_hits": 125214,
+          "decode_total": 292103,
+          "misses": 166889,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 697.8185386666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.53075113915297,
+          "prefill_resident_rate": 0.02063364308187605,
+          "decode_hits": 155034,
+          "decode_total": 292103,
+          "misses": 137069,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 573.1311786666666
+        },
+        "belady": {
+          "decode_hit_rate": 0.6785962485835476,
+          "prefill_resident_rate": 0.03702348723201873,
+          "decode_hits": 198220,
+          "decode_total": 292103,
+          "misses": 93883,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 392.5561173333333
+        }
+      }
+    }
+  ]
+}

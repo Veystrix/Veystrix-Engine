@@ -1,0 +1,313 @@
+{
+  "trace": "/Users/vincent/Documents/Veystrix/results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7",
+  "record_bytes": 3211264,
+  "turns": null,
+  "decode_rows": 36864,
+  "decode_tokens": 768,
+  "weights": {
+    "version": 1,
+    "recent": 0.1,
+    "frequency": 0.2,
+    "reuse": 1.0,
+    "refill": 0.0,
+    "size": 0.0,
+    "alpha": 0.3
+  },
+  "weights_path": null,
+  "policies": [
+    "lru",
+    "s3fifo",
+    "cost-aware"
+  ],
+  "prefetch_model": {
+    "slots": 32,
+    "depth": 2,
+    "width": 4,
+    "min_p": 0.3,
+    "per_layer": 4,
+    "assumption": "issued reads complete before their target layer and never delay demand reads; per_layer is an assumed idle-window capacity; upper bound"
+  },
+  "predictor": null,
+  "sizes": [
+    {
+      "gb": 0.5,
+      "slots": 155,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667,
+          "with_prefetch": {
+            "decode_hit_rate": 0.0,
+            "prefill_resident_rate": 0.00702421892148972,
+            "decode_hits": 0,
+            "decode_total": 292103,
+            "misses": 292103,
+            "decode_capacity": 123,
+            "demand_mb_per_token": 1221.3800106666667,
+            "prefetch": {
+              "issued": 147264,
+              "used": 79218,
+              "wasted": 68046,
+              "displaced": 68014,
+              "unused_at_end": 32,
+              "precision": 0.5379318774445893,
+              "covered_share": 0.2711988579370975,
+              "blocking_mb_per_token": 890.1431466666667,
+              "physical_mb_per_token": 1505.9030186666666
+            }
+          }
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.007390063656983976,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 1221.3800106666667,
+          "with_prefetch": {
+            "decode_hit_rate": 0.0,
+            "prefill_resident_rate": 0.00702421892148972,
+            "decode_hits": 0,
+            "decode_total": 292103,
+            "misses": 292103,
+            "decode_capacity": 123,
+            "demand_mb_per_token": 1221.3800106666667,
+            "prefetch": {
+              "issued": 147264,
+              "used": 79218,
+              "wasted": 68046,
+              "displaced": 68014,
+              "unused_at_end": 32,
+              "precision": 0.5379318774445893,
+              "covered_share": 0.2711988579370975,
+              "blocking_mb_per_token": 890.1431466666667,
+              "physical_mb_per_token": 1505.9030186666666
+            }
+          }
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.2330171206731872,
+          "prefill_resident_rate": 0.005487671032413844,
+          "decode_hits": 68065,
+          "decode_total": 292103,
+          "misses": 224038,
+          "decode_capacity": 155,
+          "demand_mb_per_token": 936.7775573333333,
+          "with_prefetch": {
+            "decode_hit_rate": 0.1923054538981113,
+            "prefill_resident_rate": 0.00468281261432648,
+            "decode_hits": 56173,
+            "decode_total": 292103,
+            "misses": 235930,
+            "decode_capacity": 123,
+            "demand_mb_per_token": 986.5019733333334,
+            "prefetch": {
+              "issued": 147001,
+              "used": 52002,
+              "wasted": 94999,
+              "displaced": 94967,
+              "unused_at_end": 32,
+              "precision": 0.35375269555989414,
+              "covered_share": 0.220412834315263,
+              "blocking_mb_per_token": 769.0642773333334,
+              "physical_mb_per_token": 1383.7244586666668
+            }
+          }
+        }
+      }
+    },
+    {
+      "gb": 1.0,
+      "slots": 311,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.011268017853223093,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 1221.3800106666667,
+          "with_prefetch": {
+            "decode_hit_rate": 0.0,
+            "prefill_resident_rate": 0.01053632838223458,
+            "decode_hits": 0,
+            "decode_total": 292103,
+            "misses": 292103,
+            "decode_capacity": 279,
+            "demand_mb_per_token": 1221.3800106666667,
+            "prefetch": {
+              "issued": 147264,
+              "used": 79218,
+              "wasted": 68046,
+              "displaced": 68014,
+              "unused_at_end": 32,
+              "precision": 0.5379318774445893,
+              "covered_share": 0.2711988579370975,
+              "blocking_mb_per_token": 890.1431466666667,
+              "physical_mb_per_token": 1505.9030186666666
+            }
+          }
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.32530648435654547,
+          "prefill_resident_rate": 0.00936562522865296,
+          "decode_hits": 95023,
+          "decode_total": 292103,
+          "misses": 197080,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 824.0571733333334,
+          "with_prefetch": {
+            "decode_hit_rate": 0.1340622999421437,
+            "prefill_resident_rate": 0.007170556815687422,
+            "decode_hits": 39160,
+            "decode_total": 292103,
+            "misses": 252943,
+            "decode_capacity": 279,
+            "demand_mb_per_token": 1057.6389973333335,
+            "prefetch": {
+              "issued": 145844,
+              "used": 62614,
+              "wasted": 83230,
+              "displaced": 83198,
+              "unused_at_end": 32,
+              "precision": 0.4293217410383698,
+              "covered_share": 0.24754193632557533,
+              "blocking_mb_per_token": 795.828992,
+              "physical_mb_per_token": 1405.6513706666667
+            }
+          }
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.3753573225882651,
+          "prefill_resident_rate": 0.00929245628155411,
+          "decode_hits": 109643,
+          "decode_total": 292103,
+          "misses": 182460,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 762.92608,
+          "with_prefetch": {
+            "decode_hit_rate": 0.3455014155965533,
+            "prefill_resident_rate": 0.008341259969269042,
+            "decode_hits": 100922,
+            "decode_total": 292103,
+            "misses": 191181,
+            "decode_capacity": 279,
+            "demand_mb_per_token": 799.391488,
+            "prefetch": {
+              "issued": 137960,
+              "used": 33405,
+              "wasted": 104555,
+              "displaced": 104523,
+              "unused_at_end": 32,
+              "precision": 0.2421354015656712,
+              "covered_share": 0.17472970640387905,
+              "blocking_mb_per_token": 659.714048,
+              "physical_mb_per_token": 1236.5707946666666
+            }
+          }
+        }
+      }
+    },
+    {
+      "gb": 2.0,
+      "slots": 622,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.4663491987415398,
+          "prefill_resident_rate": 0.020706812028974904,
+          "decode_hits": 136222,
+          "decode_total": 292103,
+          "misses": 155881,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 651.7904213333334,
+          "with_prefetch": {
+            "decode_hit_rate": 0.4419536944160108,
+            "prefill_resident_rate": 0.01880441940440477,
+            "decode_hits": 129096,
+            "decode_total": 292103,
+            "misses": 163007,
+            "decode_capacity": 590,
+            "demand_mb_per_token": 681.5866026666666,
+            "prefetch": {
+              "issued": 69389,
+              "used": 19015,
+              "wasted": 50374,
+              "displaced": 50346,
+              "unused_at_end": 28,
+              "precision": 0.2740347893758377,
+              "covered_share": 0.1166514321470857,
+              "blocking_mb_per_token": 602.0785493333334,
+              "physical_mb_per_token": 892.217088
+            }
+          }
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.4728606005415898,
+          "prefill_resident_rate": 0.01748737835662545,
+          "decode_hits": 138124,
+          "decode_total": 292103,
+          "misses": 153979,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 643.8375253333334,
+          "with_prefetch": {
+            "decode_hit_rate": 0.4625217817002906,
+            "prefill_resident_rate": 0.016755688885636937,
+            "decode_hits": 135104,
+            "decode_total": 292103,
+            "misses": 156999,
+            "decode_capacity": 590,
+            "demand_mb_per_token": 656.465152,
+            "prefetch": {
+              "issued": 100965,
+              "used": 22428,
+              "wasted": 78537,
+              "displaced": 78505,
+              "unused_at_end": 32,
+              "precision": 0.2221363838954093,
+              "covered_share": 0.14285441308543367,
+              "blocking_mb_per_token": 562.686208,
+              "physical_mb_per_token": 984.854528
+            }
+          }
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.53075113915297,
+          "prefill_resident_rate": 0.02063364308187605,
+          "decode_hits": 155034,
+          "decode_total": 292103,
+          "misses": 137069,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 573.1311786666666,
+          "with_prefetch": {
+            "decode_hit_rate": 0.5205081769101995,
+            "prefill_resident_rate": 0.019536108875393282,
+            "decode_hits": 152042,
+            "decode_total": 292103,
+            "misses": 140061,
+            "decode_capacity": 590,
+            "demand_mb_per_token": 585.641728,
+            "prefetch": {
+              "issued": 2285,
+              "used": 1057,
+              "wasted": 1228,
+              "displaced": 1202,
+              "unused_at_end": 26,
+              "precision": 0.462582056892779,
+              "covered_share": 0.007546711789862989,
+              "blocking_mb_per_token": 581.2220586666666,
+              "physical_mb_per_token": 590.7764053333334
+            }
+          }
+        }
+      }
+    }
+  ]
+}

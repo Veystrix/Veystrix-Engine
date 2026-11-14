@@ -1,0 +1,154 @@
+{
+  "trace": "/Users/vincent/Documents/Veystrix/results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7",
+  "record_bytes": 3211264,
+  "turns": null,
+  "decode_rows": 36864,
+  "decode_tokens": 768,
+  "weights": {
+    "version": 1,
+    "recent": 0.1,
+    "frequency": 0.2,
+    "reuse": 1.0,
+    "refill": 0.0,
+    "size": 0.0,
+    "alpha": 0.3
+  },
+  "weights_path": null,
+  "policies": [
+    "lru",
+    "s3fifo",
+    "least-stale",
+    "cost-aware"
+  ],
+  "prefetch_model": null,
+  "predictor": null,
+  "sizes": [
+    {
+      "gb": 0.536870912,
+      "slots": 167,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.00760957049828053,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 167,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.00760957049828053,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 167,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.00760957049828053,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 167,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.24658082936498427,
+          "prefill_resident_rate": 0.0058535157679081,
+          "decode_hits": 72027,
+          "decode_total": 292103,
+          "misses": 220076,
+          "decode_capacity": 167,
+          "demand_mb_per_token": 920.2111146666666
+        }
+      }
+    },
+    {
+      "gb": 1.073741824,
+      "slots": 334,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 5.477519915920069e-05,
+          "prefill_resident_rate": 0.012146045218409307,
+          "decode_hits": 16,
+          "decode_total": 292103,
+          "misses": 292087,
+          "decode_capacity": 334,
+          "demand_mb_per_token": 1221.3131093333332
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.34176300825393785,
+          "prefill_resident_rate": 0.009731469964147216,
+          "decode_hits": 99830,
+          "decode_total": 292103,
+          "misses": 192273,
+          "decode_capacity": 334,
+          "demand_mb_per_token": 803.957504
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.30096575523017566,
+          "prefill_resident_rate": 0.012146045218409307,
+          "decode_hits": 87913,
+          "decode_total": 292103,
+          "misses": 204190,
+          "decode_capacity": 334,
+          "demand_mb_per_token": 853.7864533333334
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.39374809570596675,
+          "prefill_resident_rate": 0.010243652593839175,
+          "decode_hits": 115015,
+          "decode_total": 292103,
+          "misses": 177088,
+          "decode_capacity": 334,
+          "demand_mb_per_token": 740.4639573333334
+        }
+      }
+    },
+    {
+      "gb": 2.147483648,
+      "slots": 668,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.4967802453244232,
+          "prefill_resident_rate": 0.022023853076754224,
+          "decode_hits": 145111,
+          "decode_total": 292103,
+          "misses": 146992,
+          "decode_capacity": 668,
+          "demand_mb_per_token": 614.6225493333334
+        },
+        "s3fifo": {
+          "decode_hit_rate": 0.4871843151217208,
+          "prefill_resident_rate": 0.018658081510207068,
+          "decode_hits": 142308,
+          "decode_total": 292103,
+          "misses": 149795,
+          "decode_capacity": 668,
+          "demand_mb_per_token": 626.3428266666666
+        },
+        "least-stale": {
+          "decode_hit_rate": 0.4312177553808075,
+          "prefill_resident_rate": 0.0262676520084876,
+          "decode_hits": 125960,
+          "decode_total": 292103,
+          "misses": 166143,
+          "decode_capacity": 668,
+          "demand_mb_per_token": 694.699264
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.5436061937056449,
+          "prefill_resident_rate": 0.021950684129655375,
+          "decode_hits": 158789,
+          "decode_total": 292103,
+          "misses": 133314,
+          "decode_capacity": 668,
+          "demand_mb_per_token": 557.430272
+        }
+      }
+    }
+  ]
+}

@@ -22,6 +22,10 @@ struct SettingsView: View {
                 Toggle("Qwen faster prefill and decode (experimental)", isOn: $model.settings.flashNextSpeed)
                 Text("Uses 4K prefill windows and buffered reads when the decode pool is available. Restart to apply.")
                     .font(.callout).foregroundStyle(.secondary)
+                Toggle("Qwen low-memory prefill for 16 GB Macs (experimental)", isOn: $model.settings.flashNextBoundedPrefill)
+                    .disabled(model.settings.flashNextSpeed)
+                Text("Reads prompts in 128-token steps with a reused expert buffer, which keeps more memory free while a prompt is read. Use it with no decode pool. Restart to apply.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Restart automatically after a crash or guard stop (bounded, logged)", isOn: $model.settings.supervisedRestarts)
                 Toggle("Keep the Mac awake while the engine runs", isOn: $model.settings.keepMacAwake)
                 HStack {

@@ -82,6 +82,7 @@ public struct LaunchPlan: Equatable, Sendable {
         args += ["--flashnext-kv-cache", settings.flashNextKVCache.rawValue,
                  "--flashnext-memory-policy", "absolute-swap-only"]
         if settings.flashNextSpeed { args.append("--flashnext-speed") }
+        if settings.flashNextBoundedPrefill { args.append("--flashnext-bounded-prefill") }
         if settings.supervisedRestarts { args.append("--overnight") }
         // The router forwards the shared cache location when either model starts.
         if !settings.cacheDirectory.isEmpty { args += ["--prefix-dir", settings.cacheDirectory] }

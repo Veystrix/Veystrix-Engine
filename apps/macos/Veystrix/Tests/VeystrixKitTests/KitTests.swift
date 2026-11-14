@@ -221,6 +221,25 @@ private func tempDir() -> URL {
         #expect(plan.environment["VEYSTRIX_NEMOTRON_CONTEXT"] == "1048576" && plan.environment["VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT"] == "1")
     }
 
+    @Test func qwenBoundedPrefillReachesTheRouterAndExcludesTheSpeedProfile() throws {
+        var (settings, checkpoint) = try good(tempDir())
+        let source = LaunchPlan.Source.developer(repoRoot: URL(fileURLWithPath: "/r"))
+        let off = try LaunchPlan.make(settings: settings, checkpoint: checkpoint, source: source, apiKey: nil,
+                                      fileExists: exists, isExecutable: exists)
+        #expect(!off.arguments.contains("--flashnext-bounded-prefill"))
+        settings.flashNextBoundedPrefill = true
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        let plan = try LaunchPlan.make(settings: decoded, checkpoint: checkpoint, source: source, apiKey: nil,
+                                       fileExists: exists, isExecutable: exists)
+        #expect(plan.arguments.contains("--flashnext-bounded-prefill") && !plan.arguments.contains("--flashnext-speed"))
+        settings.flashNextSpeed = true
+        #expect(!settings.validationProblems().isEmpty)
+        #expect(throws: LaunchPlan.PlanError.self) {
+            try LaunchPlan.make(settings: settings, checkpoint: checkpoint, source: source, apiKey: nil,
+                                fileExists: exists, isExecutable: exists)
+        }
+    }
+
     @Test func customCacheDirectoryIsPassedAsPrefixDir() throws {
         var (s, c) = try good(tempDir()); s.cacheDirectory = "/Volumes/Fast/cache"
         let plan = try LaunchPlan.make(settings: s, checkpoint: c, source: .developer(repoRoot: URL(fileURLWithPath: "/r")), apiKey: nil, fileExists: exists, isExecutable: exists)

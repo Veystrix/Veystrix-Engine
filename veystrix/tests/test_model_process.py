@@ -35,6 +35,18 @@ class ModelProcessTests(unittest.TestCase):
   self.assertIn("short-throughput", driver._command(flashnext, 8080))
   self.assertNotIn("short-throughput", driver._command(nemotron, 8080))
 
+ def test_bounded_prefill_only_applies_to_qwen_and_excludes_the_speed_profile(self):
+  driver = ProcessDriver(flashnext_bounded_prefill=True)
+  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
+  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
+  command = driver._command(flashnext, 8080)
+  self.assertEqual(command[command.index("prefill-16gb") - 1], "--enable")
+  self.assertNotIn("short-throughput", command)
+  self.assertNotIn("prefill-16gb", driver._command(nemotron, 8080))
+  self.assertNotIn("prefill-16gb", ProcessDriver()._command(flashnext, 8080))
+  with self.assertRaises(ValueError):
+   ProcessDriver(flashnext_speed=True, flashnext_bounded_prefill=True)
+
  def test_real_child_is_verified_and_unloaded(self):
   m=InstalledModel('test-model','flashnext','test','/tmp/test','qwen4_exp',{},None,'test')
   driver=ProcessDriver(startup_timeout=5,stop_timeout=5,command_factory=lambda model,port:[sys.executable,'-c',CHILD,str(port)])

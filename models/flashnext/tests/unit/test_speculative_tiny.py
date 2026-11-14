@@ -530,5 +530,297 @@ class SpeculativeTinyTest(unittest.TestCase):
         self.assertEqual(
             state_max_abs(states(replayed), states(sequential)), 0.0)
 
+    @staticmethod
+    def _mtp_language():
+        """Tiny MTP model with a non-degenerate token stream.
+
+        The synthetic config leaves every norm scale at zero, which collapses
+        the output to one repeated token. Unit scales give varied tokens, so
+        a wrong cache state shows up as a different token.
+        """
+        from mlx.utils import tree_map
+
+        from models.flashnext.mtp import attach
+
+        mx.random.seed(0)
+        language = tiny_language()
+        attach(language)
+
+        def unit_scale(value):
+            if value.dtype == mx.float32 and float(mx.max(mx.abs(value)).item()) == 0.0:
+                return mx.ones(value.shape, dtype=value.dtype)
+            return value
+
+        language.update(tree_map(unit_scale, language.parameters()))
+        return language
+
+    @staticmethod
+    def _oracle_chain(truth, emitted, vocab, reject=lambda cycle, depth: None):
+        """A `_draft_chain` replacement that proposes the true continuation.
+
+        ``emitted`` is the list of tokens yielded so far this turn, so the
+        block's first token is ``truth[len(emitted)]`` and the drafts follow
+        it. ``reject(cycle, depth)`` names a position to corrupt, or None.
+        """
+        cycle = [0]
+
+        def chain(decoder, depth=None):
+            depth = decoder.depth if depth is None else depth
+            start = len(emitted)
+            drafts = list(truth[start + 1:start + 1 + depth])
+            drafts += [0] * (depth - len(drafts))
+            position = reject(cycle[0], depth) if depth else None
+            cycle[0] += 1
+            if position is not None:
+                drafts[position] = (drafts[position] + 1) % vocab
+            return drafts
+
+        return chain
+
+    @staticmethod
+    def _drain(decoder, count, emitted):
+        for token in decoder.generate(count, set()):
+            emitted.append(token)
+        return emitted
+
+    @staticmethod
+    def _sequential(language, prompt, count, cache=None):
+        """Greedy tokens from single-token forwards, plus the cache they leave."""
+        cache = cache if cache is not None else language.make_cache()
+        output = language(prompt, cache=cache)
+        mx.eval(output.logits)
+        tokens = []
+        for _ in range(count):
+            token = mx.argmax(output.logits[:, -1, :], axis=-1).astype(mx.uint32)
+            tokens.append(int(token.item()))
+            output = language(token.reshape(1, 1), cache=cache)
+            mx.eval(output.logits)
+        return tokens, cache, output
+
+    @staticmethod
+    def _cache_max_abs(left, right):
+        peak = 0.0
+
+        def walk(a, b):
+            nonlocal peak
+            if isinstance(a, (list, tuple)):
+                for x, y in zip(a, b):
+                    walk(x, y)
+                return
+            if a is None or b is None:
+                return
+            if a.shape != b.shape:
+                raise AssertionError(f"state shapes differ: {a.shape} vs {b.shape}")
+            peak = max(peak, float(mx.max(mx.abs(
+                a.astype(mx.float32) - b.astype(mx.float32))).item()))
+
+        for (a_state, _), (b_state, _) in zip(
+                snapshot_cache(left), snapshot_cache(right)):
+            walk(a_state, b_state)
+        return peak
+
+    def _two_turn_reference(self, language, first, second, count_first, count_second):
+        tokens_first, cache, output = self._sequential(language, first, count_first)
+        token = mx.argmax(output.logits[:, -1, :], axis=-1).astype(mx.uint32)
+        # Same shape as the decoder's append: one batched forward of the turn.
+        output = language(second, cache=cache)
+        mx.eval(output.logits)
+        tokens_second, _, _ = self._sequential_from(language, cache, output, count_second)
+        return tokens_first, tokens_second
+
+    @staticmethod
+    def _sequential_from(language, cache, output, count):
+        tokens = []
+        for _ in range(count):
+            token = mx.argmax(output.logits[:, -1, :], axis=-1).astype(mx.uint32)
+            tokens.append(int(token.item()))
+            output = language(token.reshape(1, 1), cache=cache)
+            mx.eval(output.logits)
+        return tokens, cache, output
+
+    def _run_two_turns(self, decoder, first, second, count_first, count_second):
+        decoder.append(first)
+        tokens_first = list(decoder.generate(count_first, set()))
+        decoder.append(second)
+        tokens_second = list(decoder.generate(count_second, set()))
+        return tokens_first, tokens_second
+
+    def test_mtp_adaptive_matches_sequential_target_over_two_turns(self):
+        import os
+        from models.flashnext.speculative import MTPGreedy
+
+        language = self._mtp_language()
+        vocab = int(language.args.vocab_size)
+        first = mx.array([[3, 7, 11]], dtype=mx.uint32)
+        second = mx.array([[5, 9]], dtype=mx.uint32)
+        expected = self._two_turn_reference(language, first, second, 48, 48)
+
+        def run(chain_for):
+            language._position_ids = None
+            language._rope_deltas = None
+            with patch.dict(os.environ, {"FLASHNEXT_MTP_ADAPTIVE": "1"}):
+                decoder = MTPGreedy(language, depth=4)
+            turns = []
+            for ids, truth in ((first, expected[0]), (second, expected[1])):
+                emitted = []
+                decoder.append(ids)
+                with patch.object(MTPGreedy, "_draft_chain", chain_for(truth, emitted)):
+                    turns.append(self._drain(decoder, 48, emitted))
+            return decoder, turns
+
+        # Real MTP head: random weights, so nearly every draft is rejected.
+        decoder, turns = run(lambda truth, emitted: MTPGreedy._draft_chain)
+        self.assertEqual(turns, list(expected))
+        # Oracle drafts with an occasional rejection at a varying position.
+        decoder, turns = run(lambda truth, emitted: self._oracle_chain(
+            truth, emitted, vocab,
+            reject=lambda cycle, depth: (cycle % 4) % depth if cycle % 4 != 3 else None))
+        self.assertEqual(turns, list(expected))
+        counts = decoder.stats.depth_counts
+        self.assertIn(0, counts)
+        self.assertGreater(len(counts), 1)
+        self.assertEqual(sum(counts.values()), decoder.stats.cycles)
+        self.assertTrue(all(0 <= depth <= 4 for depth in counts))
+        self.assertGreater(decoder.stats.accepted, 0)
+        # The controller persists across both turns of the conversation.
+        self.assertEqual(decoder.stats.adaptive["cycles"], decoder.stats.cycles)
+        self.assertGreater(decoder.stats.verify_seconds, 0.0)
+        self.assertGreater(decoder.stats.draft_seconds, 0.0)
+        self.assertEqual(decoder.stats.drafted, sum(
+            depth * count for depth, count in counts.items()))
+
+    def test_mtp_adaptive_follows_depth_changes_and_reset(self):
+        import os
+        from models.flashnext.speculative import MTPGreedy
+
+        language = self._mtp_language()
+        first = mx.array([[3, 7, 11]], dtype=mx.uint32)
+        second = mx.array([[5, 9]], dtype=mx.uint32)
+        expected = self._two_turn_reference(language, first, second, 15, 15)
+        language._position_ids = None
+        language._rope_deltas = None
+        with patch.dict(os.environ, {"FLASHNEXT_MTP_ADAPTIVE": "1"}):
+            decoder = MTPGreedy(language, depth=4)
+        self.assertIsNone(decoder._depth_controller)
+        decoder.append(first)
+        self.assertEqual(list(decoder.generate(15, set())), expected[0])
+        controller = decoder._depth_controller
+        self.assertEqual(controller.max_depth, 4)
+        # The backend lowers the configured depth for a turn: the ceiling follows.
+        decoder.depth = 2
+        decoder.append(second)
+        self.assertEqual(list(decoder.generate(15, set())), expected[1])
+        self.assertIsNot(decoder._depth_controller, controller)
+        self.assertEqual(decoder._depth_controller.max_depth, 2)
+        self.assertLessEqual(max(decoder.stats.depth_counts), 4)
+        # A new conversation re-reads the flag and drops the controller.
+        with patch.dict(os.environ, {"FLASHNEXT_MTP_ADAPTIVE": "0"}):
+            decoder.reset()
+        self.assertFalse(decoder._adaptive)
+        self.assertIsNone(decoder._depth_controller)
+        self.assertEqual(decoder.stats.depth_counts, {})
+        with patch.dict(os.environ, {"FLASHNEXT_MTP_ADAPTIVE": "1"}):
+            decoder.reset()
+        self.assertTrue(decoder._adaptive)
+
+    def test_mtp_forced_depth_schedule_matches_sequential_target(self):
+        import itertools
+        import os
+        from models.flashnext.speculative import MTPGreedy
+
+        language = self._mtp_language()
+        vocab = int(language.args.vocab_size)
+        prompt = mx.array([[3, 7, 11]], dtype=mx.uint32)
+        expected, _, _ = self._sequential(language, prompt, 60)
+        for reject in (
+            lambda cycle, depth: None,
+            lambda cycle, depth: cycle % depth,
+        ):
+            language._position_ids = None
+            language._rope_deltas = None
+            with patch.dict(os.environ, {"FLASHNEXT_MTP_ADAPTIVE": "1"}):
+                decoder = MTPGreedy(language, depth=4)
+            controller = decoder._controller()
+            decoder.append(prompt)
+            emitted = []
+            chain = self._oracle_chain(expected, emitted, vocab, reject)
+            with patch.object(
+                controller, "choose", side_effect=itertools.cycle(range(5))
+            ), patch.object(MTPGreedy, "_draft_chain", chain):
+                self._drain(decoder, 48, emitted)
+            self.assertEqual(emitted, expected[:48])
+            self.assertEqual(set(decoder.stats.depth_counts), {0, 1, 2, 3, 4})
+
+    def test_mtp_forced_rejection_at_every_position_matches_target_and_state(self):
+        from models.flashnext.speculative import MTPGreedy
+
+        language = self._mtp_language()
+        prompt = mx.array([[3, 7, 11]], dtype=mx.uint32)
+        count = 20
+        # Extra tokens let the forced drafts run past the end of generation.
+        truth, _, _ = self._sequential(language, prompt, count + 8)
+        _, reference_cache, _ = self._sequential(language, prompt, count)
+        vocab = int(language.args.vocab_size)
+        for depth in range(1, 5):
+            for position in range(depth):
+                with self.subTest(depth=depth, position=position):
+                    emitted = []
+
+                    def forced(decoder, chain_depth=None, *, _position=position):
+                        self.assertEqual(chain_depth, decoder.depth)
+                        start = len(emitted)
+                        drafts = truth[start + 1:start + 1 + chain_depth]
+                        drafts[_position] = (drafts[_position] + 1) % vocab
+                        return drafts
+
+                    language._position_ids = None
+                    language._rope_deltas = None
+                    decoder = MTPGreedy(language, depth=depth)
+                    decoder.append(prompt)
+                    with patch.object(MTPGreedy, "_draft_chain", forced):
+                        for token in decoder.generate(count, set()):
+                            emitted.append(token)
+                    self.assertEqual(emitted, truth[:count])
+                    # Every cycle rejects at `position`, except the last, which
+                    # may be cut short by the token budget.
+                    self.assertLessEqual(decoder.stats.accepted,
+                                         decoder.stats.cycles * position)
+                    self.assertGreater(decoder.stats.replayed, 0)
+                    self.assertEqual(
+                        self._cache_max_abs(decoder.target_cache, reference_cache),
+                        0.0,
+                    )
+
+    def test_mtp_flag_off_drafts_configured_depth_without_controller(self):
+        import os
+        from models.flashnext.speculative import MTPGreedy
+
+        language = self._mtp_language()
+        prompt = mx.array([[3, 7, 11]], dtype=mx.uint32)
+        expected, _, _ = self._sequential(language, prompt, 24)
+        language._position_ids = None
+        language._rope_deltas = None
+        calls = []
+        original = MTPGreedy._draft_chain
+
+        def spy(decoder, depth=None):
+            calls.append(depth)
+            return original(decoder, depth)
+
+        env = {k: v for k, v in os.environ.items() if k != "FLASHNEXT_MTP_ADAPTIVE"}
+        with patch.dict(os.environ, env, clear=True):
+            decoder = MTPGreedy(language, depth=3)
+        decoder.append(prompt)
+        with patch.object(MTPGreedy, "_draft_chain", spy):
+            actual = list(decoder.generate(24, set()))
+        self.assertEqual(actual, expected)
+        self.assertEqual(calls, [3] * decoder.stats.cycles)
+        self.assertGreater(decoder.stats.cycles, 1)
+        self.assertIsNone(decoder._depth_controller)
+        self.assertIsNone(decoder.stats.adaptive)
+        self.assertEqual(decoder.stats.depth_counts, {3: decoder.stats.cycles})
+        self.assertEqual(decoder.stats.drafted, 3 * decoder.stats.cycles)
+        self.assertGreater(decoder.stats.verify_seconds, 0.0)
+
 if __name__ == "__main__":
     unittest.main()

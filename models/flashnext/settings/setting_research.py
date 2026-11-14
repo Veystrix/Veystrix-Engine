@@ -115,6 +115,7 @@ SETTINGS = (
     research("expert-prefetch-workers", "FLASHNEXT_EXPERT_PREFETCH_WORKERS", "2", "startup", positive_integer),
     research("expert-prefetch-gate", "FLASHNEXT_EXPERT_PREFETCH_GATE", "1", "startup", choice(("0", "1"), "expert-prefetch-gate")),
     research("decode-overlap", "FLASHNEXT_DECODE_OVERLAP", parser=choice(("0", "1"), "decode-overlap")),
+    research("mtp-adaptive", "FLASHNEXT_MTP_ADAPTIVE", parser=choice(("0", "1"), "mtp-adaptive")),
     research("prefill-seed-decode", "FLASHNEXT_PREFILL_SEED_DECODE", parser=choice(("0", "1"), "prefill-seed-decode")),
     research("metal-fma-dequant", "FLASHNEXT_METAL_FMA_DEQUANT", parser=choice(("0", "1"), "metal-fma-dequant")),
     research("metal-block-moe", "FLASHNEXT_METAL_BLOCK_MOE", parser=choice(("0", "1"), "metal-block-moe")),

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from copy import copy
 import os
+from time import perf_counter
 
 import mlx.core as mx
 
@@ -27,6 +28,13 @@ class EngineCore:
         self.mtp = None
         self._mtp_anchor = None
         self._capture_mtp = False
+        # Adaptive draft depth: read from the environment once per turn; the
+        # controller belongs to the live conversation and is dropped by reset().
+        self._mtp_adaptive = False
+        self._mtp_controller_state = None
+        # (accepted, verify seconds, repair seconds) of the latest completed
+        # verify_decode round.
+        self.last_round = None
         self.bind_cache(self._make_cache())
 
     def _make_cache(self):
@@ -36,6 +44,7 @@ class EngineCore:
 
     # -- state -------------------------------------------------------------------------------
     def reset(self) -> None:
+        self._mtp_controller_state = None
         self.bind_cache(self._make_cache())
         mx.clear_cache()
 
@@ -65,8 +74,30 @@ class EngineCore:
     def begin_mtp_turn(self, enabled):
         self._capture_mtp = enabled and self.mtp is not None
         self._mtp_anchor = None
+        self._mtp_adaptive = (
+            self._capture_mtp and os.environ.get("VEYSTRIX_NEMOTRON_MTP_ADAPTIVE", "0") == "1"
+        )
+        if not self._mtp_adaptive:
+            self._mtp_controller_state = None
         if self.mtp is not None:
             self.mtp.reset()
+
+    @property
+    def mtp_adaptive(self) -> bool:
+        return self._mtp_adaptive
+
+    def mtp_adaptive_stats(self):
+        """Depth controller statistics for the live conversation, or None."""
+        controller = self._mtp_controller_state
+        return controller[1].stats() if controller is not None else None
+
+    def _mtp_controller(self, ceiling):
+        """Depth controller for this conversation, capped at the configured depth."""
+        from models.shared.spec_depth import DepthController
+
+        if self._mtp_controller_state is None or self._mtp_controller_state[0] != ceiling:
+            self._mtp_controller_state = (ceiling, DepthController(max_depth=ceiling))
+        return self._mtp_controller_state[1]
 
     def _forward(self, tokens):
         if not self._capture_mtp:
@@ -266,6 +297,7 @@ class EngineCore:
         """Verify a short greedy draft with singleton operations and layer-local expert reuse."""
         from .state import clone_cache
 
+        began = perf_counter()
         snapshot = clone_cache(self.cache)
         self.streamed.pool.cancel_check = cancelled
         try:
@@ -278,7 +310,10 @@ class EngineCore:
             if predictions[:-1] == drafts:
                 if rows is not None:
                     self._advance_mtp(mx.concatenate(rows, axis=1), values)
+                self.last_round = (len(drafts), perf_counter() - began, 0.0)
                 return values, predictions[-1]
+            verify_seconds = perf_counter() - began
+            repair_began = perf_counter()
             self.bind_cache(snapshot)
             committed = [token]
             following = int(mx.argmax(self.decode(token, cancelled=cancelled), axis=-1).item())
@@ -287,6 +322,7 @@ class EngineCore:
                     break
                 committed.append(draft)
                 following = int(mx.argmax(self.decode(draft, cancelled=cancelled), axis=-1).item())
+            self.last_round = (len(committed) - 1, verify_seconds, perf_counter() - repair_began)
             return committed, following
         except BaseException:
             self.bind_cache(snapshot)
@@ -296,33 +332,50 @@ class EngineCore:
 
     def native_mtp_tokens(self, first, horizon, stops, cancelled, depth):
         produced, value = 0, int(first.item())
+        controller = self._mtp_controller(depth) if self._mtp_adaptive else None
         while produced < horizon and value not in stops:
             if cancelled():
                 raise Cancelled()
             drafts = []
             offset = self.mtp.kv.offset
             hidden, follower = self._mtp_anchor, value
+            wanted = controller.choose() if controller is not None else depth
+            draft_began = perf_counter()
             try:
-                for _ in range(min(depth, horizon - produced - 1)):
+                for _ in range(min(wanted, horizon - produced - 1)):
                     follower, hidden = self.mtp.forward(hidden, mx.array([follower], dtype=mx.int32), predict=True)
                     if follower in stops:
                         break
                     drafts.append(follower)
             finally:
                 self.mtp.rewind(offset)
+            draft_seconds = perf_counter() - draft_began
             if drafts:
+                self.last_round = None
                 committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
                 for token in committed:
                     if cancelled():
                         raise Cancelled()
                     yield token
                 produced += len(committed)
+                if controller is not None and self.last_round is not None:
+                    accepted, verify_seconds, repair_seconds = self.last_round
+                    # The draft loop may stop early, so the depth is what was drafted.
+                    controller.observe(
+                        len(drafts), accepted, draft_seconds=draft_seconds,
+                        verify_seconds=verify_seconds, repair_seconds=repair_seconds,
+                    )
             else:
                 yield value
                 produced += 1
+                step_began = perf_counter()
                 logits = self.decode(value, cancelled=cancelled, emit_logits=produced < horizon)
                 if logits is not None:
                     value = int(mx.argmax(logits, axis=-1).item())
+                    if controller is not None:
+                        # A round without drafts is a depth-0 sample of the plain step.
+                        controller.observe(0, 0, draft_seconds=draft_seconds,
+                                           verify_seconds=perf_counter() - step_began)
 
     def prompt_lookup_tokens(self, history, first, horizon, stops, cancelled):
         from models.shared.prompt_lookup import PromptLookup, ThroughputGate
@@ -334,7 +387,7 @@ class EngineCore:
             if cancelled():
                 raise Cancelled()
             lookup.append(value)
-            drafts = lookup.propose(min(4, horizon - produced - 1)) if gate.allow() else []
+            drafts = lookup.propose(min(gate.depth, horizon - produced - 1)) if gate.allow() else []
             for index, draft in enumerate(drafts):
                 if draft in stops:
                     drafts = drafts[:index]
@@ -350,7 +403,7 @@ class EngineCore:
                 continue
             began = perf_counter()
             committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
-            gate.observe(True, len(committed), perf_counter() - began)
+            gate.observe(True, len(committed), perf_counter() - began, proposed=len(drafts))
             for output in committed:
                 if cancelled():
                     raise Cancelled()

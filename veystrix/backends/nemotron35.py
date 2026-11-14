@@ -493,7 +493,8 @@ class NemotronBackend(Conversation):
         if os.environ.get("VEYSTRIX_BENCH_TOKEN_DIGEST") == "1":
             from models.flashnext import flight_recorder
 
-            flight_recorder.record("nemotron_decode_mode", native_mtp=use_mtp, mtp_depth=self.mtp_depth if use_mtp else None)
+            flight_recorder.record("nemotron_decode_mode", native_mtp=use_mtp, mtp_depth=self.mtp_depth if use_mtp else None,
+                                   mtp_adaptive=self.core.mtp_adaptive)
         snapshots = []
         start = restored if fresh else cached          # tokens the cache already holds before this prefill
         mark = [start]

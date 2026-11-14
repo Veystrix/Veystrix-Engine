@@ -4,10 +4,11 @@ from __future__ import annotations
 import gc
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from veystrix.bench.telemetry import current as benchmark_trace
+from models.shared.spec_depth import DepthController
 
 import mlx.core as mx
 
@@ -64,6 +65,14 @@ class MTPStats:
     drafted: int = 0
     accepted: int = 0
     replayed: int = 0
+    draft_seconds: float = 0.0
+    verify_seconds: float = 0.0
+    repair_seconds: float = 0.0
+    fold_seconds: float = 0.0
+    # Cycles run at each draft depth.
+    depth_counts: dict = field(default_factory=dict)
+    # DepthController.stats() when adaptive depth is on, else None.
+    adaptive: dict | None = None
 
     @property
     def acceptance(self) -> float:
@@ -710,6 +719,9 @@ class MTPGreedy:
         self.draft_hidden = None
         self.hist_offset = 0
         self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._depth_controller = None
+        self._depth_controller_max = None
         # Same exact verifier FastDraftGreedy installs. MTPGreedy must
         # not assume another decoder already installed it.
         self.verifier = Qwen4ExactSpeculativeVerifier()
@@ -731,7 +743,25 @@ class MTPGreedy:
         self.draft_hidden = None
         self.hist_offset = 0
         self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._depth_controller = None
+        self._depth_controller_max = None
         self.route_observer = None
+
+    @staticmethod
+    def _adaptive_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ADAPTIVE", "0") == "1"
+
+    def _controller(self) -> DepthController:
+        """Depth controller for this conversation, capped at the configured depth.
+
+        The cap is the width the memory planner reserved verifier workspace
+        for, so a changed ``depth`` builds a fresh controller.
+        """
+        if self._depth_controller is None or self._depth_controller_max != self.depth:
+            self._depth_controller = DepthController(max_depth=self.depth)
+            self._depth_controller_max = self.depth
+        return self._depth_controller
 
     def _target_capture(self, ids):
         logits, hidden_states, _token = prefill_target(
@@ -875,15 +905,19 @@ class MTPGreedy:
         self.draft_logits, self.draft_hidden = self._fold(self.anchor, self.next_main.reshape(1, 1))
         mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
 
-    def _draft_chain(self):
+    def _draft_chain(self, depth=None):
+        """Draft ``depth`` tokens (the configured depth by default)."""
+        depth = self.depth if depth is None else depth
         drafts = []
+        if depth <= 0:
+            return drafts
         logits = self.draft_logits
         hidden = self.draft_hidden[:, -1:]
-        for index in range(self.depth):
+        for index in range(depth):
             token = mx.argmax(logits[:, -1, :], axis=-1).astype(mx.uint32)
             value = int(token.item())
             drafts.append(value)
-            if index + 1 < self.depth:
+            if index + 1 < depth:
                 logits, hidden = mtp.forward(
                     self.language,
                     hidden,
@@ -931,18 +965,29 @@ class MTPGreedy:
 
             target_snapshot = snapshot_cache(self.target_cache)
             base_hist = self.hist_offset
+            controller = self._controller() if self._adaptive else None
+            depth = controller.choose() if controller is not None else self.depth
             draft_ns = trace.clock() if trace is not None else None
-            drafts = self._draft_chain()
+            draft_start = time.perf_counter()
+            drafts = self._draft_chain(depth)
+            draft_seconds = time.perf_counter() - draft_start
             if trace is not None:
                 trace.end_round("draft_round", draft_ns, proposed=len(drafts))
             self.stats.cycles += 1
             self.stats.drafted += len(drafts)
+            self.stats.draft_seconds += draft_seconds
+            self.stats.depth_counts[depth] = (
+                self.stats.depth_counts.get(depth, 0) + 1
+            )
 
             block = [int(self.next_main.item()), *drafts]
             block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
             verify_ns = trace.clock() if trace is not None else None
+            verify_start = time.perf_counter()
             target_ids, hidden = self._target_verify(block_ids)
             host_targets = target_ids.tolist()
+            verify_seconds = time.perf_counter() - verify_start
+            self.stats.verify_seconds += verify_seconds
 
             accepted = 0
             for expected, proposed in zip(host_targets, drafts):
@@ -980,12 +1025,26 @@ class MTPGreedy:
                     trim_cache(self.mtp_cache, base_hist - 1)
                     self.hist_offset = base_hist - 1
                     self.next_main = None
+                if controller is not None:
+                    # The prefix replay here is not the partial-rejection
+                    # repair the model prices, so report none.
+                    controller.observe(
+                        depth, accepted,
+                        draft_seconds=draft_seconds,
+                        verify_seconds=verify_seconds,
+                    )
+                    self.stats.adaptive = controller.stats()
                 return
 
+            repair_seconds = 0.0
             if accepted < len(drafts):
+                repair_start = time.perf_counter()
                 self._target_replay(
                     target_snapshot, block_ids[:, : accepted + 1]
                 )
+                repair_seconds = time.perf_counter() - repair_start
+                self.stats.repair_seconds += repair_seconds
+            fold_start = time.perf_counter()
             trim_cache(self.mtp_cache, base_hist)
 
             correction = int(host_targets[accepted])
@@ -999,6 +1058,18 @@ class MTPGreedy:
             self.anchor = hidden[:, accepted : accepted + 1]
             self.next_main = mx.array([correction], dtype=mx.uint32)
             mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
+            fold_seconds = time.perf_counter() - fold_start
+            self.stats.fold_seconds += fold_seconds
+            if controller is not None:
+                # The MTP fold is paid every cycle at any depth, so the model
+                # sees it as part of the fixed per-cycle verify cost.
+                controller.observe(
+                    depth, accepted,
+                    draft_seconds=draft_seconds,
+                    verify_seconds=verify_seconds + fold_seconds,
+                    repair_seconds=repair_seconds,
+                )
+                self.stats.adaptive = controller.stats()
 
             for token in processed:
                 produced += 1

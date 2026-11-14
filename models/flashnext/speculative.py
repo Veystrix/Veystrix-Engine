@@ -59,15 +59,74 @@ def trim_cache(cache, offset: int) -> None:
             entry.trim(current - offset)
 
 
+def rollback_verified(
+    language,
+    target_cache,
+    snapshot,
+    verify_out,
+    block_size,
+    keep_count,
+    materialize=False,
+):
+    """Keep an exact prefix of a verified block without replaying it.
+
+    ``verify_out`` is the output of a ``speculative_verify=True`` forward
+    over ``block_size`` tokens, whose ``gdn_states`` hold the intermediate
+    recurrent states. ``keep_count`` leading tokens stay committed; zero
+    restores ``snapshot``. The recurrent states left in the cache are slices
+    of the verifier's intermediate buffers and stay lazy unless
+    ``materialize`` is true, which evaluates them so the caller may drop the
+    verifier output.
+    """
+    if keep_count <= 0:
+        restore_cache(target_cache, snapshot)
+        return
+    language.rollback_speculative_cache(
+        target_cache,
+        verify_out.gdn_states,
+        keep_count - 1,
+        block_size,
+    )
+    ssm_caches = [
+        entry
+        for entry in target_cache
+        if entry is not None
+        and not entry.is_trimmable()
+        and not hasattr(entry, "zero_row_tail")
+    ]
+    restored = []
+    for entry, state in zip(ssm_caches, verify_out.gdn_states):
+        if len(state) <= 12 or state[12] is None:
+            continue
+        token_history, context_len, conv_input, conv_state_len = state[12]
+        entry[3] = mx.contiguous(
+            token_history[:, keep_count : keep_count + context_len]
+        )
+        entry[2] = mx.contiguous(
+            conv_input[:, keep_count : keep_count + conv_state_len]
+        )
+        restored.extend((entry[2], entry[3]))
+    if materialize:
+        for entry in ssm_caches:
+            restored.extend(
+                value for value in entry.state if isinstance(value, mx.array)
+            )
+    if restored:
+        mx.eval(*restored)
+
+
 @dataclass
 class MTPStats:
     cycles: int = 0
     drafted: int = 0
     accepted: int = 0
     replayed: int = 0
+    # Tokens kept by the exact rollback instead of a replay (FLASHNEXT_MTP_ROLLBACK).
+    rolled_back: int = 0
     draft_seconds: float = 0.0
     verify_seconds: float = 0.0
     repair_seconds: float = 0.0
+    rollback_seconds: float = 0.0
     fold_seconds: float = 0.0
     # Cycles run at each draft depth.
     depth_counts: dict = field(default_factory=dict)
@@ -280,36 +339,14 @@ class FastDraftGreedy:
 
     def _rollback_verified(self, snapshot, verify_out, block_size, keep_count):
         """Keep an exact prefix of a verified block without replaying it."""
-        if keep_count <= 0:
-            restore_cache(self.target_cache, snapshot)
-            return
-        self.language.rollback_speculative_cache(
+        rollback_verified(
+            self.language,
             self.target_cache,
-            verify_out.gdn_states,
-            keep_count - 1,
+            snapshot,
+            verify_out,
             block_size,
+            keep_count,
         )
-        ssm_caches = [
-            entry
-            for entry in self.target_cache
-            if entry is not None
-            and not entry.is_trimmable()
-            and not hasattr(entry, "zero_row_tail")
-        ]
-        restored = []
-        for entry, state in zip(ssm_caches, verify_out.gdn_states):
-            if len(state) <= 12 or state[12] is None:
-                continue
-            token_history, context_len, conv_input, conv_state_len = state[12]
-            entry[3] = mx.contiguous(
-                token_history[:, keep_count : keep_count + context_len]
-            )
-            entry[2] = mx.contiguous(
-                conv_input[:, keep_count : keep_count + conv_state_len]
-            )
-            restored.extend((entry[2], entry[3]))
-        if restored:
-            mx.eval(*restored)
 
     def _external_replay(self, snapshot, next_snapshot, values):
         restore_cache(self.draft_cache, snapshot)
@@ -720,6 +757,8 @@ class MTPGreedy:
         self.hist_offset = 0
         self.stats = MTPStats()
         self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
         self._depth_controller = None
         self._depth_controller_max = None
         # Same exact verifier FastDraftGreedy installs. MTPGreedy must
@@ -744,6 +783,8 @@ class MTPGreedy:
         self.hist_offset = 0
         self.stats = MTPStats()
         self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
         self._depth_controller = None
         self._depth_controller_max = None
         self.route_observer = None
@@ -751,6 +792,16 @@ class MTPGreedy:
     @staticmethod
     def _adaptive_enabled() -> bool:
         return os.environ.get("FLASHNEXT_MTP_ADAPTIVE", "0") == "1"
+
+    @staticmethod
+    def _rollback_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ROLLBACK", "0") == "1"
+
+    @staticmethod
+    def _cache_limit_mb() -> int:
+        """Allocator cache cap for decode, in MB; 0 means no cap."""
+        raw = os.environ.get("FLASHNEXT_MTP_CACHE_LIMIT_MB", "512").strip()
+        return int(raw) if raw else 512
 
     def _controller(self) -> DepthController:
         """Depth controller for this conversation, capped at the configured depth.
@@ -810,6 +861,9 @@ class MTPGreedy:
             final_hidden
         )[0].astype(mx.uint32)
         mx.eval(target_ids, hc_hidden)
+        # Only the rollback path needs the intermediate states; _generate
+        # takes and clears this within the same cycle.
+        self._verify_out = out if self._rollback else None
         return target_ids, hc_hidden
 
     def _target_replay(self, snapshot, ids) -> None:
@@ -927,9 +981,33 @@ class MTPGreedy:
                 )
         return drafts
 
-    def _finish_prefix(self, snapshot, verify_hidden, keep_ids, base_hist) -> None:
-        ids = mx.array(keep_ids, dtype=mx.uint32).reshape(1, -1)
-        self._target_replay(snapshot, ids)
+    def _rollback_target(self, snapshot, verify_out, block_size, keep_count) -> float:
+        """Keep ``keep_count`` verified tokens by rollback; return the seconds taken."""
+        started = time.perf_counter()
+        rollback_verified(
+            self.language,
+            self.target_cache,
+            snapshot,
+            verify_out,
+            block_size,
+            keep_count,
+            materialize=True,
+        )
+        seconds = time.perf_counter() - started
+        self.stats.rollback_seconds += seconds
+        self.stats.rolled_back += keep_count
+        return seconds
+
+    def _finish_prefix(
+        self, snapshot, verify_hidden, keep_ids, base_hist,
+        verify_out=None, block_size=0,
+    ) -> None:
+        if verify_out is None:
+            ids = mx.array(keep_ids, dtype=mx.uint32).reshape(1, -1)
+            self._target_replay(snapshot, ids)
+        elif len(keep_ids) < block_size:
+            self._rollback_target(snapshot, verify_out, block_size, len(keep_ids))
+        # else: the verifier state already covers exactly these tokens.
         trim_cache(self.mtp_cache, base_hist)
 
         # next_main already occupies the last committed MTP history slot.
@@ -948,7 +1026,7 @@ class MTPGreedy:
 
         # Verification and rollback allocate temporary Metal buffers on every cycle.
         # Bound their reuse cache while leaving live model state and the expert pool alone.
-        with cache_cap(512):
+        with cache_cap(self._cache_limit_mb()):
             yield from self._generate(max_tokens, stops)
 
     def _generate(self, max_tokens: int, stops: Iterable[int]):
@@ -985,6 +1063,7 @@ class MTPGreedy:
             verify_ns = trace.clock() if trace is not None else None
             verify_start = time.perf_counter()
             target_ids, hidden = self._target_verify(block_ids)
+            verify_out, self._verify_out = self._verify_out, None
             host_targets = target_ids.tolist()
             verify_seconds = time.perf_counter() - verify_start
             self.stats.verify_seconds += verify_seconds
@@ -1016,7 +1095,10 @@ class MTPGreedy:
                         hidden,
                         processed[:keep],
                         base_hist,
+                        verify_out=verify_out,
+                        block_size=len(block),
                     )
+                    verify_out = None
                     for token in processed[:keep]:
                         produced += 1
                         yield token
@@ -1038,12 +1120,18 @@ class MTPGreedy:
 
             repair_seconds = 0.0
             if accepted < len(drafts):
-                repair_start = time.perf_counter()
-                self._target_replay(
-                    target_snapshot, block_ids[:, : accepted + 1]
-                )
-                repair_seconds = time.perf_counter() - repair_start
-                self.stats.repair_seconds += repair_seconds
+                if verify_out is not None:
+                    repair_seconds = self._rollback_target(
+                        target_snapshot, verify_out, len(block), accepted + 1
+                    )
+                else:
+                    repair_start = time.perf_counter()
+                    self._target_replay(
+                        target_snapshot, block_ids[:, : accepted + 1]
+                    )
+                    repair_seconds = time.perf_counter() - repair_start
+                    self.stats.repair_seconds += repair_seconds
+            verify_out = None
             fold_start = time.perf_counter()
             trim_cache(self.mtp_cache, base_hist)
 

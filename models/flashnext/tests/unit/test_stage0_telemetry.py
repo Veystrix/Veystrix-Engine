@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -102,6 +103,31 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(row["swapout_bytes_total"], 0)
         self.assertIsNone(row["swap_used_bytes"])
         self.assertIsNone(row["swapin_bytes_total"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "reads Mach host statistics")
+    def test_kernel_sample_agrees_with_vm_stat_without_a_subprocess(self):
+        from veystrix.bench import memory
+
+        parsed = system_sample()
+        with patch("veystrix.bench.memory.output", side_effect=AssertionError("no subprocess")):
+            direct = memory.kernel_sample()
+        self.assertEqual(set(direct), set(parsed))
+        # The two readings are taken a few milliseconds apart on a live machine.
+        self.assertLess(abs(direct["available_bytes"] - parsed["available_bytes"]), 512 * 2**20)
+        self.assertLess(abs(direct["compressor_bytes"] - parsed["compressor_bytes"]), 256 * 2**20)
+        self.assertGreaterEqual(direct["swapout_bytes_total"], parsed["swapout_bytes_total"])
+        self.assertGreaterEqual(direct["swapin_bytes_total"], parsed["swapin_bytes_total"])
+
+    def test_sampler_reads_the_kernel_and_falls_back_to_vm_stat(self):
+        from veystrix.bench import memory
+
+        self.assertIs(memory.MemorySampler(0).read, memory.sample)
+        fallback = {"available_bytes": 1, "compressor_bytes": 2, "swap_used_bytes": 3,
+                    "swapin_bytes_total": 4, "swapout_bytes_total": 5}
+        with patch("veystrix.bench.memory.kernel_sample", side_effect=OSError), patch(
+            "veystrix.bench.memory.system_sample", return_value=fallback,
+        ):
+            self.assertEqual(memory.sample(), fallback)
 
     def test_production_arm_preserves_legacy_token_digest(self):
         ids = FIXTURE["ids"]

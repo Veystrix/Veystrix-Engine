@@ -210,6 +210,20 @@ class NemotronBackend(Conversation):
             self.mtp_depth = int(os.environ.get("VEYSTRIX_NEMOTRON_MTP_DEPTH") or "2")
             if not 1 <= self.mtp_depth <= 4:
                 raise ValueError("Nemotron MTP depth must be between 1 and 4")
+        # LCT-05: the installed conversion declares 262,144 positions with no
+        # RoPE scaling. Do not plan or advertise a larger window unless the
+        # numerical qualification is explicitly overridden.
+        from models.nemotron35 import config as config_module
+
+        qualification = config_module.position_qualification(config)
+        # Owner decision: 1M is the default advertised window. Positions past
+        # the declared 262,144 remain numerically unvalidated; setting
+        # VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=0 restores the strict gate.
+        extended_context = os.environ.get("VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT", "1") != "0"
+        declared_positions = qualification["declared_positions"]
+        if not extended_context and declared_positions:
+            context_tokens = (declared_positions if context_tokens is None
+                              else min(int(context_tokens), declared_positions))
         # Plan from the exact dense-core size implied by the verified inventory, BEFORE reading any weight.
         plan = admission.make_plan(config, machine, dense_bytes=estimate_bytes(config)["dense_bytes"],
                                    context_tokens=context_tokens, chunk_tokens=chunk, pool_bytes=pool,
@@ -236,6 +250,8 @@ class NemotronBackend(Conversation):
         self.model_path = str(root)
         self.config = config
         self._strict_prefix_plan = config_check is None
+        self.context_qualification = qualification
+        self._extended_context_allowed = extended_context
         self._system_header = self.encode(f"{IM_START}system\n")
         self._message_end = self.encode(IM_END)
         self.context_limit = self.configured_context = plan.context_tokens
@@ -363,20 +379,30 @@ class NemotronBackend(Conversation):
         import mlx.core as mx
         import resource
 
+        from models.nemotron35.mamba_scan import fingerprint as mamba_fingerprint
+
         pool = self.streamed.pool.stats()
         asked = pool["hits"] + pool["misses"]
         used, issued = pool["prefetch_used"], pool["prefetch_issued"]
         snapshot = {
             "model": "nemotron35-lightning", "runtime": RUNTIME_VERSION,
             "configured_context": self.configured_context, "admitted_context": self.context_limit,
-            "kv_format": self.kv_format, "million_token_validation": False,
+            "kv_format": self.kv_format,
+            "million_token_validation": self.context_qualification["million_token_qualified"],
+            "context_qualification": self.context_qualification,
+            "extended_context_enabled": self._extended_context_allowed,
+            **mamba_fingerprint(self.streamed.model),
             "planned_memory": self.plan.summary(),
             "metal_active_bytes": mx.get_active_memory(), "metal_peak_bytes": mx.get_peak_memory(),
             "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-            "pool": {"budget_gib": round(pool["budget_bytes"] / 2**30, 2), "resident_gib": round(pool["resident_bytes"] / 2**30, 2),
+            "pool": {"policy": self.streamed.pool.policy,
+                     "expert_pack_records": self.streamed.reader.packed_reads,
+                     "budget_gib": round(pool["budget_bytes"] / 2**30, 2), "resident_gib": round(pool["resident_bytes"] / 2**30, 2),
                      "hit_rate": round(pool["hits"] / asked, 3) if asked else None,
                      "seeded_bytes": pool.get("seeded_bytes", 0),
-                     "staged_mib": round(pool["staged_bytes"] / 2**20, 1)},
+                     "staged_mib": round(pool["staged_bytes"] / 2**20, 1),
+                     **({"edf_io": pool["edf"]} if "edf" in pool else {}),
+                     **({"route_lookahead": pool["lookahead"]} if "lookahead" in pool else {})},
             "prefetch": {"issued": issued, "used": used, "wasted": pool["prefetch_wasted"],
                          "precision": round(used / issued, 3) if issued else None},
             "expert_gb_read": round(pool["bytes_read"] / 1e9, 2),
@@ -404,6 +430,18 @@ class NemotronBackend(Conversation):
                 return boundary if boundary >= self.prefix_cache.min_tokens else None
         return None
 
+    def _check_position_qualification(self, positions: int) -> None:
+        """LCT-05: refuse positions past the checkpoint's declared window unless explicitly qualified."""
+        declared = self.context_qualification["declared_positions"]
+        if not declared or positions <= declared or self._extended_context_allowed:
+            return
+        from models.nemotron35 import admission
+
+        raise admission.AdmissionRefused(
+            f"request would use {positions} positions but the checkpoint declares {declared} with no RoPE scaling "
+            "metadata; output past the declared window is unvalidated. Run the LCT-05 numerical qualification and set "
+            "VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=1 to override.")
+
     def _prefix_positions(self, ids):
         anchor = self._system_boundary(ids)
         chunk = self.core.chunk_tokens
@@ -423,6 +461,9 @@ class NemotronBackend(Conversation):
         feed = (list(self.tape) + pending) if replay else pending
         cached = 0 if fresh else self.cache_tokens
         admission.check_request(self.plan, self._current_machine(), new_tokens=len(feed), cached_tokens=cached)
+        # Only real prompt positions are gated. The client's output cap is a
+        # limit, not a position; generation is bounded by context_limit below.
+        self._check_position_qualification(cached + len(feed))
         restored = 0
         restored_from_ram = False
         restore_started = time.perf_counter()
@@ -543,8 +584,15 @@ class NemotronBackend(Conversation):
         produced, partial, pieces = [], [], []
         finish = "length"
         timer = DecodeTimer()
+        from models.nemotron35 import decode_profile
+        from models.shared import decode_gc
+        from models.shared.logit_reference import reference_sampler
+
+        pool = self.streamed.pool
+        pool.decode_profile = profile = decode_profile.begin(pool)
+        gc_suspended = decode_gc.suspend()
         try:
-            token = sampler(logits) if horizon > 0 else None
+            token = reference_sampler(sampler)(logits) if horizon > 0 else None
             speculative = None
             if use_mtp:
                 speculative = self.core.native_mtp_tokens(token, horizon, self.stops, cancel, self.mtp_depth)
@@ -618,6 +666,10 @@ class NemotronBackend(Conversation):
             self._mark_replay_needed()
             raise
         finally:
+            decode_gc.restore(gc_suspended)
+            pool.decode_profile = None
+            if profile is not None:
+                profile.finish(pool)
             import mlx.core as mx2
             mx2.clear_cache()
         self.turn_closed = False
@@ -654,6 +706,8 @@ class NemotronBackend(Conversation):
     # -- named sessions (fingerprinted, namespaced by model identity) ------------------------------------------
     def _session_identity(self) -> dict:
         if self._identity is None:
+            from models.nemotron35.mamba_scan import fingerprint
+
             root = Path(self.model_path)
             def digest(name):
                 return hashlib.sha256((root / name).read_bytes()).hexdigest()
@@ -664,6 +718,7 @@ class NemotronBackend(Conversation):
                 "template": digest("chat_template.jinja"),
                 "total_size": (index.get("metadata") or {}).get("total_size"),
                 "quantization": self.config.get("quantization"), "state_dtypes": f"{self.kv_format}-kv/fp32-ssm",
+                **fingerprint(self.streamed.model),
                 **({"metal_affine_fma": True} if os.environ.get("VEYSTRIX_NEMOTRON_METAL_FMA_DEQUANT") == "1" else {}),
                 "weight_index": digest("model.safetensors.index.json"),
                 "weights": [(name, info.st_size, info.st_mtime_ns, info.st_ino)

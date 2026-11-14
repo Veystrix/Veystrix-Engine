@@ -1,0 +1,16 @@
+{"t":1794524923.854,"event":"server_start","pid":14448,"host":"127.0.0.1","port":60126,"context_limit":262144,"max_cold_prefill":32768,"max_incremental_prefill":32768}
+{"t":1794524924.088,"event":"request_begin","pid":14448,"path":"/v1/chat/completions","seq":1,"user_agent":"","session_header":true,"stream":true,"messages":2,"tools":0,"reasoning_fields":{"reasoning_effort":"none"},"max_tokens":96,"waiting":0}
+{"t":1794524924.122,"event":"adopt","pid":14448,"prompt_tokens":5594,"matched_tokens":0,"needed_prefill":5594,"extends":false,"outcome":"MISS","warm_tokens":0,"session_hint":false}
+{"t":1794524924.123,"event":"generate_begin","pid":14448,"prompt_tokens":5594,"max_tokens":96,"thinking":false,"effort":null}
+{"t":1794524924.147,"event":"prefill_progress","pid":14448,"done":0,"total":5594,"elapsed":0.0}
+{"t":1794524924.151,"event":"prefill_allocator_cap_begin","pid":14448,"limit_mib":512.0,"cache_bytes":23820,"active_bytes":3250826656}
+{"t":1794524924.152,"event":"prefill_ring_acquire","pid":14448,"enabled":true,"reason":null,"scratch":true,"ring_view_bytes":3145728000,"scratch_mapped_bytes":3194896384}
+{"t":1794524924.152,"event":"prefill_plan","pid":14448,"offset":0,"total":5594,"spans":[[0,5594]]}
+{"t":1794524924.152,"event":"prefill_chunk_begin","pid":14448,"start":0,"end":5594,"final":true}
+{"t":1794524924.152,"event":"prefill_forward_begin","pid":14448,"tokens":5594,"final":true,"full_logits":true}
+{"t":1794524992.414,"event":"prefill_forward_end","pid":14448,"final":true}
+{"t":1794524992.414,"event":"prefill_logits_eval_begin","pid":14448}
+{"t":1794524995.512,"event":"prefill_logits_eval_end","pid":14448}
+{"t":1794524995.536,"event":"prefill_target_return","pid":14448}
+{"t":1794524995.536,"event":"prefill_chunk_end","pid":14448,"start":0,"end":5594,"seconds":71.385}
+{"t":1794524995.598,"event":"prefill_allocator_cap_end","pid":14448,"limit_mib":512.0,"cache_bytes":0,"active_bytes":6636518842}

@@ -1,0 +1,31 @@
+warning: unlimited-generation does not include known origin/main; fetch and merge origin/main before validating chat behavior
+MEMORY POLICY: absolute-swap-only (stop at 5 GiB total system swap)
+prefill readiness: 9.22 GiB available, needs 10.20 GiB (predicted lowest gate figure 5.59 GiB after load and 1.32 GiB through a 16384-token cold prefill (fall 7.90); it must stay above the 2.0 GiB runtime floor + 0.30 margin)
+FlashNext safety trace: /var/folders/37/fn6fxqyd2rgfmvc4954dggbm0000gn/T/veystrix-chat-59298.jsonl
+watchdog       ON  (separate process 59339; stage deadlines /var/folders/37/fn6fxqyd2rgfmvc4954dggbm0000gn/T/veystrix-context-cache-mhztdrnt)
+Veystrix AGENTIC  (profile agent, one shared Flash-Next runtime)
+  checkpoint     /Users/vincent/Models/Qwen3.8-Flash-Next-MLX-4bit-MTP
+  decode pool    2 GB  (from the launch environment)
+  prefix cache   exact RAM+SSD, /var/folders/37/fn6fxqyd2rgfmvc4954dggbm0000gn/T/veystrix-context-cache-mhztdrnt/prefix, RAM 0.75 GB, SSD 80 GB, free reserve 50 GB, profiles off
+  chunk policy   balanced 2048-token chunks, 512-expert scratch ring
+  memory         absolute-swap-only (startup headroom is telemetry)
+  supervisor     ON (5 GiB total swap, thermal, battery stops)  trace veystrix-chat-59298.jsonl
+  auto purge   off
+  context limit  16384 tokens (requests above it are refused, never truncated)
+  prefill limits cold 16384, uncached increment 16384 tokens per request (internal chunks stay at 2048 tokens)
+  EXPERIMENTAL   short-throughput: experimental 4K hybrid layer-major prefill and buffered decode expert pool
+  status         exact system-prompt cache and 2K chunked prefill: real-model evidence; DeepSeek Harness: protocol verified offline, no full-model run has passed yet (the first stopped in cold prefill); 10K: NOT verified
+[2mloading flashnext...[0m
+[2mready in 3.3s  flashnext / agent  use /help for commands[0m
+
+flight recorder: /Users/vincent/Documents/Veystrix/results/flashnext/20261113-053759-context-mtp-8k-1024-manual/8192-mtp-off-flight.jsonl
+server ready at http://127.0.0.1:60900
+context limit: 16384 tokens (longer prompts are refused, never truncated)
+memory tier: single prefills up to 16384 tokens (larger ones are refused, never truncated)
+one request runs at a time; up to 4 wait at most 20s, then get 503 server_busy
+OpenAI: /v1/chat/completions and /v1/responses
+Anthropic: /v1/messages
+Status: /health, /ready, /v1/models
+FlashNext expert pool: 1999880192 bytes (651 slots; requested 2 GB)
+
+server stopped

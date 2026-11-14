@@ -18,6 +18,22 @@ LAYER_ORDER = ('mamba','moe','mamba','moe','mamba','attention','moe','mamba','mo
 class ConfigurationError(ValueError):
     pass
 
+
+def position_qualification(config: dict) -> dict:
+    """LCT-05: what the checkpoint actually declares, separate from what the server advertises.
+
+    The installed conversion declares 262,144 positions with no RoPE scaling.
+    A 1M run needs a checkpoint that carries the GA recipe *and* its own
+    numerical qualification; advertising 1M from an INT8 KV plan is not
+    evidence that positions past the declared window produce correct output.
+    """
+    declared = config.get("max_position_embeddings")
+    declared = int(declared) if isinstance(declared, int) and declared > 0 else 0
+    scaling = config.get("rope_scaling") or config.get("rope_parameters")
+    return {"declared_positions": declared,
+            "extended_position_metadata": scaling if isinstance(scaling, dict) else None,
+            "million_token_qualified": bool(scaling) and declared >= 1_048_576}
+
 def validate_config(config: dict) -> None:
     if not isinstance(config, dict):
         raise ConfigurationError("config.json must be an object")
@@ -54,7 +70,13 @@ def inspect_checkpoint(path: str | Path, *, hashes: bool = False) -> dict:
         raise ConfigurationError(f"cannot read checkpoint config: {exc}") from exc
     validate_config(config)
     base = {"model": MODEL_ID, "layers": len(config["layers_block_type"]),
-            "architecture": config["model_type"], "quantization": config.get("quantization")}
+            "architecture": config["model_type"], "quantization": config.get("quantization"),
+            "layer_order": config["layers_block_type"],
+            "max_position_embeddings": config.get("max_position_embeddings"),
+            "hybrid_override_pattern": config.get("hybrid_override_pattern"),
+            "rope_theta": config.get("rope_theta"),
+            "rope_scaling": config.get("rope_scaling"),
+            "rope_parameters": config.get("rope_parameters")}
     try:
         names = inventory_names_only(root / "model.safetensors.index.json", config)
     except CheckpointError as exc:

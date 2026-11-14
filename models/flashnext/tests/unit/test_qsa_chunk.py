@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -176,6 +177,23 @@ class QSAIndexerTests(unittest.TestCase):
         self.assertEqual(actual.shape, expected.shape)
         self.assertEqual(actual.dtype, expected.dtype)
         self.assertTrue(mx.array_equal(actual, expected).item())
+
+    def test_reserved_index_updates_match_reference_after_growth_trim_and_restore(self):
+        for cache_type, kwargs in ((QSAKVCache, {}), (QSAQuantizedKVCache, {"group_size": 32})):
+            baseline, candidate = cache_type(**kwargs), cache_type(**kwargs)
+            original = cache_type.update_indexer
+            candidate.update_indexer = qsa_chunk._reserve_index_update(original).__get__(candidate)
+            with patch.dict(os.environ, {qsa_chunk.FLAG_INDEX_RESERVE: "1"}), patch.object(
+                qsa_chunk, "INDEX_RESERVE_TOKENS", 8
+            ):
+                for length in (5, 1, 4):
+                    self.step((baseline, candidate), length)
+                for cache in (baseline, candidate):
+                    cache.trim(3)
+                self.step((baseline, candidate), 2)
+                candidate.state = baseline.state
+                self.step((baseline, candidate), 1)
+                self.assertEqual(candidate._flashnext_index_reserve[2].shape[1], 16)
 
     def step(self, caches, length, positions=None, dtype=mx.float32, batch=1):
         reference, candidate = caches
@@ -417,7 +435,9 @@ class QSAInstallTests(unittest.TestCase):
             Qwen4ExpQSAIndexer, "__call__", indexer_call
         ), patch.object(Qwen4ExpAttention, "_flashnext_chunked_qsa", False, create=True), patch.object(
             qsa_chunk, "_ORIGINAL_CALL", None
-        ), patch.object(qsa_chunk, "_ORIGINAL_INDEXER_CALL", None):
+        ), patch.object(qsa_chunk, "_ORIGINAL_INDEXER_CALL", None), patch.object(
+            QSAKVCache, "update_indexer", QSAKVCache.update_indexer
+        ), patch.object(QSAQuantizedKVCache, "update_indexer", QSAQuantizedKVCache.update_indexer):
             self.assertTrue(qsa_chunk.apply())
             self.assertIs(Qwen4ExpQSAIndexer.__call__, qsa_chunk._indexer_call)
             self.assertIs(Qwen4ExpAttention.__call__, qsa_chunk._chunked_call)

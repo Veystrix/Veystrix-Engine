@@ -40,3 +40,6 @@ Issues = "https://github.com/joyboyreturns/Veystrix/issues"
 
 [tool.setuptools.packages.find]
 include = ["veystrix*", "models*"]
+
+[tool.setuptools.package-data]
+"models.flashnext" = ["native_read.c"]

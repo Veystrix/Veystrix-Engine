@@ -24,9 +24,56 @@ QSA_SCATTER_DECODE = os.environ.get("FLASHNEXT_QSA_SCATTER_DECODE", "0") == "1"
 FLAG_KERNEL = "FLASHNEXT_QSA_KERNEL"
 FLAG_GATHER_TILE = "FLASHNEXT_QSA_GATHER_TILE"
 FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
+FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
+INDEX_RESERVE_TOKENS = 4096
 
 _ORIGINAL_CALL = None
 _ORIGINAL_INDEXER_CALL = None
+
+
+def _append_index_array(storage, previous, incoming, axis, offset):
+    """Append into a reserved array and return the valid, unpadded view."""
+    count = incoming.shape[axis]
+    end = offset + count
+    if storage is None or storage.shape[axis] < end:
+        shape = list(incoming.shape)
+        shape[axis] = (end + INDEX_RESERVE_TOKENS - 1) // INDEX_RESERVE_TOKENS * INDEX_RESERVE_TOKENS
+        storage = mx.zeros(shape, dtype=incoming.dtype)
+        if previous is not None:
+            selection = [slice(None)] * incoming.ndim
+            selection[axis] = slice(0, offset)
+            storage[tuple(selection)] = previous
+    selection = [slice(None)] * incoming.ndim
+    selection[axis] = slice(offset, end)
+    storage[tuple(selection)] = incoming
+    selection[axis] = slice(0, end)
+    return storage, storage[tuple(selection)]
+
+
+def _reserve_index_update(original):
+    def update(cache, keys, positions):
+        if os.environ.get(FLAG_INDEX_RESERVE) != "1":
+            if hasattr(cache, "_flashnext_index_reserve"):
+                cache._flashnext_index_reserve = None
+            return original(cache, keys, positions)
+        old_keys, old_positions = cache.index_keys, cache.index_position_ids
+        if old_keys is not None and (old_positions.ndim != positions.ndim
+                                     or old_positions.dtype != positions.dtype
+                                     or old_keys.dtype != keys.dtype):
+            cache._flashnext_index_reserve = None
+            return original(cache, keys, positions)
+        offset = old_keys.shape[1] if old_keys is not None else 0
+        saved = getattr(cache, "_flashnext_index_reserve", None)
+        # Restore, trim, and batch filtering replace these public views.
+        # Treat them as a new source rather than writing to an old backing array.
+        key_store, pos_store = (saved[2:] if saved is not None and saved[0] is old_keys
+                               and saved[1] is old_positions else (None, None))
+        key_store, cache.index_keys = _append_index_array(key_store, old_keys, keys, 1, offset)
+        pos_store, cache.index_position_ids = _append_index_array(pos_store, old_positions, positions, -1, offset)
+        cache._flashnext_index_reserve = (cache.index_keys, cache.index_position_ids, key_store, pos_store)
+        return cache.index_keys, cache.index_position_ids
+
+    return update
 
 
 def kernel_mode():
@@ -445,7 +492,9 @@ def _chunked_call(
 def apply() -> bool:
     """Patch only QSA calls whose dense mask would approach Metal limits."""
     global _ORIGINAL_CALL, _ORIGINAL_INDEXER_CALL
-    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention, Qwen4ExpQSAIndexer
+    from mlx_vlm.models.qwen4_exp.language import (
+        QSAKVCache, QSAQuantizedKVCache, Qwen4ExpAttention, Qwen4ExpQSAIndexer,
+    )
 
     if getattr(Qwen4ExpAttention, "_flashnext_chunked_qsa", False):
         return False
@@ -455,6 +504,8 @@ def apply() -> bool:
         raise ValueError("QSA dense mask byte budget must be positive")
     _ORIGINAL_CALL = Qwen4ExpAttention.__call__
     _ORIGINAL_INDEXER_CALL = Qwen4ExpQSAIndexer.__call__
+    for cache_type in (QSAKVCache, QSAQuantizedKVCache):
+        cache_type.update_indexer = _reserve_index_update(cache_type.update_indexer)
     Qwen4ExpQSAIndexer.__call__ = _indexer_call
     Qwen4ExpAttention.__call__ = _chunked_call
     Qwen4ExpAttention._flashnext_chunked_qsa = True

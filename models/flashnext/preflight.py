@@ -251,6 +251,11 @@ def _check_config(report: Report, config: dict | None, profile: dict | None) -> 
     else:
         report.add("layer types", FAIL, "config text_config has no layer_types")
         layer_types = []
+    report.add("context metadata", INFO, "values declared by text_config",
+               max_position_embeddings=text.get("max_position_embeddings"),
+               rope_parameters=text.get("rope_parameters"), rope_scaling=text.get("rope_scaling"),
+               layer_order=layer_types, ngram_vocab_size_base=text.get("ngram_vocab_size_base"),
+               ngram_parts=text.get("split_ngram_parts"))
     if profile and isinstance(quant, dict):
         per_expert = expert_record_bytes(text.get("hidden_size", 0), text.get("moe_intermediate_size", 0),
                                          quant.get("bits", 0), quant.get("group_size", 0))
@@ -291,6 +296,13 @@ def _check_index(report: Report, root: Path, index: dict | None, layer_types: li
                f"unsafe names {insane[:3]}" if insane else f"{len(shards)} shards, plain file names")
     report.add("tensor index", PASS, f"{len(weight_map):,} tensors in {len(shards)} shards",
                tensors=len(weight_map), shards=len(shards))
+    ngram_names = [name for name in weight_map if ".ngram_embedding." in name]
+    ngram_shards = {name.split(".ngram_embedding.", 1)[1].split(".", 1)[0]
+                    for name in ngram_names if ".ngram_embedding.shard_" in name}
+    report.add("optional tensor inventory", INFO,
+               f"{len(ngram_names)} n-gram tensors, {len(ngram_shards)} n-gram table shards",
+               ngram_tensors=len(ngram_names), ngram_shards=len(ngram_shards),
+               vision_tensors=sum(name.startswith("vision_tower.") for name in weight_map))
     if profile and layer_types:
         families = expected_families(layer_types)
         wanted_all = tensor_names(families)
@@ -459,6 +471,9 @@ def _check_headers(report: Report, root: Path, index_info: dict, text: dict, qua
     expected_total = index_info.get("total_size")
     report.add("tensor bytes", PASS if expected_total in (None, total) else FAIL,
                f"{total:,} bytes; index total_size {expected_total:,}" if expected_total else f"{total:,} bytes")
+    ngram_bytes = sum(e["data_offsets"][1] - e["data_offsets"][0]
+                      for name, (_, e) in found.items() if ".ngram_embedding." in name)
+    report.add("n-gram table size", INFO, f"{ngram_bytes:,} bytes on disk", ngram_bytes=ngram_bytes)
     bits, group = quant.get("bits", 4), quant.get("group_size", 32)
     bad, checked = [], 0
     for name, (_, entry) in found.items():

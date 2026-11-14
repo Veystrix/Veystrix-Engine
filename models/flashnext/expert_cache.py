@@ -1780,7 +1780,7 @@ class StreamingSwitchGLU(nn.Module):
                 began = time.perf_counter()
                 mx.eval(flat)
                 _TIMERS["router_sync"] += time.perf_counter() - began
-            else:
+            elif _PREFILL_PROGRESS is not None and os.environ.get("FLASHNEXT_PREFILL_TRACE_LAYERS") == "1":
                 mx.eval(flat)
             _prefill_trace("prefill_router_eval_end", layer=self.layer_id)
             with hostwindow.window("route_tolist"):

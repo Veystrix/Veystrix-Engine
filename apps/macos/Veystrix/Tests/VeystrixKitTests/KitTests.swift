@@ -218,7 +218,7 @@ private func tempDir() -> URL {
             source: .developer(repoRoot: URL(fileURLWithPath: "/r")), apiKey: nil,
             fileExists: exists, isExecutable: exists)
         #expect(plan.arguments.contains("--flashnext-speed"))
-        #expect(plan.environment["VEYSTRIX_NEMOTRON_CONTEXT"] == "1048576")
+        #expect(plan.environment["VEYSTRIX_NEMOTRON_CONTEXT"] == "1048576" && plan.environment["VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT"] == "1")
     }
 
     @Test func customCacheDirectoryIsPassedAsPrefixDir() throws {

@@ -1075,6 +1075,11 @@ class ModelService:
         self.last_divergence = None         # why the last request could not reuse the live tape (see _adopt)
         self.last_budget = None             # context_budget.Budget (as dict) of the last request that reached the model
         self.sessions = SessionRegistry()
+        self.fragments = None
+        if os.environ.get("VEYSTRIX_FRAGMENT_CACHE") == "1":
+            from veystrix.fragment_cache import open_for_backend
+
+            self.fragments = open_for_backend(session.backend)
         self.reasoning_ledger = ReasoningLedger()
         self.session_hint = None            # set by the HTTP layer for the request being served
         self._activity_lock = threading.Lock()
@@ -1209,6 +1214,8 @@ class ModelService:
             "last_divergence": self.last_divergence,
             "last_prefix": prefix_dict,
             "memory_controller": _memory_ledger(),
+            "fragment_cache": (self.fragments.stats()
+                               if getattr(self, "fragments", None) is not None else None),
         }
 
     def cache_state(self) -> dict:
@@ -1327,6 +1334,21 @@ class ModelService:
         self._adopt(rendered, ids=ids, effort_text=effort_text)
         return True
 
+    def _encode_prompt(self, rendered: str, encode):
+        """Encode through the fragment cache when enabled; a miss or error falls back to the tokenizer."""
+        cache = getattr(self, "fragments", None)
+        if cache is None:
+            return encode(rendered)
+        cached = cache.get(rendered)
+        if cached is not None:
+            return cached
+        ids = encode(rendered)
+        try:
+            cache.put(rendered, ids)
+        except Exception:                      # telemetry must not fail a request
+            pass
+        return ids
+
     def _with_effort_turn(self, ids, effort_text: str):
         """Insert the effort turn right after the system message's ``<|im_end|>\\n`` (see veystrix/effort_slot.py)."""
         if not effort_text:
@@ -1363,7 +1385,7 @@ class ModelService:
             self.rebuilt += 1
             return False
         if ids is None:
-            ids = encode(rendered)
+            ids = self._encode_prompt(rendered, encode)
         if effort_slot.placement() == "late":
             ids = self._with_effort_turn(ids, effort_text)
         self._check_context(len(ids))

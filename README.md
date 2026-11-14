@@ -168,12 +168,17 @@ Settings and the `quota` command update the stored quota live. Cache
 administration leaves model files and named sessions outside its scope.
 
 Nemotron defaults to a **1,048,576-token logical context window** with
-block-backed affine INT8 attention KV and FP32 Mamba SSM state. Each
-request can prefill up to **65,536 uncached tokens**. Longer conversations
-accumulate context across requests. The engine admits the configured
-window only when memory and swap checks pass. Set a smaller window in
-macOS Settings, with `--context-limit` on a direct Nemotron CLI launch,
-or with `VEYSTRIX_NEMOTRON_CONTEXT` on a supervised launch. See the
+block-backed affine INT8 attention KV and FP32 Mamba SSM state. The installed
+checkpoint declares 262,144 positions and carries no RoPE scaling metadata, so
+positions past 262,144 are numerically unvalidated; the engine still plans and
+advertises the 1M window by default. Set
+`VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=0` for the strict gate that refuses
+positions past the declared window. Each request can prefill up to **65,536
+uncached tokens**. Longer conversations accumulate context across requests.
+The engine admits the configured window only when memory and swap checks pass.
+Set a smaller window in macOS Settings, with `--context-limit` on a direct
+Nemotron CLI launch, or with `VEYSTRIX_NEMOTRON_CONTEXT` on a supervised
+launch. See the
 [validation results](docs/architecture/unified-cache-nemotron-1m-results.md).
 
 Qwen's experimental throughput profile combines 4K hybrid layer-major

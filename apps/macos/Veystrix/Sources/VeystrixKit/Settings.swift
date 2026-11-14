@@ -71,6 +71,8 @@ public enum NemotronKVCache: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var id: String { rawValue }
     public var title: String { self == .int8 ? "INT8" : "BF16" }
+    /// INT8 KV admits the 1M logical window; the checkpoint declares 262,144
+    /// positions, so anything past that is unvalidated (LCT-05).
     public var contextLimit: Int { self == .int8 ? 1_048_576 : 262_144 }
 }
 
@@ -189,6 +191,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let oldQuota = try c.decodeIfPresent(Int.self, forKey: .cacheQuotaGB)
         if let oldQuota, s.schemaVersion >= 2 || oldQuota != 50 { s.cacheQuotaGB = oldQuota }
         s.nemotronContextTokens = try c.decodeIfPresent(Int.self, forKey: .nemotronContextTokens) ?? s.nemotronContextTokens
+        s.nemotronContextTokens = min(max(1, s.nemotronContextTokens), s.nemotronKVCache.contextLimit)
         s.cacheDirectory = try c.decodeIfPresent(String.self, forKey: .cacheDirectory) ?? s.cacheDirectory
         s.confirmBeforeLoading = try c.decodeIfPresent(Bool.self, forKey: .confirmBeforeLoading) ?? s.confirmBeforeLoading
         s.requireAPIKey = try c.decodeIfPresent(Bool.self, forKey: .requireAPIKey) ?? s.requireAPIKey

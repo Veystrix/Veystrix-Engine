@@ -6,8 +6,8 @@ the stage a request reached survives the process (including an ``os._exit`` by t
 
 * The file is private (0600) in a private directory (0700): ``~/.flashnext/logs/server-<pid>.jsonl`` by default,
   ``FLASHNEXT_FLIGHT_LOG`` overrides the path, ``FLASHNEXT_FLIGHT_LOG=0`` turns it off.
-* It never stores prompt or completion text. Request records carry sizes, hashes of nothing, stage names, counters,
-  timings and the cache outcome.
+* It never stores prompt or completion text. Request records carry sizes, stage names, counters, timings,
+  the cache outcome, and opt-in benchmark fingerprints.
 * One writer lock, bounded size (rotates to ``.1`` at ``FLASHNEXT_FLIGHT_LOG_MAX_MB``, default 64), and every write is
   best effort: a failing disk must never fail a request.
 """

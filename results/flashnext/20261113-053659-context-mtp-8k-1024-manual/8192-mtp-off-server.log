@@ -1,0 +1,2 @@
+warning: unlimited-generation does not include known origin/main; fetch and merge origin/main before validating chat behavior
+veystrix: max cold prefill 32768 exceeds the context limit 16384

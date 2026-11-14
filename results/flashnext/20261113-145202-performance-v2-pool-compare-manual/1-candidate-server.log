@@ -1,0 +1,2 @@
+warning: unlimited-generation does not include known origin/main; fetch and merge origin/main before validating chat behavior
+veystrix: pool size 6 GB is above the 2 GB cap; a larger pool needs a validated memory budget (the recorded 6 GB arms ran near the 3 GiB guard line)

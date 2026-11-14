@@ -48,14 +48,19 @@ def _read_tensor(directory: Path, desc: dict):
 def _stub_switch_mlp(factory):
     """Make mlx-lm construct streamed experts instead of 128 resident ones."""
     from .attention import StreamedAttention
+    from . import mamba_scan
     original, attention = nemotron_h.SwitchMLP, nemotron_h.NemotronHAttention
+    mamba = nemotron_h.NemotronHMamba2Mixer
     nemotron_h.SwitchMLP = factory
     nemotron_h.NemotronHAttention = StreamedAttention
+    if mamba_scan.enabled():
+        nemotron_h.NemotronHMamba2Mixer = mamba_scan.ParallelMambaMixer
     try:
         yield
     finally:
         nemotron_h.SwitchMLP = original
         nemotron_h.NemotronHAttention = attention
+        nemotron_h.NemotronHMamba2Mixer = mamba
 
 
 class StreamedModel:
@@ -103,9 +108,19 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
     model.load_weights(list(dense.items()), strict=True)
     mx.eval(model.parameters())
     if prefetch:   # each MoE layer predicts the next one's experts from its own input (exactness is unaffected)
-        for here, there in zip(moe_layers, moe_layers[1:]):
+        for position, here in enumerate(moe_layers[:-1]):
+            there = moe_layers[position + 1]
             gate = model.backbone.layers[there].mixer.gate
-            model.backbone.layers[here].mixer.switch_mlp.next_gate = NextGate(
-                there, gate.weight, gate.e_score_correction_bias, config['num_experts_per_tok'])
+            switch = model.backbone.layers[here].mixer.switch_mlp
+            switch.next_gate = NextGate(there, gate.weight, gate.e_score_correction_bias,
+                                        config['num_experts_per_tok'])
+            # MOE-04/05: the layer after next is prefetched from the previous pass's routes when opted in.
+            switch.lookahead_layer = (moe_layers[position + 2]
+                                      if position + 2 < len(moe_layers) else None)
+    pack_path = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_PACK")
+    if pack_path:
+        from models.shared.expert_pack import ExpertPack
+
+        reader.pack = ExpertPack(Path(pack_path).expanduser(), root, index, "nemotron35")
     dense_bytes = sum(v.nbytes for v in dense.values())
     return StreamedModel(model, pool, reader, config, dense_bytes)

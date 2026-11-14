@@ -11,7 +11,7 @@ Speed (measured on this machine: one reader thread 2.8 GB/s, four threads 8.3 GB
   its experts, and those slices are read in the background into a bounded host staging area. A wrong prediction only
   wastes bandwidth: the real router decides which experts are computed, so results are unchanged;
 * decode needs a single GPU sync per layer (no per-expert evaluation), and results are assembled with one gather;
-* the resident pool is a byte-bounded LRU of ready-to-use arrays shared by all layers.
+* the resident pool is a byte-bounded cache of ready-to-use arrays shared by all layers.
 
 Residency is bounded by the pool plus the staging area plus the experts of the layer in flight; activations and the
 MLX allocator cache are budgeted by the admission module.
@@ -29,12 +29,19 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from models.shared.edf_io import DeadlineExecutor
+from models.shared.least_stale import LeastStale
+from models.shared.route_history import RouteHistory
+
 from .runtime import Cancelled
 
 _NP = {'U32': np.uint32, 'F32': np.float32, 'F16': np.float16, 'BF16': np.uint16}
 _PARTS = ('weight', 'scales', 'biases')
 _STACK_NAMES = ('fc1.weight', 'fc1.scales', 'fc1.biases', 'fc2.weight', 'fc2.scales', 'fc2.biases')
 PREDICT_EXTRA = int(os.environ.get('VEYSTRIX_NEMOTRON_PREDICT_EXTRA', '4'))   # predicted beyond top-k (spare bandwidth)
+EDF_FLAG = 'VEYSTRIX_NEMOTRON_EDF_IO'
+LOOKAHEAD_FLAG = 'VEYSTRIX_NEMOTRON_LOOKAHEAD_LAYERS'
+LOOKAHEAD_DEPTH = int(os.environ.get('VEYSTRIX_NEMOTRON_LOOKAHEAD_DEPTH', '12'))
 # Opt-in: the stock gather_qmm kernel over the stacked selected experts. Bit-identical to the stock mlx-lm layer on the
 # synthetic checkpoints, but measured slower on the real model (stacking copies ~34 MB per layer): 4.4/5.6 vs 6.5 tok/s.
 GATHER = os.environ.get('VEYSTRIX_NEMOTRON_GATHER', '0') == '1'
@@ -60,6 +67,10 @@ class StackedExpertReader:
         self.bytes_read = 0
         self.reads = 0
         self.read_seconds = 0.0
+        self.pack = None
+        self.packed_reads = 0
+        self.pack_dlpack = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_PACK_DLPACK") == "1"
+        self.layers = list(layers)
         self._slices: dict[int, list] = {}
         for layer in layers:
             base = f'backbone.layers.{layer}.mixer.switch_mlp'
@@ -81,6 +92,8 @@ class StackedExpertReader:
         self.expert_bytes = sum(e[3] for e in next(iter(self._slices.values()))) if self._slices else 0
 
     def close(self) -> None:
+        if self.pack is not None:
+            self.pack.close()
         with self._lock:
             for fd in self._fds.values():
                 try:
@@ -103,14 +116,17 @@ class StackedExpertReader:
         if layer not in self._slices or type(expert) is not int or not 0 <= expert < self.expert_count:
             raise ExpertReadError('invalid layer or expert id')
         began = time.perf_counter()
-        out, total = {}, 0
-        for desc in self._slices[layer]:
-            name, array = self._pread_slice(desc, expert)
-            total += array.nbytes
-            out[name] = array
+        packed = self.pack is not None and layer in self.pack.layers
+        if packed:
+            out = {name: np.empty(shape, dtype=_NP[dtype])
+                   for name, _, _, _, dtype, shape in self._slices[layer]}
+            self.pack.read_into(layer, expert, [memoryview(array).cast("B") for array in out.values()])
+        else:
+            out = dict(self._pread_slice(desc, expert) for desc in self._slices[layer])
         with self._lock:
-            self.bytes_read += total
+            self.bytes_read += sum(array.nbytes for array in out.values())
             self.reads += 1
+            self.packed_reads += int(packed)
             self.read_seconds += time.perf_counter() - began
         return out
 
@@ -142,10 +158,22 @@ class StackedExpertReader:
             self.read_seconds += time.perf_counter() - began
         return values
 
-    def submit_expert(self, executor, layer: int, expert: int) -> cf.Future:
-        """Queue both projections independently, batching each weight and its small metadata."""
+    def submit_expert(self, executor, layer: int, expert: int, *, deadline: int | None = None,
+                      demand: bool = True) -> cf.Future:
+        """Queue both projections independently, batching each weight and its small metadata.
+
+        ``deadline`` is only meaningful for a deadline-ordered executor; the stock thread pool ignores it.
+        """
         if layer not in self._slices or type(expert) is not int or not 0 <= expert < self.expert_count:
             raise ExpertReadError('invalid layer or expert id')
+
+        def submit(function, *arguments):
+            if deadline is None:
+                return executor.submit(function, *arguments)
+            return executor.submit(function, *arguments, deadline=deadline, demand=demand)
+
+        if self.pack is not None and layer in self.pack.layers:
+            return submit(self._read_packed, layer, expert)
         parent = cf.Future()
         parent.set_running_or_notify_cancel()
         descriptors = self._slices[layer]
@@ -170,7 +198,7 @@ class StackedExpertReader:
 
         for projection in projections:
             try:
-                executor.submit(self._read_projection, projection, expert).add_done_callback(done)
+                submit(self._read_projection, projection, expert).add_done_callback(done)
             except RuntimeError as error:        # executor shut down
                 errors.append(error)
                 with gate:
@@ -179,6 +207,14 @@ class StackedExpertReader:
                 if last:
                     parent.set_exception(errors[0])
         return parent
+
+    def _read_packed(self, layer, expert):
+        host = self.read_host(layer, expert)
+        if self.pack_dlpack:
+            # DLPack transfers ownership of each new host allocation to MLX.
+            # The reader never reuses those buffers for another expert.
+            return {name: mx.from_dlpack(array, copy=False) for name, array in host.items()}
+        return {name: mx.array(array) for name, array in host.items()}
 
     def read(self, layer: int, expert: int) -> dict:
         return to_mlx(self.read_host(layer, expert), self._slices[layer])
@@ -194,21 +230,35 @@ def to_mlx(host: dict, entries=None) -> dict:
 
 
 class ExpertPool:
-    """Resident LRU + parallel reads + staged prefetch, shared by every MoE layer."""
+    """Resident expert cache, parallel reads, and staged prefetch across MoE layers."""
 
     def __init__(self, reader: StackedExpertReader, budget_bytes: int, *, workers: int = 8,
                  prefetch_workers: int = 6, staged_bytes: int = 384 * 2**20):
         if type(budget_bytes) is not int or budget_bytes < 0:
             raise ValueError('invalid expert pool budget')
+        policy = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_POOL_POLICY", "lru").strip().lower() or "lru"
+        if policy not in ("lru", "least-stale"):
+            raise ValueError("VEYSTRIX_NEMOTRON_EXPERT_POOL_POLICY must be 'lru' or 'least-stale'")
+        self.policy = policy
+        self.score_order = os.environ.get("VEYSTRIX_NEMOTRON_PREFETCH_SCORE_ORDER") == "1"
         self.reader, self.budget = reader, budget_bytes
+        self._least_stale = LeastStale() if policy == "least-stale" else None
         self.staged_budget = staged_bytes
         self._items: OrderedDict = OrderedDict()      # (layer, expert) -> (mx arrays, size)   main thread only
         self._staged: OrderedDict = OrderedDict()     # (layer, expert) -> (mx arrays, size)   guarded by _lock
         self._inflight: dict = {}                     # (layer, expert) -> Future (prefetch)  guarded by _lock
         self._staged_total = 0
         self._lock = threading.Lock()
-        self._demand = cf.ThreadPoolExecutor(workers, thread_name_prefix='nemotron-read')
-        self._ahead = cf.ThreadPoolExecutor(prefetch_workers, thread_name_prefix='nemotron-ahead')
+        # EXP-I: one deadline-ordered pool instead of separate demand/prefetch pools.
+        self.edf = (DeadlineExecutor(workers + prefetch_workers, 'nemotron-edf')
+                    if os.environ.get(EDF_FLAG) == '1' else None)
+        self._demand = None if self.edf else cf.ThreadPoolExecutor(workers, thread_name_prefix='nemotron-read')
+        self._ahead = None if self.edf else cf.ThreadPoolExecutor(prefetch_workers, thread_name_prefix='nemotron-ahead')
+        # MOE-04/05: previous-pass routes predict the layer after next.
+        self.history = (RouteHistory(getattr(reader, 'layers', ()), reader.expert_count)
+                        if os.environ.get(LOOKAHEAD_FLAG) == '1' else None)
+        self._history_keys: set = set()
+        self.history_issued = self.history_used = 0
         self.resident_bytes = 0
         self.hits = self.misses = 0
         self.prefetch_issued = self.prefetch_used = self.prefetch_wasted = 0
@@ -219,6 +269,7 @@ class ExpertPool:
         self._held_layer = None
         self._held_routes = None
         self.seeded_bytes = 0
+        self.decode_profile = None
 
     # -- layer scope (layer-major prefill) ---------------------------------------------------------------------
     def begin_layer(self, layer: int, *, seed=False) -> None:
@@ -237,6 +288,8 @@ class ExpertPool:
                 size = sum(array.nbytes for array in arrays.values())
                 if self.resident_bytes + size <= self.budget:
                     self._items[key] = (arrays, size)
+                    if self._least_stale is not None:
+                        self._least_stale.touch(key, seeded=True)
                     self.resident_bytes += size
                     self.seeded_bytes += size
                 break
@@ -255,9 +308,10 @@ class ExpertPool:
         return self.prefetch(layer, range(self.reader.expert_count))
 
     # -- prefetch ----------------------------------------------------------------------------------------------
-    def prefetch(self, layer: int, experts) -> int:
+    def prefetch(self, layer: int, experts, *, history: bool = False) -> int:
         """Start background reads for experts not already resident, staged or in flight. Never blocks."""
         issued = 0
+        executor = self.edf or self._ahead
         for expert in experts:
             key = (layer, int(expert))
             with self._lock:
@@ -265,24 +319,43 @@ class ExpertPool:
                     continue
                 if self._staged_total + len(self._inflight) * self.reader.expert_bytes >= self.staged_budget:
                     break
-                future = self.reader.submit_expert(self._ahead, key[0], key[1])
+                options = {'deadline': key[0], 'demand': False} if self.edf else {}
+                future = self.reader.submit_expert(executor, key[0], key[1], **options)
                 self._inflight[key] = future
+                if history:
+                    self._history_keys.add(key)
             future.add_done_callback(lambda f, key=key: self._landed(key, f))
             issued += 1
         self.prefetch_issued += issued
+        if history:
+            self.history_issued += issued
         return issued
+
+    def observe_routes(self, layer: int, ids) -> None:
+        if self.history is not None:
+            self.history.observe(layer, ids)
+
+    def prefetch_history(self, layer: int, depth: int | None = None) -> int:
+        """Speculatively stage the previous pass's most frequent experts for a deeper layer."""
+        if self.history is None or layer is None:
+            return 0
+        return self.prefetch(layer, self.history.predict(layer, LOOKAHEAD_DEPTH if depth is None else depth),
+                             history=True)
 
     def _landed(self, key, future) -> None:
         try:
             host = future.result()
         except BaseException:
             with self._lock:
-                self._inflight.pop(key, None)
+                if self._inflight.get(key) is future:
+                    del self._inflight[key]
+                self._history_keys.discard(key)
             return
         size = sum(a.nbytes for a in host.values())
         with self._lock:
-            if self._inflight.pop(key, None) is None:      # consumed by a demand fetch while reading
+            if self._inflight.get(key) is not future:    # consumed by a demand fetch while reading
                 return
+            del self._inflight[key]
             self._staged[key] = (host, size)
             self._staged_total += size
             while self._staged_total > self.staged_budget and self._staged:
@@ -295,8 +368,17 @@ class ExpertPool:
         """Arrays for every requested expert; missing ones are read in parallel. Returns {expert: arrays}."""
         if self.cancel_check():
             raise Cancelled()
+        if self.edf is not None:
+            # The active layer is now the earliest deadline; drop prefetches for earlier layers.
+            self.edf.cancel_stale(layer)
         out, waiting, direct = {}, {}, {}
         held = self._held if self._held_layer == layer else None
+        least_stale = self._least_stale if held is None else None
+        protected = ()
+        if least_stale is not None:
+            experts = tuple(dict.fromkeys(map(int, experts)))
+            protected = {(layer, expert) for expert in experts}
+            least_stale.advance(layer)
         for expert in experts:
             expert = int(expert)
             key = (layer, expert)
@@ -306,7 +388,10 @@ class ExpertPool:
                 continue
             if key in self._items:
                 self.hits += 1
-                self._items.move_to_end(key)
+                if least_stale is not None:
+                    least_stale.touch(key)
+                else:
+                    self._items.move_to_end(key)
                 out[expert] = self._items[key][0]
                 continue
             with self._lock:
@@ -318,12 +403,17 @@ class ExpertPool:
                     del self._inflight[key]                  # we take ownership of the result
             if staged is not None:
                 self.prefetch_used += 1
-                out[expert] = self._admit(key, staged[0])
+                if key in self._history_keys:
+                    self._history_keys.discard(key)
+                    self.history_used += 1
+                out[expert] = self._admit(key, staged[0], protected)
                 self.hits += 1
             elif future is not None:
                 waiting[expert] = future
             else:
-                direct[expert] = self.reader.submit_expert(self._demand, layer, expert)
+                executor = self.edf or self._demand
+                options = {'deadline': layer, 'demand': True} if self.edf else {}
+                direct[expert] = self.reader.submit_expert(executor, layer, expert, **options)
         if after_submit is not None:
             after_submit()
         if compute_resident is not None and out and (waiting or direct):
@@ -332,10 +422,14 @@ class ExpertPool:
         for expert, future in waiting.items():
             self.prefetch_used += 1
             self.hits += 1
-            out[expert] = self._admit((layer, expert), self._result(future))
+            key = (layer, expert)
+            if key in self._history_keys:
+                self._history_keys.discard(key)
+                self.history_used += 1
+            out[expert] = self._admit(key, self._result(future), protected)
         for expert, future in direct.items():
             self.misses += 1
-            out[expert] = self._admit((layer, expert), self._result(future))
+            out[expert] = self._admit((layer, expert), self._result(future), protected)
         self.wait_seconds += time.perf_counter() - began
         return out
 
@@ -347,17 +441,27 @@ class ExpertPool:
                 if self.cancel_check():
                     raise Cancelled()
 
-    def _admit(self, key, arrays):
+    def _admit(self, key, arrays, protected=()):
         arrays = {n: (a.view(mx.bfloat16) if a.dtype == mx.uint16 else a) for n, a in arrays.items()}
         size = sum(a.nbytes for a in arrays.values())
         if self._held is not None and key[0] == self._held_layer:
             self._held[key[1]] = arrays
             return arrays
         if size <= self.budget:
+            least_stale = self._least_stale
             while self._items and self.resident_bytes + size > self.budget:
-                _, (_, old) = self._items.popitem(last=False)
+                if least_stale is None:
+                    _, (_, old) = self._items.popitem(last=False)
+                else:
+                    victim = least_stale.victim(protected)
+                    if victim is None:
+                        return arrays
+                    _, old = self._items.pop(victim)
+                    least_stale.discard(victim)
                 self.resident_bytes -= old
             self._items[key] = (arrays, size)
+            if least_stale is not None:
+                least_stale.touch(key)
             self.resident_bytes += size
         return arrays
 
@@ -368,6 +472,8 @@ class ExpertPool:
 
     def clear(self, *, staged: bool = True) -> None:
         self._items.clear()
+        if self._least_stale is not None:
+            self._least_stale = LeastStale()
         self.resident_bytes = 0
         if staged:
             with self._lock:
@@ -375,16 +481,27 @@ class ExpertPool:
                 self._staged_total = 0
 
     def close(self) -> None:
-        self._ahead.shutdown(wait=False, cancel_futures=True)
-        self._demand.shutdown(wait=False, cancel_futures=True)
+        # The queues share the reader. Its descriptors can be closed only
+        # after all submitted reads have stopped using them.
+        for pool in (self._ahead, self._demand):
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+        if self.edf is not None:
+            self.edf.shutdown(wait=True, cancel_futures=True)
 
     def stats(self) -> dict:
-        return {'hits': self.hits, 'misses': self.misses, 'resident_bytes': self.resident_bytes,
-                'budget_bytes': self.budget, 'bytes_read': self.reader.bytes_read,
-                'prefetch_issued': self.prefetch_issued, 'prefetch_used': self.prefetch_used,
-                'prefetch_wasted': self.prefetch_wasted, 'staged_bytes': self._staged_total,
-                'wait_seconds': round(self.wait_seconds, 4), 'read_seconds': round(self.reader.read_seconds, 4),
-                'held_bytes': self.held_bytes(), 'seeded_bytes': self.seeded_bytes}
+        stats = {'hits': self.hits, 'misses': self.misses, 'resident_bytes': self.resident_bytes,
+                 'budget_bytes': self.budget, 'bytes_read': self.reader.bytes_read,
+                 'prefetch_issued': self.prefetch_issued, 'prefetch_used': self.prefetch_used,
+                 'prefetch_wasted': self.prefetch_wasted, 'staged_bytes': self._staged_total,
+                 'wait_seconds': round(self.wait_seconds, 4), 'read_seconds': round(self.reader.read_seconds, 4),
+                 'held_bytes': self.held_bytes(), 'seeded_bytes': self.seeded_bytes}
+        if self.edf is not None:
+            stats['edf'] = self.edf.stats()
+        if self.history is not None:
+            stats['lookahead'] = {'layers': len(self.history.counts), 'issued': self.history_issued,
+                                  'used': self.history_used, 'passes': self.history.passes}
+        return stats
 
 
 class NextGate:
@@ -401,6 +518,7 @@ class StreamedSwitchMLP(nn.Module):
         super().__init__()
         self.pool, self.layer, self.group_size, self.eval_every = pool, layer, group_size, eval_every
         self.next_gate = None
+        self.lookahead_layer = None      # the MoE layer after next, prefetched from route history
         self._fma = None
 
     def _prefetch_next(self, flat, rows_n):
@@ -410,12 +528,17 @@ class StreamedSwitchMLP(nn.Module):
         scores = mx.sigmoid((flat @ nxt.weight.T).astype(mx.float32)) + nxt.bias
         k = min(nxt.top_k + PREDICT_EXTRA, scores.shape[-1])
         picks = mx.argpartition(-scores, kth=k - 1, axis=-1)[..., :k]
+        if rows_n == 1 and self.pool.score_order:
+            selected = mx.take_along_axis(scores, picks, axis=-1)
+            picks = mx.take_along_axis(picks, mx.argsort(-selected, axis=-1), axis=-1)
         ids = np.asarray(picks).reshape(-1)
         if rows_n > 1:
             counts = np.bincount(ids, minlength=scores.shape[-1])
             ids = np.argsort(-counts)[:PREFILL_PREDICT_CAP]
             ids = ids[counts[ids] > 0]
         self.pool.prefetch(nxt.layer, [int(e) for e in ids])
+        # MOE-04/05: two layers out, a router projection is no longer cheap, so use the last pass's routes.
+        self.pool.prefetch_history(self.lookahead_layer)
 
     def _gather(self, flat, ids, unique, arrays, lead, dtype):
         """The stock mlx-lm ``SwitchMLP`` computation (``gather_qmm``) over just the selected experts: they are stacked
@@ -457,7 +580,16 @@ class StreamedSwitchMLP(nn.Module):
         lead = x.shape[:-1]
         hidden = x.shape[-1]
         flat = x.reshape(-1, hidden)
+        profile = self.pool.decode_profile
+        if profile is not None and self.pool._held_layer == self.layer:
+            # Speculative verification walks layers before tokens. Those
+            # calls cannot be grouped with token-major decode events.
+            profile.verifier_layer_calls += 1
+            profile = None
+        started = time.perf_counter() if profile is not None else 0
         ids = np.asarray(indices).reshape(flat.shape[0], -1)
+        self.pool.observe_routes(self.layer, ids)
+        routed_at = time.perf_counter() if profile is not None else 0
         if self.pool._held_routes is not None and self.pool._held_layer == self.layer:
             self.pool._held_routes.update(ids.flat)
         rows_n, k = ids.shape
@@ -475,11 +607,15 @@ class StreamedSwitchMLP(nn.Module):
             arrays = self.pool.fetch(
                 self.layer, unique.tolist(), after_submit=lambda: self._prefetch_next(flat, rows_n), **options,
             )
+            if profile is not None:
+                profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())
             outputs = [partial[expert] if expert in partial else self._expert(flat, arrays[expert])
                        for expert in map(int, ids[0])]
             return mx.stack(outputs, axis=-2).reshape(*lead, k, hidden).astype(x.dtype)
         self._prefetch_next(flat, rows_n)
         arrays = self.pool.fetch(self.layer, unique.tolist())
+        if profile is not None:
+            profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())
         if GATHER and len(unique) <= GATHER_MAX_EXPERTS:
             return self._gather(flat, ids, unique, arrays, lead, x.dtype)
         ys, positions, batch = [], [], []

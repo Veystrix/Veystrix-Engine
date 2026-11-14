@@ -1,5 +1,6 @@
 """Prefetch, parallel reads, auto pool and the persistent prefix cache, on tiny synthetic checkpoints."""
 import shutil
+import json
 import os
 import tempfile
 import unittest
@@ -48,6 +49,107 @@ class PrefetchTests(unittest.TestCase):
     def load(self, **kw):
         return load_streamed(Path(_dir) / "ck", pool_bytes=kw.pop("pool_bytes", 64 * 1024),
                              config_check=permissive_config_check, **kw)
+
+    def test_least_stale_matches_lru_logits_during_eviction(self):
+        from models.nemotron35.backend_core import EngineCore
+
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_POOL_POLICY": "lru"}):
+            baseline = self.load(pool_bytes=0, prefetch=False)
+        self.addCleanup(baseline.close)
+        budget = 4 * baseline.reader.expert_bytes
+        baseline.pool.budget = budget
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_POOL_POLICY": "least-stale"}):
+            candidate = self.load(pool_bytes=budget, prefetch=False)
+        self.addCleanup(candidate.close)
+        reference, trial = (EngineCore(model, chunk_tokens=4) for model in (baseline, candidate))
+        self.assertTrue(mx.array_equal(reference.prefill([1, 2, 3, 4]), trial.prefill([1, 2, 3, 4])).item())
+        for token in (1, 9, 11, 7, 3, 12, 1, 8):
+            self.assertTrue(mx.array_equal(reference.decode(token), trial.decode(token)).item())
+            self.assertLessEqual(candidate.pool.resident_bytes, budget)
+        self.assertGreater(candidate.pool.misses, 4)
+
+    def test_decode_profile_records_only_decode_expert_calls(self):
+        import gc
+        from models.nemotron35.decode_profile import FLAG
+        from veystrix.sampling import Sampling
+
+        backend = make(layer_major_tokens=0, prefix_cache=False)
+        self.addCleanup(backend.close)
+        backend.sampling = Sampling.greedy_settings()
+        backend.stops = set()
+        backend.append_tokens([1, 4, 7, 5])
+        was_enabled = gc.isenabled()
+        decode_gc_states = []
+        with tempfile.TemporaryDirectory() as directory:
+            with unittest.mock.patch.dict(os.environ, {FLAG: directory, "VEYSTRIX_DEFER_DECODE_GC": "1"}):
+                backend.generate(3, on_decode_token=lambda *_: decode_gc_states.append(gc.isenabled()))
+            path, = Path(directory).glob("nemotron-decode-*.json")
+            profile = json.loads(path.read_text())
+        self.assertEqual([row["layer_ids"] for row in profile["tokens"]], [[1, 3]] * 3)
+        self.assertEqual(len(profile["layer_calls"]), 6)
+        self.assertEqual(profile["pool_delta"]["hits"] + profile["pool_delta"]["misses"], 18)
+        self.assertIsNone(backend.streamed.pool.decode_profile)
+        self.assertEqual(decode_gc_states, [False] * 3)
+        self.assertEqual(gc.isenabled(), was_enabled)
+
+    def test_prefill_allocator_limit_preserves_logits_and_restores_limit(self):
+        from models.nemotron35.backend_core import EngineCore
+
+        model = self.load(prefetch=False)
+        self.addCleanup(model.close)
+        core = EngineCore(model, chunk_tokens=2)
+        tokens = [1, 4, 7, 5]
+        reference = core.prefill(tokens)
+        core.reset()
+        previous = mx.set_cache_limit(64 * 2**20)
+        self.addCleanup(mx.set_cache_limit, previous)
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB": "16"}):
+            with unittest.mock.patch.object(mx, "set_cache_limit", wraps=mx.set_cache_limit) as limit:
+                actual = core.prefill(tokens)
+            self.assertEqual(limit.call_args_list,
+                             [unittest.mock.call(16 * 2**20), unittest.mock.call(64 * 2**20)])
+        self.assertTrue(mx.array_equal(reference, actual).item())
+
+    def test_aligned_expert_pack_preserves_logits_and_rejects_truncation(self):
+        from models.nemotron35.safetensors_index import index_checkpoint
+        from models.shared.expert_pack import ExpertPack, build
+
+        root = Path(_dir) / "ck"
+        index = index_checkpoint(root)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "experts.pack"
+            size = build(root, index, "nemotron35", path, layers=[1])
+            with self.assertRaises(FileExistsError):
+                build(root, index, "nemotron35", path)
+            baseline = self.load(prefetch=False)
+            self.addCleanup(baseline.close)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_PACK": str(path),
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_PACK_DLPACK": "1"}):
+                candidate = self.load(prefetch=True)
+            try:
+                ids = mx.array([[1, 4, 7, 5]])
+                self.assertTrue(mx.array_equal(baseline.model(ids), candidate.model(ids)).item())
+                self.assertGreater(candidate.reader.packed_reads, 0)
+            finally:
+                candidate.close()
+            with path.open("r+b") as handle:
+                handle.truncate(size - 1)
+            with self.assertRaisesRegex(ValueError, "pack size"):
+                ExpertPack(path, root, index, "nemotron35")
+
+    def test_parallel_mamba_prefill_keeps_fp32_state_and_separates_snapshot_identity(self):
+        baseline = make(prefix_cache=False, chunk_tokens=160, layer_major_tokens=0)
+        self.addCleanup(baseline.close)
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_PARALLEL_MAMBA": "1"}):
+            candidate = make(prefix_cache=False, chunk_tokens=160, layer_major_tokens=0)
+        self.addCleanup(candidate.close)
+        self.assertNotIn("mamba_scan", baseline._session_identity())
+        self.assertIn("mamba_scan", candidate._session_identity())
+        tokens = [1, 4, 7, 5] * 33
+        expected = baseline.core.prefill(tokens)
+        actual = candidate.core.prefill(tokens)
+        self.assertEqual(candidate.core.cache[0][1].dtype, mx.float32)
+        self.assertTrue(mx.allclose(f32(expected), f32(actual), rtol=0.04, atol=0.04).item())
 
     def test_prefill_seed_moves_the_hottest_held_expert_into_decode_pool(self):
         model = self.load(prefetch=False)
@@ -167,6 +269,19 @@ class AutoPoolTests(unittest.TestCase):
 
 
 class PrefixCacheTests(unittest.TestCase):
+    def test_radix_keeps_shorter_and_sibling_branches_after_removal(self):
+        from models.shared.prefix_radix import PrefixRadix
+
+        index = PrefixRadix()
+        index.put(b"abcdef", "long")
+        index.put(b"abc", "short")
+        index.put(b"abcdeg", "sibling")
+        self.assertEqual(list(index.matches(b"abcdefx")), [(3, "short"), (6, "long")])
+        index.remove(b"abcdef")
+        self.assertEqual(list(index.matches(b"abcdefx")), [(3, "short")])
+        index.remove(b"abc")
+        self.assertEqual(list(index.matches(b"abcdegy")), [(6, "sibling")])
+
     PROMPT = list(range(4, 60)) * 2      # 112 tokens, chunk 4 -> several checkpoints at snapshot_tokens=8
 
     def setUp(self):
@@ -601,3 +716,38 @@ class StockKernelTests(unittest.TestCase):
             self.assertLess(float(mx.max(mx.abs(fast - slow))), 0.05)
         finally:
             streamed.close()
+
+
+class ContextQualificationTests(unittest.TestCase):
+    def test_checkpoint_declaration_is_reported_without_claiming_one_million(self):
+        from models.nemotron35 import config as config_module
+
+        installed = config_module.position_qualification(
+            {"max_position_embeddings": 262_144, "rope_theta": 10_000})
+        self.assertEqual(installed["declared_positions"], 262_144)
+        self.assertIsNone(installed["extended_position_metadata"])
+        self.assertFalse(installed["million_token_qualified"])
+        extended = config_module.position_qualification(
+            {"max_position_embeddings": 1_048_576, "rope_scaling": {"type": "yarn", "factor": 4.0}})
+        self.assertTrue(extended["million_token_qualified"])
+
+    def test_positions_past_the_declared_window_are_refused_until_qualified(self):
+        backend = make()
+        self.addCleanup(backend.streamed.close)
+        declared = backend.context_qualification["declared_positions"]
+        self.assertGreater(declared, 0)
+        self.assertFalse(backend.context_qualification["million_token_qualified"])
+        backend._check_position_qualification(declared)
+        # 1M is the default advertised window: the strict gate is off unless
+        # VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=0.
+        self.assertTrue(backend._extended_context_allowed)
+        backend._check_position_qualification(declared + 1)
+        backend._extended_context_allowed = False
+        from models.nemotron35 import admission
+        with self.assertRaises(admission.AdmissionRefused):
+            backend._check_position_qualification(declared + 1)
+        backend._extended_context_allowed = True
+        health = backend.health_snapshot()
+        self.assertFalse(health["million_token_validation"])
+        self.assertTrue(health["extended_context_enabled"])
+        self.assertEqual(health["context_qualification"]["declared_positions"], declared)

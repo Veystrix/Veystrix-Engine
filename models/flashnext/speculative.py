@@ -1039,7 +1039,7 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
         draft_ns = trace.clock() if trace is not None else None
         lookup.append(value)
         drafts = (
-            lookup.propose(min(4, horizon - produced - 1))
+            lookup.propose(min(gate.depth, horizon - produced - 1))
             if gate.allow() and not memory_controller.forbid_optional() else []
         )
         # Stop delimiters never enter the cache or the emitted token tape.
@@ -1083,7 +1083,7 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
                     break
                 committed.append(draft)
                 value = singleton(draft, want_logits=produced + len(committed) < horizon)
-        gate.observe(True, len(committed), time.perf_counter() - began)
+        gate.observe(True, len(committed), time.perf_counter() - began, proposed=len(drafts))
         for current in committed:
             check_cancel()
             produced += 1

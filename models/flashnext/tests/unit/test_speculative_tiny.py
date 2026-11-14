@@ -122,6 +122,24 @@ class SpeculativeTinyTest(unittest.TestCase):
             for token in expected[:8]:
                 mx.eval(self.language(mx.array([[token]], dtype=mx.uint32), cache=reference).logits)
 
+    def test_prompt_lookup_depth_and_acceptance_cooldown(self):
+        from models.shared.prompt_lookup import ThroughputGate
+
+        gate = ThroughputGate()
+        gate.observe(False, 1, 1)
+        for depth in (2, 3):
+            self.assertEqual(gate.depth, depth)
+            gate.observe(True, depth + 1, 1, proposed=depth)
+        self.assertEqual(gate.depth, 4)
+
+        gate = ThroughputGate()
+        gate.observe(False, 1, 1)
+        gate.observe(True, 1, 0.25, proposed=2)
+        self.assertEqual(gate.depth, 1)
+        gate.observe(True, 1, 0.25, proposed=1)
+        self.assertFalse(gate.allow())
+        self.assertEqual(gate.cooldown, 15)
+
     def test_block_and_rollback_match_single_tokens(self):
         values = [5, 9, 13, 17, 21]
         reference_cache = self.prefill()

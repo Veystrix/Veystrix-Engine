@@ -10,6 +10,8 @@ import os
 
 import mlx.core as mx
 
+from models.flashnext.prefill_memory import cache_cap
+
 from .runtime import Cancelled
 from .attention import AttentionCache
 
@@ -162,8 +164,9 @@ class EngineCore:
                 return None
             if verify:
                 # Preserve singleton head arithmetic and avoid a [width, vocab] allocation.
-                predictions = [int(mx.argmax(self.model.lm_head(backbone.norm_f(row)), axis=-1).item())
-                               for row in hidden]
+                picks = [mx.argmax(self.model.lm_head(backbone.norm_f(row)), axis=-1).reshape(-1)
+                         for row in hidden]
+                predictions = mx.concatenate(picks).tolist()
                 return (predictions, hidden) if keep_rows else predictions
             out = backbone.norm_f(hidden[-1][:, -1:, :])
             logits = self.model.lm_head(out)[:, -1, :]
@@ -174,11 +177,15 @@ class EngineCore:
             pool.speculate = True
 
     def prefill(self, tokens, *, cancelled=lambda: False, progress=None, boundary=None, emit_logits=True, anchor=None, save_anchor=None):
-        """Feed ``tokens`` in bounded chunks and return logits for the next token.
+        """Feed tokens in bounded chunks and return next-token logits."""
+        limit = int(os.environ.get("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB") or "0")
+        if limit < 0:
+            raise ValueError("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB must be non-negative")
+        with cache_cap(limit):
+            return self._prefill(tokens, cancelled=cancelled, progress=progress, boundary=boundary,
+                                 emit_logits=emit_logits, anchor=anchor, save_anchor=save_anchor)
 
-        Any interruption leaves recurrent/KV state partially advanced and
-        unusable, so the caller must ``reset`` (this method does it itself).
-        """
+    def _prefill(self, tokens, *, cancelled, progress, boundary, emit_logits, anchor, save_anchor):
         if not tokens:
             raise ValueError('prefill needs tokens')
         self.streamed.pool.cancel_check = cancelled

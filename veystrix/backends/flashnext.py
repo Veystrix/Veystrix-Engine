@@ -1041,11 +1041,13 @@ class FlashNextBackend(Conversation):
                 except memory_manager.MemoryBudgetRefused:
                     self._mark_replay_needed()        # nothing was allocated; the conversation can be retried
                     raise
+            from models.shared.logit_reference import reference_sampler
+
             if decoder is None and fresh_prefix_cache:
                 # Opt-in (FLASHNEXT_PREFIX_CACHE=1): restore the longest stored exact prefix, prefill only
                 # the rest, snapshot at the system-prompt boundary. A fresh conversation only.
                 token, self.cache, self.last_prefix = self._prefix_session().prefill(
-                    self.language, prompt, self.cache, sampler=Sampler(self.sampling)
+                    self.language, prompt, self.cache, sampler=reference_sampler(Sampler(self.sampling))
                 )
             elif decoder is None:
                 if trace is not None:
@@ -1053,7 +1055,7 @@ class FlashNextBackend(Conversation):
                     trace.prefill_tokens = prompt_tokens
                 self.last_prefix = None
                 _, token = prefill_language(
-                    self.language, ids, self.cache, sampler=Sampler(self.sampling)
+                    self.language, ids, self.cache, sampler=reference_sampler(Sampler(self.sampling))
                 )
             else:
                 if trace is not None:
@@ -1187,7 +1189,10 @@ class FlashNextBackend(Conversation):
             )
         else:
             tokens = standard_tokens() if decoder is None else decoder.generate(generation_horizon, self.stops)
+        from models.shared import decode_gc
+
         decode_interrupted = False
+        gc_suspended = decode_gc.suspend()
         try:
             for index, value in enumerate(tokens):
                 check_cancel()
@@ -1243,6 +1248,7 @@ class FlashNextBackend(Conversation):
                 self._mark_replay_needed()
             raise
         finally:
+            decode_gc.restore(gc_suspended)
             tokens.close()
             if decoder is not None:
                 decoder.set_route_observer(None)

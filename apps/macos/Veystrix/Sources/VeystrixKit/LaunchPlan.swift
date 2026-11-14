@@ -99,6 +99,9 @@ public struct LaunchPlan: Equatable, Sendable {
         env["VEYSTRIX_USAGE_LOG"] = UsageStore(paths: paths).requestsFile.path
         env["VEYSTRIX_CACHE_GB"] = String(settings.cacheQuotaGB)
         env["VEYSTRIX_NEMOTRON_CONTEXT"] = String(settings.nemotronContextTokens)
+        // 1M is the default; past the declared 262,144 positions the output is
+        // unvalidated, so the engine's strict LCT-05 gate stays off by default.
+        env["VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT"] = settings.nemotronContextTokens > 262_144 ? "1" : "0"
         env["VEYSTRIX_NEMOTRON_KV"] = settings.nemotronKVCache.rawValue
         for (prefix, options) in [("FLASHNEXT", settings.flashNextPerformance), ("VEYSTRIX_NEMOTRON", settings.nemotronPerformance)] {
             env["\(prefix)_PROMPT_LOOKUP"] = options.decoder == .promptLookup ? "1" : "0"

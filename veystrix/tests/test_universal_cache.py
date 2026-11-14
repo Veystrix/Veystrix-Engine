@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
+from types import SimpleNamespace
 
 from veystrix import universal_cache as U
 
@@ -108,3 +110,52 @@ os.close(fd)
         cache = U.CacheManager(self.directory, reserve_bytes=10**18)
         with cache.transaction() as tx:
             self.assertFalse(tx.make_room(1))
+
+
+class WatermarkAndArtifactTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.cache = U.CacheManager(self.directory, quota_bytes=400, reserve_bytes=0)
+
+    def test_dynamic_quota_clamps_to_free_space_fraction(self):
+        self.assertEqual(U.dynamic_quota_bytes(80 * U.GB, 1_000 * U.GB), 80 * U.GB)
+        self.assertEqual(U.dynamic_quota_bytes(80 * U.GB, 50 * U.GB), int(50 * U.GB * U.WATERMARK_FRACTION))
+        self.assertEqual(U.dynamic_quota_bytes(0, 100), 0)
+        self.assertEqual(U.dynamic_quota_bytes(100, -5), 0)
+
+    def test_make_room_uses_the_clamped_quota(self):
+        with unittest.mock.patch("veystrix.universal_cache.shutil.disk_usage",
+                                 return_value=SimpleNamespace(free=1000, total=2000, used=1000)):
+            with self.cache.transaction() as tx:
+                self.assertEqual(tx.effective_quota, 250)
+                self.assertFalse(tx.make_room(300))
+                self.assertTrue(tx.make_room(200))
+
+    def test_artifact_tier_is_content_addressed_durable_and_verified(self):
+        first = U.ArtifactTier(self.cache)
+        record = first.put(b"def parse():\n    return 1\n", namespace="ast", meta={"path": "a.py"})
+        digest = record["digest"]
+        self.assertEqual(first.get(digest), b"def parse():\n    return 1\n")
+        duplicate = first.put(b"def parse():\n    return 1\n")
+        self.assertEqual(duplicate["digest"], digest)
+        self.assertEqual(first.status()["artifacts"], 1)
+
+        reopened = U.ArtifactTier(U.CacheManager(self.directory, quota_bytes=U.GB, reserve_bytes=0))
+        self.assertEqual(reopened.get(digest), b"def parse():\n    return 1\n")
+        self.assertTrue(reopened.verify(digest)["present"])
+        data_path, _record_path = reopened._paths(digest)
+        data_path.write_bytes(b"tampered")
+        self.assertIsNone(reopened.get(digest))
+        self.assertFalse(reopened.verify(digest)["present"])
+
+    def test_compact_drops_stale_registry_records(self):
+        with self.cache.transaction() as tx:
+            tx.metadata["reuse"] = {"nemotron35/" + "a" * 64 + "/" + "b" * 24: {"hits": 3}}
+            tx.metadata["pins"] = ["flashnext/" + "c" * 64 + "/" + "d" * 64]
+            result = tx.compact()
+        self.assertEqual(result["stale_reuse"], 1)
+        self.assertEqual(result["stale_pins"], 1)
+        self.assertEqual(tx.metadata["reuse"], {})
+        self.assertEqual(tx.metadata["pins"], [])

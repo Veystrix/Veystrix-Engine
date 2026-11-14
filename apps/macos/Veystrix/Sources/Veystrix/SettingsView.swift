@@ -152,7 +152,7 @@ private struct NemotronContextSettings: View {
                 LabeledContent("Attention KV format", value: status.kvFormat)
                 LabeledContent("1M context validation", value: status.millionTokenValidation ? "Passed" : "Pending")
             }
-            Text("\(model.settings.nemotronKVCache.title) supports a configured window up to \(model.settings.nemotronKVCache.contextLimit.formatted()) tokens and up to 65,536 uncached prefill tokens per request. Restart to apply changes.")
+            Text("\(model.settings.nemotronKVCache.title) supports a configured window up to \(model.settings.nemotronKVCache.contextLimit.formatted()) tokens and up to 65,536 uncached prefill tokens per request. Positions past 262,144 are unvalidated: the checkpoint declares 262,144 and carries no RoPE scaling metadata. Restart to apply changes.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

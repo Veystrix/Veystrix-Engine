@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from veystrix.fragment_cache import TokenizedFragmentCache, identity_for_backend
+from veystrix.fragment_cache import TokenizedFragmentCache, identity_for_backend, open_for_backend
 
 
 class _Tokenizer:
@@ -57,6 +57,29 @@ class FragmentCacheTest(unittest.TestCase):
         cache = TokenizedFragmentCache(self.directory, {"runtime": "x"}, max_bytes=4)
         cache.put("too big", [1, 2, 3])
         self.assertIsNone(cache.get("too big"))
+
+    def test_replaced_tokenizer_does_not_reuse_ids(self):
+        checkpoint = self.directory / "model"
+        checkpoint.mkdir()
+        tokenizer = checkpoint / "tokenizer.json"
+        backend = _Backend()
+        backend.model_path = str(checkpoint)
+        tokenizer.write_text('{"vocab":{"alpha":5}}')
+        cache = open_for_backend(backend, self.directory)
+        cache.put("alpha", [5])
+        cache.close()
+        tokenizer.write_text('{"vocab":{"alpha":7}}')
+        cache = open_for_backend(backend, self.directory)
+        self.addCleanup(cache.close)
+        self.assertIsNone(cache.get("alpha"))
+
+    def test_invalid_id_blob_is_a_miss(self):
+        cache = TokenizedFragmentCache(self.directory, {"runtime": "x"})
+        self.addCleanup(cache.close)
+        cache.put("prompt", [5])
+        with cache._db:
+            cache._db.execute("UPDATE fragments SET ids = ?", (b"x",))
+        self.assertIsNone(cache.get("prompt"))
 
 
 if __name__ == "__main__":

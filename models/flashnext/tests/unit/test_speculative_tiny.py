@@ -102,6 +102,45 @@ class SpeculativeTinyTest(unittest.TestCase):
         mx.eval(self.language(prompt, cache=cache).logits)
         return cache
 
+    def test_cooperative_singletons_keep_separate_qsa_and_recurrent_state(self):
+        from veystrix.backends.flashnext import FlashNextBackend
+        from veystrix.sampling import Sampler, Sampling
+
+        def state(prompt):
+            backend = FlashNextBackend.__new__(FlashNextBackend)
+            backend.language = self.language
+            backend.cache = self.language.make_cache()
+            backend._batch_positions = (None, None)
+            sampler = Sampler(Sampling.greedy_settings())
+            with backend.batch_scope():
+                result = backend.batch_prefill(prompt, 0, True, sampler)
+            return backend, result
+
+        prompts = [[3, 7, 11], [4, 12, 10, 13]]
+        expected = []
+        actual = [state(prompt) for prompt in prompts]
+        for prompt in prompts:
+            backend, next_token = state(prompt)
+            outputs = []
+            for _ in range(3):
+                outputs.append(next_token)
+                with backend.batch_scope():
+                    next_token = backend.batch_decode(next_token, Sampler(Sampling.greedy_settings()), True)
+            expected.append((outputs, backend))
+        interleaved = [[], []]
+        for _ in range(3):
+            for index, (backend, next_token) in enumerate(actual):
+                interleaved[index].append(next_token)
+                with backend.batch_scope():
+                    actual[index] = backend, backend.batch_decode(next_token, Sampler(Sampling.greedy_settings()), True)
+        for index, (outputs, control) in enumerate(expected):
+            self.assertEqual(interleaved[index], outputs)
+            candidate, _ = actual[index]
+            for left, right in zip(control.cache, candidate.cache, strict=True):
+                for before, after in zip(left.state, right.state, strict=True):
+                    if before is not None:
+                        self.assertTrue(mx.array_equal(before, after).item())
+
     def test_prompt_lookup_keeps_greedy_tokens_and_continuation(self):
         from unittest import mock
         from models.flashnext.speculative import prompt_lookup_tokens

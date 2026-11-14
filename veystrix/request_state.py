@@ -1,15 +1,7 @@
 """Independent request state and decode-first scheduling (blueprint CON-01/CON-02).
 
-The current server owns one live conversation and serializes everything behind
-it. This module makes ownership explicit so a batched backend (CON-03) has
-somewhere to attach: every admitted request owns its own token tape, cache
-handle and byte reservation, an admission controller caps the sum of live
-state, and a decode-first queue orders ready work so a continuation step is
-never stuck behind a new prefill.
-
-Backend co-stepping is not implemented here. The module is deliberately
-transport- and model-free; it is the state and scheduling half that a batched
-decode API plugs into.
+The server's cooperative executor uses this model-free bookkeeping to
+reserve room for live conversations and order decode steps ahead of prefill.
 """
 
 from __future__ import annotations
@@ -179,6 +171,16 @@ class DecodeFirstQueue:
     def drop(self, request_id: str) -> bool:
         with self._lock:
             return self._entries.pop(request_id, None) is not None
+
+    def take_where(self, kind, predicate, *, limit):
+        """Drain compatible ready entries in enqueue order for one model step."""
+        with self._lock:
+            matching = [state for state, phase, _ in self._entries.values()
+                        if phase == kind and not state.cancelled and predicate(state)][:limit]
+            for state in matching:
+                del self._entries[state.request_id]
+                state.last_active = self._clock()
+            return matching
 
     def pending(self) -> int:
         with self._lock:

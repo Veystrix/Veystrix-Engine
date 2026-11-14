@@ -24,6 +24,8 @@ import time
 
 import numpy as np
 
+from veystrix.checkpoints import tokenizer_fingerprint
+
 MAX_ENTRIES = 2048
 MAX_BYTES = 64 * 2**20
 
@@ -40,8 +42,17 @@ def identity_for_backend(backend, model_path=None) -> dict:
         vocab = len(tokenizer) if tokenizer is not None else None
     except TypeError:
         vocab = None
-    return {"runtime": type(backend).__name__, "model": str(model_path or getattr(backend, "model_path", "") or ""),
-            "tokenizer": str(getattr(tokenizer, "name_or_path", "") or ""), "vocab": vocab}
+    path = model_path or getattr(backend, "model_path", None)
+    source = getattr(tokenizer, "backend_tokenizer", None)
+    serialize = getattr(source, "to_str", None)
+    serialized = serialize() if callable(serialize) else None
+    content = hashlib.sha256(serialized.encode()).hexdigest() if serialized is not None else None
+    if content is None and path:
+        content = tokenizer_fingerprint(Path(path).expanduser())
+    return {"runtime": type(backend).__name__, "model": str(path or ""),
+            "tokenizer": str(getattr(tokenizer, "name_or_path", "") or ""), "vocab": vocab,
+            "content": content, "special_tokens": getattr(tokenizer, "special_tokens_map", {}),
+            "encode_format": 1}
 
 
 def directory_for_cache(root=None) -> Path:
@@ -80,10 +91,10 @@ class TokenizedFragmentCache:
         key = self._key(text)
         try:
             with self._lock:
-                row = self._db.execute("SELECT ids FROM fragments WHERE k = ?", (key,)).fetchone()
+                row = self._db.execute("SELECT ids, n FROM fragments WHERE k = ?", (key,)).fetchone()
         except sqlite3.Error:
             return None
-        if row is None:
+        if row is None or not isinstance(row[0], bytes) or len(row[0]) != row[1] or len(row[0]) % 4:
             self.misses += 1
             return None
         self.hits += 1
@@ -144,6 +155,9 @@ class TokenizedFragmentCache:
 def open_for_backend(backend, root=None, **options) -> TokenizedFragmentCache | None:
     """Open the cache, or return None when it cannot be opened. Never fail a request over telemetry."""
     try:
-        return TokenizedFragmentCache(directory_for_cache(root), identity_for_backend(backend), **options)
+        identity = identity_for_backend(backend)
+        if identity["content"] is None:
+            return None
+        return TokenizedFragmentCache(directory_for_cache(root), identity, **options)
     except (OSError, ValueError, sqlite3.Error):
         return None

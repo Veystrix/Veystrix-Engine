@@ -12,6 +12,7 @@ from time import perf_counter
 import mlx.core as mx
 
 from models.flashnext.prefill_memory import cache_cap
+from veystrix.bench.telemetry import current as benchmark_trace
 
 from .runtime import Cancelled
 from .attention import AttentionCache
@@ -43,10 +44,12 @@ class EngineCore:
                 for entry in self.model.make_cache()]
 
     # -- state -------------------------------------------------------------------------------
-    def reset(self) -> None:
+    def reset(self, *, clear_allocator=True) -> None:
         self._mtp_controller_state = None
+        self.begin_mtp_turn(False)
         self.bind_cache(self._make_cache())
-        mx.clear_cache()
+        if clear_allocator:
+            mx.clear_cache()
 
     @property
     def cached_tokens(self) -> int:
@@ -293,6 +296,47 @@ class EngineCore:
         finally:
             self.streamed.pool.cancel_check = lambda: False
 
+    @staticmethod
+    def decode_many(steps):
+        """Co-step independent singleton rows while keeping each layer's experts resident."""
+        from mlx_lm.models.base import create_attention_mask, create_ssm_mask
+
+        cores = [core for core, _, _, _ in steps]
+        model, pool = cores[0].model, cores[0].streamed.pool
+        backbone = model.backbone
+        rows = [backbone.embeddings(mx.array([[token]], dtype=mx.int32)) for _, token, _, _ in steps]
+        cache_index = 0
+        speculate = pool.speculate
+        pool.speculate = False
+        try:
+            for index, layer in enumerate(backbone.layers):
+                block = layer.block_type
+                if block == "E":
+                    pool.begin_layer(index)
+                for slot, core in enumerate(cores):
+                    cache = core.cache[cache_index] if block in ("M", "*") else None
+                    row = rows[slot]
+                    if block == "*":
+                        mask = create_attention_mask(row, cache)
+                    elif block == "M":
+                        mask = create_ssm_mask(row, cache)
+                    else:
+                        mask = None
+                    rows[slot] = layer(row, mask=mask, cache=cache)
+                    state = [array for array in cache.state if array is not None] if cache is not None else []
+                    mx.eval(rows[slot], *state)
+                cache_index += block in ("M", "*")
+                if block == "E":
+                    pool.end_layer()
+            output = []
+            for row, (_, _, sampler, want_logits) in zip(rows, steps, strict=True):
+                token = sampler(model.lm_head(backbone.norm_f(row))[:, -1, :]) if want_logits else None
+                output.append(int(token.item()) if token is not None else None)
+            return output
+        finally:
+            pool.end_layer()
+            pool.speculate = speculate
+
     def verify_decode(self, token, drafts, *, cancelled):
         """Verify a short greedy draft with singleton operations and layer-local expert reuse."""
         from .state import clone_cache
@@ -333,6 +377,7 @@ class EngineCore:
     def native_mtp_tokens(self, first, horizon, stops, cancelled, depth):
         produced, value = 0, int(first.item())
         controller = self._mtp_controller(depth) if self._mtp_adaptive else None
+        trace = benchmark_trace.get()
         while produced < horizon and value not in stops:
             if cancelled():
                 raise Cancelled()
@@ -341,6 +386,7 @@ class EngineCore:
             hidden, follower = self._mtp_anchor, value
             wanted = controller.choose() if controller is not None else depth
             draft_began = perf_counter()
+            draft_ns = trace.clock() if trace is not None else None
             try:
                 for _ in range(min(wanted, horizon - produced - 1)):
                     follower, hidden = self.mtp.forward(hidden, mx.array([follower], dtype=mx.int32), predict=True)
@@ -350,9 +396,15 @@ class EngineCore:
             finally:
                 self.mtp.rewind(offset)
             draft_seconds = perf_counter() - draft_began
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
             if drafts:
                 self.last_round = None
+                round_ns = trace.clock() if trace is not None else None
                 committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
+                if trace is not None:
+                    trace.end_round("target_round", round_ns, positions=len(drafts) + 1,
+                                    verification=True, accepted=len(committed) - 1)
                 for token in committed:
                     if cancelled():
                         raise Cancelled()
@@ -369,7 +421,10 @@ class EngineCore:
                 yield value
                 produced += 1
                 step_began = perf_counter()
+                round_ns = trace.clock() if trace is not None else None
                 logits = self.decode(value, cancelled=cancelled, emit_logits=produced < horizon)
+                if trace is not None:
+                    trace.end_round("target_round", round_ns, positions=1)
                 if logits is not None:
                     value = int(mx.argmax(logits, axis=-1).item())
                     if controller is not None:

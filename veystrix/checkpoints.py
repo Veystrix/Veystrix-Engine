@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 
@@ -13,6 +14,25 @@ FLASHNEXT_ALIASES = {
     "vontra-mtp": "Qwen3.8-Flash-Next-MLX-4bit-MTP",
 }
 _TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
+TOKENIZER_IDENTITY_FILES = (*_TOKENIZER_FILES, "special_tokens_map.json", "added_tokens.json",
+                            "chat_template.jinja", "vocab.json", "merges.txt", "tokenizer.model", "spiece.model")
+
+
+def tokenizer_fingerprint(path: Path) -> str | None:
+    """Shared checkpoint identity for caches that depend on token IDs."""
+    digest = hashlib.sha256(b"flashnext-tokenizer-v1")
+    found = False
+    for name in TOKENIZER_IDENTITY_FILES:
+        file = path / name
+        if not file.is_file():
+            continue
+        digest.update(name.encode())
+        digest.update(str(file.stat().st_size).encode())
+        with file.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        found = True
+    return digest.hexdigest() if found else None
 
 
 def _sane_shard_name(value) -> bool:

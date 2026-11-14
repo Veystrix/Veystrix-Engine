@@ -100,6 +100,34 @@ class MTPDecoderLifecycleTests(unittest.TestCase):
         backend.swap_epsilon = 0.02
         return backend
 
+    def test_speculative_generator_is_closed_and_state_invalidated_after_writer_failure(self):
+        backend = self.backend()
+        backend.pending = [10]
+        live = FakeMTPDecoder(backend.cache)
+        backend._decoder = live
+        closed = []
+
+        def speculative(_limit, _stops):
+            try:
+                live.target_cache[0].offset = 3
+                yield 7
+                yield 8
+            finally:
+                closed.append(True)
+
+        def broken_writer(token, _piece):
+            raise BrokenPipeError(token)
+
+        with patch.object(backend, "_is_native_mtp_decoder", return_value=True), \
+                patch.object(live, "generate", speculative):
+            with self.assertRaises(BrokenPipeError):
+                backend.generate(2, on_decode_token=broken_writer)
+        self.assertEqual(closed, [True])
+        self.assertEqual(backend.tape, [10, 7])
+        self.assertIsNone(backend._decoder)
+        self.assertEqual(backend.cache_tokens, 0)
+        self.assertTrue(backend._replay_needed)
+
     def test_fresh_conversation_starts_mtp_when_eligible(self):
         backend = self.backend()
         backend.pending = [10]

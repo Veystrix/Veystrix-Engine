@@ -155,6 +155,7 @@ class FlashNextBackend(Conversation):
         gpu_sync.install_exit_drain()      # drain before mlx_vlm's GIL-holding stream cleanup at exit
         AutoTokenizer = _load_transformers_tokenizer()
         from models.flashnext.loader import load_streaming
+        from models.flashnext.prefill_memory import cache_cap
 
         # Startup precedence: explicit constructor value, then the
         # environment, then off. build_backend() passes no explicit value
@@ -169,9 +170,10 @@ class FlashNextBackend(Conversation):
             path = str(resolve_flashnext(model_path))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        model, _, self.store = load_streaming(
-            path, verbose=False, keep_vision=False,
-            use_mtp=(native_mtp == "on"))
+        with cache_cap():
+            model, _, self.store = load_streaming(
+                path, verbose=False, keep_vision=False,
+                use_mtp=(native_mtp == "on"))
         apply_qsa()
         super().__init__(AutoTokenizer.from_pretrained(path))
         self.language = model.language_model
@@ -325,8 +327,24 @@ class FlashNextBackend(Conversation):
         from models.flashnext.prefix_session import PrefixSession
 
         if getattr(self, "_prefix", None) is None:
-            self._prefix = PrefixSession(self.encode, lambda: self._sessions()._compatibility())
+            self._prefix = PrefixSession(self.encode, self._prefix_identity)
         return self._prefix
+
+    def _prefix_identity(self):
+        # Native MTP owns a separate draft cache. Only target-state snapshots
+        # pass through this store, including a sampled fallback on an MTP engine.
+        return {
+            **self._sessions()._compatibility(),
+            **({"batch_plan": "grid128-system-v1"} if hasattr(self, "_batch_positions") else {}),
+            "speculative_state": {
+                "format": "target-only-v1",
+                "native_mtp": getattr(self, "native_mtp", "off"),
+                "depth": getattr(self, "mtp_depth", 0) if getattr(self, "_mtp_active", False) else 0,
+                "rollback": os.environ.get("FLASHNEXT_MTP_ROLLBACK") == "1",
+                "adaptive": os.environ.get("FLASHNEXT_MTP_ADAPTIVE") == "1",
+                "prompt_lookup": os.environ.get("FLASHNEXT_PROMPT_LOOKUP") == "1",
+            },
+        }
 
     def _sessions(self):
         from models.flashnext.sessions import SessionStore
@@ -431,8 +449,126 @@ class FlashNextBackend(Conversation):
         self.pending = []
         self.turn_closed = True
         self._replay_needed = False
-        self.language._position_ids = None
-        self.language._rope_deltas = None
+        if hasattr(self, "_batch_positions"):
+            self._batch_positions = (None, None)
+        else:
+            self.language._position_ids = None
+            self.language._rope_deltas = None
+
+    def fork_for_batch(self):
+        """Share read-only weights and expert storage, with an empty conversation."""
+        from copy import copy
+        from models.flashnext.routing import swap_enabled
+
+        if self.routing_profile not in ("standard", "exact-quality") or self.routing.threshold != 1.0:
+            return None
+        if swap_enabled() or getattr(self, "_decoder", None) is not None:
+            return None
+        if self._mtp_active or os.environ.get("FLASHNEXT_PROMPT_LOOKUP") == "1":
+            return None
+        if not self.sampling.greedy or self._interactive_budgets is not None:
+            return None
+        child = copy(self)
+        child._decoder = None
+        child.cache = self.language.make_cache()
+        child.tape, child.pending = [], []
+        child.turn_closed, child._replay_needed = True, False
+        child._prefix = None
+        child._store = None
+        child._batch_positions = (None, None)
+        child._batch_prefill_total = 0
+        return child
+
+    @contextmanager
+    def batch_scope(self):
+        from models.flashnext import purge_recovery
+
+        language = self.language
+        old = (language._position_ids, language._rope_deltas)
+        language._position_ids, language._rope_deltas = self._batch_positions
+        try:
+            with purge_recovery.ACTIVITY.request():
+                yield
+        finally:
+            self._batch_positions = (language._position_ids, language._rope_deltas)
+            language._position_ids, language._rope_deltas = old
+
+    def batch_context(self):
+        return self._context_ceiling() or 262144
+
+    def batch_prepare(self, tokens):
+        from models.flashnext import request_admission
+
+        self._batch_prefill_total = tokens
+        if request_admission.enabled():
+            request_admission.check(tokens, max_output_tokens=0, snapshot_count=0)
+
+    @staticmethod
+    def batch_state_bytes(tokens):
+        from models.flashnext.prefill_budget import state_and_kv
+
+        return int(state_and_kv(tokens + 256))
+
+    @staticmethod
+    def batch_stats(**fields):
+        return Stats(**fields)
+
+    def batch_prefill(self, chunk, offset, final, sampler):
+        from models.flashnext import prefill, prefill_memory, prefill_ring
+
+        ids = mx.array([chunk], dtype=mx.uint32)
+        if final:
+            return int(prefill.prefill_language(self.language, ids, self.cache, sampler, offset=offset)[1].item())
+        prefill._scoped_uncached_reads(self.language, True)
+        try:
+            with prefill_memory.cache_cap(), prefill_ring.session(self.language, self._batch_prefill_total):
+                prefill._prefill_chunk(self.language, ids, self.cache)
+        finally:
+            prefill._scoped_uncached_reads(self.language, False)
+        return None
+
+    def batch_decode(self, value, sampler, want_logits):
+        ids = mx.array([[value]], dtype=mx.uint32)
+        output = self.language(ids, cache=self.cache, skip_logits=not want_logits)
+        token = sampler(output.logits[:, -1, :]) if want_logits else None
+        mx.eval([entry.state for entry in self.cache])
+        return int(token.item()) if token is not None else None
+
+    def batch_prefix_plan(self, prompt, cached, width):
+        from models.flashnext import prefix_session
+
+        if cached or not (prefix_session.enabled() and prefix_session.restore_enabled()):
+            return cached, None
+        session = self._prefix_session()
+        anchor = session.system_boundary(prompt)
+        if anchor is None or anchor not in session.anchors(prompt):
+            return cached, None
+        store = session.store()
+        edges = tuple(range(width, anchor, width))
+        hit, restored = store.lookup(
+            prompt[:anchor + 1], self.language.make_cache, language=self.language,
+            accept=lambda n, plan: n == anchor and plan is not None and tuple(plan) == edges,
+        )[:2]
+        if hit is None:
+            self._batch_prefix_edges = edges
+            return cached, anchor
+        self.cache = restored
+        self.tape.extend(self.pending[:anchor])
+        del self.pending[:anchor]
+        self.last_prefix = prefix_session.Report(
+            prompt_tokens=len(prompt), hit_tokens=anchor, prefilled_tokens=len(prompt) - anchor,
+            outcome="RAM_HIT" if hit.tier == "ram" else "SSD_HIT", tier=hit.tier,
+        )
+        return anchor, anchor
+
+    def batch_save_prefix(self):
+        try:
+            self._prefix_session().store().put(
+                tuple(self.tape), self.cache, language=self.language,
+                plan=self._batch_prefix_edges, kind="system", auto_parent=False,
+            )
+        except (OSError, ValueError):
+            pass
 
     def _mark_replay_needed(self) -> None:
         """Discard a partial cache while keeping the transcript."""
@@ -966,7 +1102,7 @@ class FlashNextBackend(Conversation):
                 raise GenerationCancelled
 
         def preserve_or_replay():
-            if cancelled and self.check_invariant():
+            if cancelled and decoder is None and self.check_invariant():
                 self.turn_closed = False
             else:
                 self._mark_replay_needed()
@@ -1195,6 +1331,10 @@ class FlashNextBackend(Conversation):
 
         decode_interrupted = False
         gc_suspended = decode_gc.suspend()
+        if should_cancel is not None and (decoder is not None or use_prompt_lookup):
+            # MoE forwards call this before reading the next layer. A cancel
+            # inside verification invalidates the round and its draft state.
+            set_prefill_progress(layer_completed)
         try:
             for index, value in enumerate(tokens):
                 check_cancel()
@@ -1246,18 +1386,22 @@ class FlashNextBackend(Conversation):
             decode_interrupted = True
             raise
         except BaseException:
-            if use_prompt_lookup:
-                self._mark_replay_needed()
+            decode_interrupted = True
             raise
         finally:
+            set_prefill_progress(None)
             decode_gc.restore(gc_suspended)
-            tokens.close()
-            if decoder is not None:
-                decoder.set_route_observer(None)
-                self.cache = decoder.target_cache
-            self.routing.finish_decode()
-            if decode_interrupted:
-                preserve_or_replay()
+            try:
+                tokens.close()
+            finally:
+                try:
+                    if decoder is not None:
+                        decoder.set_route_observer(None)
+                        self.cache = decoder.target_cache
+                    self.routing.finish_decode()
+                finally:
+                    if decode_interrupted:
+                        preserve_or_replay()
 
         tail_tokens = len(produced) - tail_index if tail_began is not None else 0
         tail_seconds = timer.since(tail_began) if tail_began is not None else 0.0

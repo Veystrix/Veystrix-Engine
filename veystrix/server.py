@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import copy
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
@@ -33,6 +34,7 @@ from veystrix.conversation import (
 from veystrix import context_budget
 from veystrix.profiles import system_prompt
 from veystrix.scheduler import Busy, ClientGone, Scheduler
+from veystrix.batch_scheduler import BatchScheduler
 from veystrix.sessions import (
     ReasoningLedger,
     SessionRegistry,
@@ -1048,6 +1050,10 @@ def _memory_ledger():
 class ModelService:
     """Own one loaded model and serve requests from one warm cache."""
 
+    # Set on the per-request copy the cooperative executor serves; the dedicated service (and any service built
+    # without __init__, as tests do) has none.
+    batch_scheduler = None
+
     def __init__(self, session, context_limit=None, max_cold_prefill=None, max_incremental_prefill=None):
         self.session = session
         self.model = f"veystrix-{session.preferences['model']}"
@@ -1084,6 +1090,23 @@ class ModelService:
         self.session_hint = None            # set by the HTTP layer for the request being served
         self._activity_lock = threading.Lock()
         self._activity = {"active": False}
+        self.batch_scheduler = None
+
+    def fork_for_batch(self, scheduler):
+        fork = getattr(self.session.backend, "fork_for_batch", None)
+        backend = fork() if fork is not None else None
+        if backend is None:
+            return None
+        child = copy(self)
+        child.session = copy(self.session)
+        child.session.backend = backend
+        child._request = threading.local()
+        child.sessions = SessionRegistry()
+        child.reasoning_ledger = self.reasoning_ledger
+        child._activity_lock = threading.Lock()
+        child._activity = {"active": False}
+        child.batch_scheduler = scheduler
+        return child
 
     def _activity_update(self, **fields):
         with self._activity_lock:
@@ -1400,7 +1423,7 @@ class ModelService:
         cache_outcome = "COLD"
         if not extends:
             prefix_session = getattr(backend, "_prefix_session", None)
-            if callable(prefix_session):
+            if self.batch_scheduler is None and callable(prefix_session):
                 can_restore = True
                 try:
                     from veystrix.backends.flashnext import FlashNextBackend
@@ -1462,7 +1485,8 @@ class ModelService:
             backend.append_tokens(ids[shared:])
             self.reused += 1
             return True
-        session.reset()
+        if self.batch_scheduler is None:
+            session.reset()
         backend.append_tokens(ids)
         self.rebuilt += 1
         return False
@@ -1563,7 +1587,7 @@ class ModelService:
             began = time.perf_counter()
             first = []
 
-            checked = [time.perf_counter()]
+            checked = [float("-inf")]
 
             import inspect
 
@@ -1592,18 +1616,23 @@ class ModelService:
                     flight_recorder.record("first_token", seconds_since_start=round(first[0] - began, 3))
                 if _memory_stopped():
                     raise _safety_stop_error("generation cancelled")
-                if gone is not None:                # a closed client ends the generation instead of finishing it unseen
-                    now = time.perf_counter()
-                    if now - checked[0] >= GONE_CHECK_SECONDS:
-                        checked[0] = now
-                        if gone():
-                            raise ClientGone("client disconnected during generation")
+                if client_disconnected():
+                    raise ClientGone("client disconnected during generation")
                 for kind, item in stream_filter.feed(piece):
                     if kind == "thinking":
                         send_text(item, kind="thinking")
                     else:
                         for complete in words.feed(item):
                             send_text(None if hold else complete, kind="content")
+
+            def client_disconnected() -> bool:
+                if gone is None:
+                    return False
+                now = time.perf_counter()
+                if now - checked[0] < GONE_CHECK_SECONDS:
+                    return False
+                checked[0] = now
+                return gone()
 
             def cancel_check() -> bool:
                 try:
@@ -1612,9 +1641,7 @@ class ModelService:
                         return True
                 except ImportError:
                     pass
-                if gone is not None and gone():
-                    return True
-                return False
+                return client_disconnected()
 
             requested_output = (
                 -1 if max_tokens is None or int(max_tokens) < 0 else int(max_tokens)
@@ -1674,7 +1701,22 @@ class ModelService:
             if "on_decode_token" in gen_params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in gen_params.values()):
                 call_kwargs["on_decode_token"] = decode_token
 
-            text, stats = backend.generate(**call_kwargs)
+            if self.batch_scheduler is None:
+                text, stats = backend.generate(**call_kwargs)
+            else:
+                from veystrix.backends.cooperative import generate
+
+                scheduler = self.batch_scheduler
+                billed_output = max_tokens if max_tokens >= 0 else backend.batch_context() - int(prompt_tokens or 0)
+                state = scheduler.reserve(uuid.uuid4().hex,
+                                          backend.batch_state_bytes(int(prompt_tokens or 0) + billed_output))
+                try:
+                    text, stats = generate(backend, dispatch=lambda work, decode:
+                                           scheduler.submit_quantum(state, work, decode),
+                                           dispatch_decode=lambda args, cancel:
+                                           scheduler.submit_decode(state, args, cancel), **call_kwargs)
+                finally:
+                    scheduler.release(state)
 
             last_prefix = getattr(backend, "last_prefix", None)
             if last_prefix is not None:
@@ -1709,7 +1751,8 @@ class ModelService:
             # accepts it (plan None is "unknown history"), yet each one cost a ~120-400 MB serialisation and SSD write per
             # turn, and it ran even with the prefix cache disabled (the incident server wrote one at 12:41:12). Turn
             # boundaries are snapshotted for free during the next request's prefill instead (message-boundary anchors).
-            if (os.environ.get("FLASHNEXT_TURN_SNAPSHOTS") == "1" and os.environ.get("FLASHNEXT_PREFIX_CACHE") == "1"
+            if (self.batch_scheduler is None and os.environ.get("FLASHNEXT_TURN_SNAPSHOTS") == "1"
+                    and os.environ.get("FLASHNEXT_PREFIX_CACHE") == "1"
                     and backend is not None and hasattr(backend, "_prefix_session")):
                 try:
                     ps = backend._prefix_session()
@@ -1758,7 +1801,8 @@ class ModelService:
             flight_recorder.record("request_refused", kind="context_or_prefill_limit")
             raise
         except GenerationCancelled:
-            session.reset()
+            if self.batch_scheduler is None:
+                session.reset()
             self.sessions.dropped()
             stopped = _memory_stopped()
             flight_recorder.record("request_cancelled", memory_stop=stopped)
@@ -1766,7 +1810,8 @@ class ModelService:
                 raise _safety_stop_error() from None
             raise
         except BaseException as error:
-            session.reset()
+            if self.batch_scheduler is None:
+                session.reset()
             self.sessions.dropped()
             flight_recorder.record("request_error", error=type(error).__name__, detail=str(error)[:300])
             from models.flashnext.request_admission import RequestMemoryRefused
@@ -1939,7 +1984,8 @@ class VeystrixHandler(BaseHTTPRequestHandler):
     def _headers(self, status=200, content_type="application/json"):
         from models.flashnext import progress
 
-        progress.PROGRESS.response_started()
+        if getattr(self, "_batch_service", None) is None:
+            progress.PROGRESS.response_started()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         origin = self._allowed_origin()
@@ -2196,6 +2242,8 @@ class VeystrixHandler(BaseHTTPRequestHandler):
             self._response_model = requested
         scheduler = self.server.scheduler
         try:
+            if isinstance(scheduler, BatchScheduler) and scheduler.loop_running and self._try_batch(scheduler, path, payload):
+                return
             if scheduler.loop_running:
                 self._scheduled_post(scheduler, path, payload)
             else:
@@ -2207,6 +2255,31 @@ class VeystrixHandler(BaseHTTPRequestHandler):
                 pass
         except ClientGone:
             pass
+
+    def _try_batch(self, scheduler, path, payload):
+        if not hasattr(self.server.service, "fork_for_batch"):
+            return False
+        scheduler.acquire_request()
+        timeout = self.connection.gettimeout()
+        try:
+            if self._client_gone():
+                raise ClientGone("client disconnected before generation")
+            service = self.server.service.fork_for_batch(scheduler)
+            if service is None:
+                return False
+            self._batch_service = service
+            self.connection.settimeout(RESPONSE_WRITE_TIMEOUT)
+            self._handle_post(path, payload)
+            return True
+        finally:
+            self._batch_service = None
+            try:
+                self.connection.settimeout(timeout)
+            finally:
+                scheduler.release_request()
+
+    def _inference_service(self):
+        return getattr(self, "_batch_service", None) or self.server.service
 
     def _scheduled_post(self, scheduler, path, payload):
         destination = self.wfile
@@ -2226,21 +2299,24 @@ class VeystrixHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
 
     def _handle_post(self, path, payload):
-        """Runs on the inference thread, one request at a time."""
+        """Serve one response. Cooperative requests dispatch model work separately."""
         from models.flashnext import progress
 
+        service = self._inference_service()
+        batch = getattr(service, "batch_scheduler", None) is not None
         try:
-            self.server.service.session_hint = explicit_id(self.headers, payload)
+            service.session_hint = explicit_id(self.headers, payload)
         except Exception:
             pass
 
-        progress.PROGRESS.request_begin(getattr(self, "connection", None), path)
+        if not batch:
+            progress.PROGRESS.request_begin(getattr(self, "connection", None), path)
         try:
             tools_value = payload.get("tools")
             flight_recorder.record(
                 "request_begin", path=path, seq=progress.PROGRESS._request,
                 user_agent=str(self.headers.get("User-Agent", ""))[:80],
-                session_header=bool(self.server.service.session_hint),
+                session_header=bool(service.session_hint),
                 stream=bool(payload.get("stream")),
                 messages=len(payload.get("messages") or payload.get("input") or []),
                 tools=len(tools_value) if isinstance(tools_value, list) else 0,
@@ -2257,6 +2333,9 @@ class VeystrixHandler(BaseHTTPRequestHandler):
                 self._anthropic(payload)
             else:
                 self._responses(payload)
+        except Busy as exc:
+            if not getattr(self, "_sse_open", False):
+                self._busy(exc)
         except RequestError as exc:
             if not getattr(self, "_sse_open", False):
                 try:
@@ -2278,7 +2357,8 @@ class VeystrixHandler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
         finally:
-            progress.PROGRESS.request_end()
+            if not batch:
+                progress.PROGRESS.request_end()
             flight_recorder.record("request_end", path=path)
 
     @staticmethod
@@ -2312,10 +2392,10 @@ class VeystrixHandler(BaseHTTPRequestHandler):
             value = default_limit
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise RequestError("max_tokens must be a positive integer")
-        return min(value, capabilities(self.server.service)["context_window"])
+        return min(value, capabilities(self._inference_service())["context_window"])
 
     def _chat(self, payload):
-        service = self.server.service
+        service = self._inference_service()
         self._ignored_fields = _check_chat_fields(payload)
         self._reasoning = self._resolve_reasoning(payload)
         local = getattr(service, "_request", None)
@@ -2330,7 +2410,7 @@ class VeystrixHandler(BaseHTTPRequestHandler):
     def _resolve_reasoning(self, payload):
         from veystrix import reasoning as R
 
-        service = self.server.service
+        service = self._inference_service()
         prefs = getattr(getattr(service, "session", None), "preferences", None) or {}
         try:
             return R.resolve(payload, bool(prefs.get("thinking_enabled", False)), prefs.get("effort", "medium"))
@@ -2411,7 +2491,7 @@ class VeystrixHandler(BaseHTTPRequestHandler):
         })
 
     def _anthropic(self, payload):
-        service = self.server.service
+        service = self._inference_service()
         messages = _anthropic_messages(payload)
         tools = payload.get("tools") or []
         ident = f"msg_{uuid.uuid4().hex}"
@@ -2486,7 +2566,7 @@ class VeystrixHandler(BaseHTTPRequestHandler):
         })
 
     def _responses(self, payload):
-        service = self.server.service
+        service = self._inference_service()
         messages = _responses_messages(payload)
         tools = payload.get("tools") or []
         ident = f"resp_{uuid.uuid4().hex}"
@@ -2587,6 +2667,8 @@ def serve(session, host: str, port: int, api_key: str | None = None,
     inference thread stays on it.
     """
     session.reset()
+    if scheduler is None and os.environ.get("VEYSTRIX_CONTINUOUS_BATCHING") == "1":
+        scheduler = BatchScheduler()
     server = VeystrixHTTPServer(
         (host, port), ModelService(session, context_limit, max_cold_prefill, max_incremental_prefill), api_key, allowed_origins,
         scheduler)
@@ -2608,7 +2690,8 @@ def serve(session, host: str, port: int, api_key: str | None = None,
         print(f"context limit: {context_limit} tokens (longer prompts are refused, never truncated)")
     if max_cold_prefill:
         print(f"memory tier: single prefills up to {max_cold_prefill} tokens (larger ones are refused, never truncated)")
-    print(f"one request runs at a time; up to {server.scheduler.max_waiting} wait at most "
+    max_active = getattr(server.scheduler, "max_active", 1)
+    print(f"up to {max_active} active requests; wait at most "
           f"{server.scheduler.max_wait:g}s, then get 503 server_busy")
     print("OpenAI: /v1/chat/completions and /v1/responses")
     print("Anthropic: /v1/messages")

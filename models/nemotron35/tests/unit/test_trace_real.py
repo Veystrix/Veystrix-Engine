@@ -94,6 +94,37 @@ class TraceRealTests(unittest.TestCase):
             self.assertTrue(report["all_forced_bit_identical"])
             self.assertFalse(any("suboperations" in e for p in report["phases"] for e in p["layers"]))
 
+    def test_reference_rows_splits_only_the_stock_moe_blocks_and_keeps_the_tiny_model_bit_identical(self):
+        calls = []
+        real = trace_real._apply_rows
+
+        def counted(module, h, rows):
+            calls.append((int(h.shape[1]), rows))
+            return real(module, h, rows)
+
+        with mock.patch.object(trace_real, "_apply_rows", counted):
+            report = self.run_trace(reference_rows=3)
+        self.assertEqual(report["reference_rows"], 3)
+        self.assertTrue(report["all_forced_bit_identical"])
+        # two MoE layers, three prefill chunks (8, 8, 5 tokens), then one token per decode phase
+        self.assertEqual(calls[:6], [(8, 3), (8, 3), (5, 3)] * 2)
+        self.assertEqual(set(calls[6:]), {(1, 3)})
+        self.assertEqual(self.run_trace()["reference_rows"], 0)
+
+    def test_reference_chunk_gives_the_reference_and_the_free_engine_different_chunk_edges(self):
+        report = self.run_trace(reference_chunk=3)
+        prefill = report["phases"][0]
+        self.assertEqual(report["reference_chunk_tokens"], 3)
+        self.assertEqual(prefill["chunk_sizes"], [3] * 7)
+        self.assertEqual(prefill["free_chunk_sizes"], [8, 8, 5])
+        self.assertEqual(report["phases"][1]["chunk_sizes"], [1])
+        self.assertEqual(report["phases"][1]["free_chunk_sizes"], [1])
+        for phase in report["phases"]:
+            for entry in phase["layers"]:
+                self.assertEqual(entry["free"]["elements"], entry["forced"]["elements"])
+        self.assertTrue(report["all_free_greedy_agree"])
+        self.assertEqual(self.run_trace()["reference_chunk_tokens"], CHUNK)
+
     # (b) injected deviations -------------------------------------------------------------------------------------
     def test_injected_moe_deviation_is_localised_to_the_routed_experts(self):
         def mutate(layers):

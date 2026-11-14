@@ -214,8 +214,16 @@ def _drill_moe(stock, engine, xn) -> list:
 
     def routed_experts():
         ys['s'], ys['e'] = s.switch_mlp(x, inds), e.switch_mlp(x, inds)
-        steps.append(_step('routed_experts', ys['s'], ys['e'], reference_class=type(s.switch_mlp).__name__,
-                           engine_class=type(e.switch_mlp).__name__))
+        step = _step('routed_experts', ys['s'], ys['e'], reference_class=type(s.switch_mlp).__name__,
+                     engine_class=type(e.switch_mlp).__name__)
+        if not step['bit_identical'] and x.shape[1] > 1:
+            # Which side moved: the stock layer over the whole chunk, or the engine? One token at a time the stock
+            # layer cannot batch the rows of an expert, so that result is the per-row arithmetic.
+            alone = mx.concatenate([s.switch_mlp(x[:, t:t + 1], inds[:, t:t + 1]) for t in range(x.shape[1])], axis=1)
+            mx.eval(alone)
+            step['stock_chunk_vs_stock_token_by_token'] = _metrics(_np(alone), _np(ys['s']))
+            step['engine_vs_stock_token_by_token'] = _metrics(_np(alone), _np(ys['e']))
+        steps.append(step)
     _attempt(steps, 'routed_experts', routed_experts)
 
     def weigh(y):
@@ -289,7 +297,20 @@ def _first_differing(steps):
 
 
 # -- the walk --------------------------------------------------------------------------------------------------------
-def _walk_phase(ref, core, caches, phase, chunks):
+def _apply_rows(module, h, rows):
+    """A stock MoE block over ``rows`` tokens at a time. The stock ``SwitchMLP`` sorts its routes once a call holds
+    64 of them, and the sorted kernel batches the rows of one expert, which rounds differently from the per-row
+    kernel. Pieces short enough to stay under 64 routes give the result of evaluating every token on its own."""
+    pieces = [module(h[:, start:start + rows], mask=None, cache=None) for start in range(0, h.shape[1], rows)]
+    out = pieces[0] if len(pieces) == 1 else mx.concatenate(pieces, axis=1)
+    mx.eval(out)
+    return out
+
+
+def _walk_phase(ref, core, caches, phase, chunks, reference_rows=0, free_chunks=None):
+    """``chunks`` splits the phase for the reference and the forced engine pass; ``free_chunks`` (the same tokens)
+    splits it for the free-running engine when the two are to be compared across different chunk edges."""
+    free_chunks = chunks if free_chunks is None else free_chunks
     backbone, pool = core.model.backbone, core.streamed.pool
     types = ref.types
     drilled = set()
@@ -297,10 +318,11 @@ def _walk_phase(ref, core, caches, phase, chunks):
     embed = ref.load_embedding()
     ref_hidden = [embed(mx.array([c], dtype=mx.int32)) for c in chunks]
     del embed
-    free_hidden = [backbone.embeddings(mx.array([c], dtype=mx.int32)) for c in chunks]
+    free_hidden = [backbone.embeddings(mx.array([c], dtype=mx.int32)) for c in free_chunks]
     mx.eval(*ref_hidden, *free_hidden)
     mx.clear_cache()
     report = {'phase': phase, 'tokens': sum(len(c) for c in chunks), 'chunk_sizes': [len(c) for c in chunks],
+              'free_chunk_sizes': [len(c) for c in free_chunks],
               'embedding': _parts_metrics(ref_hidden, free_hidden), 'layers': []}
     forced_last = ref_hidden
     counter = 0
@@ -320,7 +342,10 @@ def _walk_phase(ref, core, caches, phase, chunks):
         for j, h in enumerate(ref_in):
             if want and cached:
                 snaps_ref.append(_snapshot(ref_cache))
-            ref_out.append(_apply(block, kind, h, ref_cache, j == count - 1))
+            if kind == 'moe' and reference_rows:
+                ref_out.append(_apply_rows(block, h, reference_rows))
+            else:
+                ref_out.append(_apply(block, kind, h, ref_cache, j == count - 1))
 
         forced_out, free_out = [], []
         if kind == 'moe':
@@ -331,7 +356,7 @@ def _walk_phase(ref, core, caches, phase, chunks):
                     snaps_forced.append(_snapshot(forced_cache))
                 forced_out.append(_apply(layer, kind, h, forced_cache, j == count - 1))
             for j, h in enumerate(free_hidden):
-                free_out.append(_apply(layer, kind, h, free_cache, j == count - 1))
+                free_out.append(_apply(layer, kind, h, free_cache, j == len(free_hidden) - 1))
 
             entry = {'layer': i, 'kind': kind, 'reference_dtype': str(ref_out[0].dtype),
                      'forced_dtype': str(forced_out[0].dtype), 'free_dtype': str(free_out[0].dtype)}
@@ -412,7 +437,7 @@ def _summarise(report):
 
 
 def trace(root, *, tokens=48, decode=3, chunk=16, pool_gb=0.0, int8_kv=False, swap_limit_mb=2000.0,
-          config_check=None) -> dict:
+          config_check=None, reference_rows=0, reference_chunk=0) -> dict:
     root = Path(root).expanduser()
     config = _read_json(root / 'config.json', 32 * 1024 * 1024, 'config.json')
     (config_check or validate_config)(config)
@@ -420,7 +445,8 @@ def trace(root, *, tokens=48, decode=3, chunk=16, pool_gb=0.0, int8_kv=False, sw
     low = 100 if config['vocab_size'] > 1000 else 3
     prompt = [int(t) for t in rng.integers(low, min(config['vocab_size'], 30000), size=tokens)]
     report = {'checkpoint': str(root), 'prompt_tokens': tokens, 'decode_steps': decode, 'chunk_tokens': chunk,
-              'pool_gb': pool_gb, 'int8_kv': int8_kv, 'gather': streamed_experts.GATHER, 'phases': []}
+              'pool_gb': pool_gb, 'int8_kv': int8_kv, 'gather': streamed_experts.GATHER, 'exact_rows': streamed_experts.EXACT_ROWS,
+              'reference_rows': reference_rows, 'reference_chunk_tokens': reference_chunk or chunk, 'phases': []}
     began = time.time()
     from .backend_core import EngineCore
     streamed = load_streamed(root, pool_bytes=int(pool_gb * 2 ** 30), verify=False, config_check=config_check)
@@ -435,11 +461,13 @@ def trace(root, *, tokens=48, decode=3, chunk=16, pool_gb=0.0, int8_kv=False, sw
             if isinstance(entry, AttentionCache):
                 entry.cancelled = lambda: pool.cancel_check()
         chunks = [prompt[i:i + chunk] for i in range(0, len(prompt), chunk)]
+        width = reference_chunk or chunk
+        reference_chunks = [prompt[i:i + width] for i in range(0, len(prompt), width)]
         for phase in ['prefill'] + [f'decode{k + 1}' for k in range(decode)]:
-            phase_report = _walk_phase(ref, core, caches, phase, chunks)
+            phase_report = _walk_phase(ref, core, caches, phase, reference_chunks, reference_rows, chunks)
             phase_report['swap_mb'] = swap_mb()
             report['phases'].append(phase_report)
-            chunks = [[phase_report['reference_greedy_token']]]
+            chunks = reference_chunks = [[phase_report['reference_greedy_token']]]
     finally:
         pool.end_layer()
         pool.speculate = speculate
@@ -459,10 +487,17 @@ def main(argv=None) -> int:
     parser.add_argument('--pool-gb', type=float, default=0.0)
     parser.add_argument('--int8-kv', action='store_true', help='engine attention uses the INT8 block cache')
     parser.add_argument('--swap-limit-mb', type=float, default=2000.0)
+    parser.add_argument('--reference-chunk', type=int, default=0,
+                        help='chunk tokens of the stock reference and of the forced engine pass; 0 uses --chunk. With '
+                             'a different value the free-running comparison crosses chunk edges')
+    parser.add_argument('--reference-rows', type=int, default=0,
+                        help='run the stock MoE blocks this many tokens at a time (at most 10 keeps the stock layer on '
+                             'its per-row kernel); 0 runs them over the whole chunk')
     parser.add_argument('--out', default=None, help='also write the JSON report to this path')
     ns = parser.parse_args(argv)
     report = trace(ns.checkpoint, tokens=ns.tokens, decode=ns.decode, chunk=ns.chunk, pool_gb=ns.pool_gb,
-                   int8_kv=ns.int8_kv, swap_limit_mb=ns.swap_limit_mb)
+                   int8_kv=ns.int8_kv, swap_limit_mb=ns.swap_limit_mb, reference_rows=ns.reference_rows,
+                   reference_chunk=ns.reference_chunk)
     text = json.dumps(report, indent=2)
     print(text)
     if ns.out:

@@ -704,6 +704,56 @@ class StockKernelTests(unittest.TestCase):
         finally:
             streamed.close()
 
+    def test_exact_rows_makes_the_per_expert_path_bit_identical_to_stock_for_a_multi_token_chunk(self):
+        from models.nemotron35.tiny_checkpoint import build_reference
+        from models.nemotron35 import streamed_experts as se
+        ref = build_reference(TINY_CONFIG)
+        streamed = load_streamed(Path(_dir) / "ck", pool_bytes=0, config_check=permissive_config_check)
+        tokens = mx.array([[3, 9, 1, 5, 7, 2, 11, 4, 6, 8, 10, 12, 3, 3, 9, 9]])
+        try:
+            self.assertFalse(se.GATHER)
+            calls = []
+            original = se.StreamedSwitchMLP._expert_rows
+
+            def counted(layer, x, weights):
+                calls.append(x.shape[0])
+                return original(layer, x, weights)
+
+            with unittest.mock.patch.object(se, "EXACT_ROWS", True), \
+                    unittest.mock.patch.object(se.StreamedSwitchMLP, "_expert_rows", counted):
+                c1, c2 = ref.make_cache(), streamed.model.make_cache()
+                self.assertTrue(bool(mx.all(ref(tokens, cache=c1) == streamed.model(tokens, cache=c2))))
+                for t in (3, 9, 1):
+                    x = mx.array([[t]])
+                    self.assertTrue(bool(mx.all(ref(x, cache=c1) == streamed.model(x, cache=c2))))
+            self.assertTrue(calls and min(calls) > 1, "the multi-row kernel never ran")
+        finally:
+            streamed.close()
+
+    def test_exact_rows_kernel_equals_the_per_row_kernel_where_the_batched_kernel_does_not(self):
+        # The tiny checkpoint is too small for the batched kernel to round differently, so this uses one expert of
+        # half-precision weights wide enough to show the difference the real checkpoint shows.
+        from models.nemotron35 import streamed_experts as se
+        mx.random.seed(7)
+        hidden, inner, group = 512, 384, 64
+        weights = {}
+        for name, (rows, columns) in (("fc1", (inner, hidden)), ("fc2", (hidden, inner))):
+            packed, scales, biases = mx.quantize(mx.random.normal((rows, columns)) * 0.05, group_size=group, bits=4)
+            weights.update({f"{name}.weight": packed, f"{name}.scales": scales.astype(mx.bfloat16),
+                            f"{name}.biases": biases.astype(mx.bfloat16)})
+        layer = se.StreamedSwitchMLP.__new__(se.StreamedSwitchMLP)
+        layer.group_size, layer._fma = group, None
+        x = (mx.random.normal((24, hidden)) * 0.5).astype(mx.bfloat16)
+        per_row = mx.concatenate([layer._expert(x[row:row + 1], weights) for row in range(24)], axis=0)
+        batched = layer._expert(x, weights)
+        with unittest.mock.patch.object(se, "EXACT_ROWS", True):
+            exact = layer._expert(x, weights)
+        self.assertEqual(exact.shape, per_row.shape)
+        self.assertEqual(exact.dtype, per_row.dtype)
+        self.assertTrue(bool(mx.all(exact == per_row)))
+        self.assertFalse(bool(mx.all(batched == per_row)),
+                         "the batched kernel now equals the per-row kernel here, so this test no longer discriminates")
+
     def test_per_expert_fallback_for_large_chunks_matches_within_rounding(self):
         from models.nemotron35 import streamed_experts as se
         streamed = load_streamed(Path(_dir) / "ck", pool_bytes=0, config_check=permissive_config_check)

@@ -46,6 +46,12 @@ LOOKAHEAD_DEPTH = int(os.environ.get('VEYSTRIX_NEMOTRON_LOOKAHEAD_DEPTH', '12'))
 # synthetic checkpoints, but measured slower on the real model (stacking copies ~34 MB per layer): 4.4/5.6 vs 6.5 tok/s.
 GATHER = os.environ.get('VEYSTRIX_NEMOTRON_GATHER', '0') == '1'
 GATHER_MAX_EXPERTS = 24      # beyond this (large prefill chunks) the per-expert path avoids a large stacking copy
+# Opt-in: a projection over several rows of one expert (prefill chunks, grouped decode) uses the stock per-row kernel
+# (gather_qmm with a one-expert stack, which copies nothing) in place of the batched quantized_matmul. The batched
+# kernel rounds differently from the per-row one, and that is the only operation in which the streamed engine departs
+# from stock mlx-lm on the real checkpoint (trace_real, 14 November 2026). With this set every chunk size gives the
+# stock result bit for bit.
+EXACT_ROWS = os.environ.get('VEYSTRIX_NEMOTRON_EXACT_ROWS', '0') == '1'
 PREFILL_PREDICT_CAP = 40     # experts staged per layer during prefill (nearly all are needed there anyway)
 
 
@@ -562,7 +568,21 @@ class StreamedSwitchMLP(nn.Module):
             y = _scatter_unsort(y, inv, local.shape)
         return y.squeeze(-2).reshape(*lead, local.shape[-1], flat.shape[-1]).astype(dtype)
 
+    def _expert_rows(self, x, weights):
+        """One expert over several rows, each row computed as the stock ``SwitchMLP`` computes it."""
+        index = mx.zeros((x.shape[0], 1), dtype=mx.uint32)
+
+        def project(rows, name):
+            return mx.gather_qmm(rows, weights[f'{name}.weight'][None], weights[f'{name}.scales'][None],
+                                 weights[f'{name}.biases'][None], rhs_indices=index, transpose=True,
+                                 group_size=self.group_size, bits=4, mode='affine')
+
+        hidden = project(mx.expand_dims(x, (-2, -3)), 'fc1')
+        return project(nn.relu2(hidden), 'fc2').reshape(x.shape[0], -1)
+
     def _expert(self, x, weights):
+        if EXACT_ROWS and x.shape[0] > 1:
+            return self._expert_rows(x, weights)
         if x.shape[0] == 1 and os.environ.get("VEYSTRIX_NEMOTRON_METAL_FMA_DEQUANT") == "1":
             if self._fma is None:
                 from models.flashnext.metal_runtime import MetalMoEExecutor

@@ -642,6 +642,9 @@ def _run_layer_major(language, ids, cache, sampler, boundaries, on_boundary, off
                 item.update(expert_gb=round(report.expert_bytes / 1e9, 2),
                             read_seconds=round(report.read_seconds, 2),
                             ring_layers=report.ring_layers, fallback_layers=report.fallback_layers)
+                if report.union_layers or report.union_refused:
+                    # Route-union order only (FLASHNEXT_PREFILL_ROUTE_UNION=1); absent otherwise.
+                    item["route_union"] = report.union_summary()
                 if report.layer_seconds:
                     # Trace only (no extra synchronisation): wall seconds per layer for this window, and which layers are attention.
                     item["layer_seconds"] = list(report.layer_seconds)
@@ -743,7 +746,7 @@ def _prefill_target_checked(
     including those before ``offset``; ``boundaries`` is the subset the caller wants reported. Not used when
     logits or hidden states are requested.
     """
-    from models.flashnext import prefill_memory, prefill_ring
+    from models.flashnext import prefill_memory, prefill_reads, prefill_ring
 
     ring_on = prefill_ring.enabled()
     cap_on = prefill_memory.enabled()
@@ -758,9 +761,17 @@ def _prefill_target_checked(
             scheduler.start_at(chunk_tokens())
 
     def body():
-        return _run_chunks(language, ids, cache, want_logits, want_hidden, sampler,
-                           tuple(boundaries), on_boundary, int(offset),
-                           None if anchors is None else tuple(anchors), trace, scheduler, tuple(required))
+        # FLASHNEXT_PREFILL_READ_STATS (default off): record this prefill's expert reads; ``begin`` is None when off.
+        reads = prefill_reads.begin(int(ids.shape[1]))
+        try:
+            result = _run_chunks(language, ids, cache, want_logits, want_hidden, sampler,
+                                 tuple(boundaries), on_boundary, int(offset),
+                                 None if anchors is None else tuple(anchors), trace, scheduler, tuple(required))
+        except BaseException:
+            prefill_reads.end(reads, ok=False)
+            raise
+        prefill_reads.end(reads, ok=True)
+        return result
 
     if not ring_on and not cap_on:
         return body()

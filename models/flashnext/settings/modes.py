@@ -24,7 +24,7 @@ Evidence behind the choices (see docs/flashnext/performance-engineering-report-2
 """
 from __future__ import annotations
 
-from models.flashnext.prefill_16gb import PREFILL_16GB
+from models.flashnext.prefill_16gb import PREFILL_16GB, PREFILL_16GB_UNION
 
 import os
 import shutil
@@ -111,6 +111,10 @@ EXPERIMENTAL_OFF = {
 # Offline-tested only. Each is explicit (--enable NAME), never a default, and labelled in the banner.
 EXPERIMENTAL = {
     "prefill-16gb": (PREFILL_16GB, "bounded prefill chunks, expert scratch reuse and uncached reads"),
+    "prefill-16gb-union": (PREFILL_16GB_UNION,
+                           "experimental: the prefill-16gb profile with 1,024-token layer-major windows that read only the "
+                           "experts each window routes (384-expert ring, groups when the union does not fit); bit-identical "
+                           "to chunk-major on a tiny model, unmeasured on the real checkpoint"),
     "qsa-gather": ({"FLASHNEXT_QSA_KERNEL": "gather"},
                    "bounded selected-block attention; real-checkpoint qualification pending"),
     "kv-k16v4": ({"FLASHNEXT_KV_CACHE_DTYPE": "k16v4", "FLASHNEXT_QSA_KERNEL": "gather"},
@@ -170,8 +174,10 @@ EXPERIMENTAL["short-throughput"] = (
     {key: value for feature in THROUGHPUT_FEATURES for key, value in EXPERIMENTAL[feature][0].items()},
     "experimental 4K hybrid layer-major prefill and buffered decode expert pool",
 )
-LAYER_MAJOR_MODES = {"layer-major", "layer-major-4k", "layer-major-hybrid-4k", "short-throughput"}
-OWNED = frozenset({*COMMON, *PREFILL_OFF, *AGENTIC_PREFILL, *EXPERIMENTAL_OFF, *PREFILL_16GB,
+# prefill-16gb-union is a layer-major mode (it sets the order and its own window size), so it shares the exclusivity and the
+# AGENTIC-only rule; plan_mode additionally refuses it beside layer-prefetch (ignored under the union) and prefill-16gb.
+LAYER_MAJOR_MODES = {"layer-major", "layer-major-4k", "layer-major-hybrid-4k", "short-throughput", "prefill-16gb-union"}
+OWNED = frozenset({*COMMON, *PREFILL_OFF, *AGENTIC_PREFILL, *EXPERIMENTAL_OFF, *PREFILL_16GB, *PREFILL_16GB_UNION,
                    "FLASHNEXT_PREFILL_CHUNK_BUDGET_MB", "FLASHNEXT_PREFILL_WINDOW_TOKENS", "FLASHNEXT_KV_GROUP_SIZE", "FLASHNEXT_KV_BITS",
                    "FLASHNEXT_KV_LAYER_MODES",
                    "FLASHNEXT_EXPERT_POOL_GB", "FLASHNEXT_EXPERT_POOL_AUTO", "FLASHNEXT_PREFIX_CACHE_DIR", "FLASHNEXT_PREFIX_CACHE_RAM_GB",
@@ -265,6 +271,10 @@ def plan_mode(mode, *, pool_gb=None, enable=(), available_gb=None, prefix_dir=No
         raise ModeError("choose one of uncached-reads (all phases) and uncached-prefill-reads (prefill only)")
     if "layer-prefetch" in enable and not LAYER_MAJOR_MODES.intersection(enable):
         raise ModeError("layer-prefetch needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
+    if "layer-prefetch" in enable and "prefill-16gb-union" in enable:
+        raise ModeError("layer-prefetch does not combine with prefill-16gb-union (a layer's union of routes is unknown a layer ahead)")
+    if "prefill-16gb" in enable and "prefill-16gb-union" in enable:
+        raise ModeError("choose one of prefill-16gb and prefill-16gb-union (the union profile already includes the former)")
     if mode == CHAT and "prefix-profiles" in enable:
         raise ModeError("prefix-profiles needs the AGENTIC prefix cache")
     if mode == CHAT and "long-context" in enable:

@@ -24,6 +24,16 @@ rows, so the result does not depend on which other experts sit in the operand; t
 the real checkpoint must pass the token-digest gate before it is promoted. Until it does, the cache fingerprint carries
 ``identity()`` so layer-major snapshots never mix with chunk-major ones.
 
+Route union (``FLASHNEXT_PREFILL_ROUTE_UNION=1``, opt-in, layer-major only). The all-experts window stages every expert of a
+layer (about 1.6 GB of ring at 512 experts) although a few-hundred-token window routes far fewer, and it re-reads nothing
+only because it reads everything. With the flag each layer runs in two phases: A) the first half of the layer (attention and
+the two hyper-connections, see ``layer_first_half``) for every chunk of the window, then the chunk's router indices are taken
+through the real MoE block in a probe mode that reads nothing; B) the union of the chunks' routed experts is staged once (in
+greedy consecutive groups when it does not fit the ring half) and every chunk runs the real MoE block on that staged subset
+with its indices remapped to staged positions. Every (token, expert) product is the same ``gather_qmm`` on the same expert rows
+as in chunk-major order, so the result is bit-identical to it; ``identity()`` still carries ``/union-v1`` until a real-checkpoint
+digest gate has passed. A layer the helper cannot split safely runs the all-experts path instead and the refusal is counted.
+
 What it does not do. A layer-major window cannot snapshot at a chunk edge inside it (the later layers have not reached it), so
 the cadence of resumable cuts is the window, not the chunk; an interruption loses at most one window of work. Windows still end
 at the system-prompt boundary and prefer message anchors. Adaptive chunk re-planning runs between windows only.
@@ -32,10 +42,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import mlx.core as mx
+import numpy as np
+
+from . import prefill_reads
 
 FLAG_ORDER = "FLASHNEXT_PREFILL_ORDER"                  # "chunk" (default) | "layer"
 FLAG_WINDOW = "FLASHNEXT_PREFILL_WINDOW_TOKENS"         # tokens per layer-major window
@@ -44,6 +59,8 @@ FLAG_PREFETCH = "FLASHNEXT_PREFILL_LAYER_PREFETCH"      # opt-in: read layer l+1
 FLAG_INNER_SNAPSHOTS = "FLASHNEXT_PREFILL_INNER_SNAPSHOTS"  # "1" (default): snapshot chunk edges inside a window; "0": cut windows there
 FLAG_TAIL_CHUNK = "FLASHNEXT_PREFILL_TAIL_CHUNK"        # "1" (default): a trailing tiny chunk runs chunk-major after the last window
 FLAG_MIN_TOKENS = "FLASHNEXT_LAYER_MAJOR_MIN_TOKENS"    # smaller uncached prefills use the chunk-major path
+FLAG_ROUTE_UNION = "FLASHNEXT_PREFILL_ROUTE_UNION"      # opt-in: each streamed layer reads only the experts its window routes
+UNION_SUFFIX = "/union-v1"
 DEFAULT_MIN_TOKENS = 4096
 ORDERS = ("chunk", "layer")
 PLAN_VERSION = "layer-major-v1"
@@ -86,13 +103,22 @@ def identity() -> str:
     hybrid = "/hybrid-small-v1" if hybrid_enabled() else ""
     minimum = min_tokens()
     threshold = f"/min{minimum}" if minimum != DEFAULT_MIN_TOKENS else ""
-    return f"{PLAN_VERSION}/w{window_tokens()}{hybrid}{threshold}"
+    union = UNION_SUFFIX if route_union_enabled() else ""
+    return f"{PLAN_VERSION}/w{window_tokens()}{hybrid}{threshold}{union}"
 
 
 def prefetch_enabled() -> bool:
     value = os.environ.get(FLAG_PREFETCH, "0") or "0"
     if value not in ("0", "1"):
         raise ValueError(f"{FLAG_PREFETCH} must be 0 or 1")
+    return value == "1"
+
+
+def route_union_enabled() -> bool:
+    """Route-union execution inside layer-major windows (default off). Layer prefetch is ignored while it is on."""
+    value = os.environ.get(FLAG_ROUTE_UNION, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_ROUTE_UNION} must be 0 or 1")
     return value == "1"
 
 
@@ -235,6 +261,7 @@ class ExpertWindow:
                       "prefetch_layers": 0, "prefetch_used": 0}
         self._staged = {}                       # layer_id -> prefill_ring.Staging begun on the second ring half
         self.layer_reads = []                   # trace only: [layer_id, read seconds, MLX active MB before, after]
+        self.route_union = None                 # a ``RouteUnion`` while the route-union driver owns this layer's MoE calls
 
     def prefetch(self, glu) -> bool:
         """Queue the next layer's complete expert read on the worker threads without waiting for it (opt-in).
@@ -246,6 +273,8 @@ class ExpertWindow:
         ``l`` the window holds layer ``l`` (queued earlier, consumed by its MoE call) and layer ``l+1`` (queued now): never
         more than two, never the same layer twice.
         """
+        if route_union_enabled():
+            return False                        # a layer's union of routes is unknown a layer ahead: nothing to prefetch
         if glu is not None and self.ring is not None and prefetch_enabled():
             return self._prefetch_ring(glu)
         if (glu is None or self.ring is not None or not prefetch_enabled() or getattr(glu, "layer_id", -1) < 0
@@ -320,6 +349,9 @@ class ExpertWindow:
             active_before = None
         experts = list(range(glu.gate_proj.num_experts))
         weights = None
+        recording = prefill_reads.ACTIVE[0]                   # FLASHNEXT_PREFILL_READ_STATS; None when off
+        stats_mark = prefill_reads.mark(self.ring) if recording is not None else None
+        via_ring = False
         if layer in self._prefetched:
             from models.flashnext import expert_cache
 
@@ -338,10 +370,13 @@ class ExpertWindow:
                 weights = self.ring.stage(glu.gate_proj.cache.store, glu.gate_proj.cache.prefix.rsplit(".", 1)[0], experts)
             if weights is not None:
                 self.stats["ring_layers"] += 1
+                via_ring = True
         if weights is None:
             weights = glu._read_weights((glu.gate_proj, glu.up_proj, glu.down_proj), experts)
             self.stats["fallback_layers"] += 1
         self._layer, self._weights = layer, weights
+        if recording is not None:
+            recording.note("layer", glu, experts, via_ring, self.ring, stats_mark)
         self.stats["layers"] += 1
         self.stats["read_seconds"] += time.perf_counter() - began
         try:
@@ -373,9 +408,372 @@ class ExpertWindow:
         the surrounding ring session retains its pool if fencing fails.
         """
         self.drain()                            # no read may still be writing when the operands are released
+        union, self.route_union = self.route_union, None    # stop intercepting MoE calls; ``union`` keeps its operands alive
         if self.ring is not None:
             self.ring.abort()
         self._layer = self._weights = None
+        del union
+
+    def begin_union(self, layer, glu):
+        """A ``RouteUnion`` for ``layer`` or ``UnionRefused`` (the caller then runs the all-experts path for this layer)."""
+        check_layer(layer)
+        if getattr(layer.mlp, "switch_mlp", None) is not glu:
+            raise UnionRefused("not-streamed", "the layer's switch_mlp is not the streamed block")
+        return RouteUnion(self, glu)
+
+
+# ------------------------------------------------------------------------------------------------------------ route union
+
+class UnionRefused(Exception):
+    """Route-union cannot run this layer; the all-experts layer-major path takes it. ``reason`` is a short counter key."""
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+# What the installed ``Qwen4ExpDecoderLayer.__call__`` uses (checked against its code object, so a changed or patched layer
+# is refused instead of being split by a stale copy of its body): attribute names and local variable names, in order.
+_LAYER_CALL_NAMES = frozenset({"attn_hyper_connection", "is_linear", "linear_attn", "mlp", "mlp_hyper_connection", "ple",
+                               "reshape", "self_attn", "shape"})
+_LAYER_CALL_VARNAMES = ("self", "hidden_states", "input_ids", "mask", "cache", "position_ids", "mixed", "hyper_input",
+                        "injection_weights", "branch", "injection")
+
+
+def _layer_call(cls):
+    """The function that runs a layer chunk of more than one token: the class's ``__call__``, seen through compile_glue.
+
+    ``compile_glue.apply()`` (every real load) replaces ``__call__`` with a wrapper that handles only one-token decode steps
+    itself and delegates every longer input to the original, which is what a prefill chunk of more than 8 rows reaches."""
+    call = cls.__call__
+    glue = sys.modules.get("models.flashnext.compile_glue")
+    if glue is not None and call is getattr(glue, "_decoder_call", None):
+        return glue._ORIGINAL.get("decoder")
+    return call
+
+
+def check_layer(layer) -> None:
+    """Raise ``UnionRefused`` unless ``layer`` is a stock ``Qwen4ExpDecoderLayer`` that ``layer_first_half`` reproduces."""
+    from mlx_vlm.models.qwen4_exp import language as q4
+
+    if not isinstance(layer, q4.Qwen4ExpDecoderLayer):
+        raise UnionRefused("layer-type", type(layer).__name__)
+    code = getattr(_layer_call(type(layer)), "__code__", None)
+    if code is None or frozenset(code.co_names) != _LAYER_CALL_NAMES or tuple(code.co_varnames) != _LAYER_CALL_VARNAMES:
+        raise UnionRefused("layer-code", "the decoder layer's __call__ is not the one the split was written against")
+    for name in ("attn_hyper_connection", "mlp_hyper_connection", "mlp"):
+        if getattr(layer, name, None) is None:
+            raise UnionRefused("layer-attributes", f"missing {name}")
+    if not isinstance(getattr(layer, "is_linear", None), bool):
+        raise UnionRefused("layer-attributes", "missing is_linear")
+    if getattr(layer, "linear_attn" if layer.is_linear else "self_attn", None) is None:
+        raise UnionRefused("layer-attributes", "missing attention block")
+
+
+def layer_first_half(layer, hidden_states, input_ids, mask, cache, position_ids):
+    """``Qwen4ExpDecoderLayer.__call__`` up to the MoE: returns ``(mixed, hyper_input, injection_weights)`` for ``layer.mlp``.
+
+    The layer's own sub-modules, in the order and with the expressions of the installed ``__call__`` (``check_layer`` pins it).
+    Updates ``cache`` exactly as the full layer call does."""
+    if "ple" in layer:
+        hidden_states = hidden_states + layer.ple(hidden_states, input_ids, cache, mask)
+    mixed, hyper_input, injection_weights = layer.attn_hyper_connection(hidden_states)
+    if layer.is_linear:
+        branch = layer.linear_attn(mixed, mask=mask, cache=cache)
+    else:
+        branch = layer.self_attn(mixed, mask=mask, cache=cache, position_ids=position_ids)
+    injection = branch[..., None, :] * injection_weights[..., None]
+    hidden_states = hyper_input + injection.reshape(*hyper_input.shape)
+    return layer.mlp_hyper_connection(hidden_states)
+
+
+def layer_second_half(branch, hyper_input, injection_weights):
+    """The rest of ``Qwen4ExpDecoderLayer.__call__`` after ``branch = self.mlp(mixed)``."""
+    injection = branch[..., None, :] * injection_weights[..., None]
+    return hyper_input + injection.reshape(*hyper_input.shape)
+
+
+@dataclass
+class UnionStep:
+    """One step of a layer's second phase: a group of consecutive chunks sharing one staged expert list, or one legacy chunk."""
+    chunks: list
+    experts: list = field(default_factory=list)     # sorted expert ids staged for the group (empty for a legacy step)
+    legacy: bool = False                            # routes unknown (tiny chunk, failed probe): the all-experts path runs it
+    oversize: bool = False                          # this chunk alone exceeds the ring half: ordinary read path
+
+
+def partition_groups(sets, capacity):
+    """Greedy consecutive groups of chunks whose expert union fits ``capacity`` (None: unbounded, one group).
+
+    ``sets[c]`` is chunk ``c``'s expert set, or None when its routes are unknown (it becomes a legacy step and ends the group
+    before it, so a legacy chunk never runs while a group's staged operands are still in use). A chunk whose own set exceeds
+    ``capacity`` is a single-chunk step with ``oversize`` set."""
+    steps, group, union = [], [], set()
+
+    def flush():
+        nonlocal group, union
+        if group:
+            steps.append(UnionStep(list(group), sorted(union)))
+        group, union = [], set()
+
+    for c, experts in enumerate(sets):
+        if experts is None:
+            flush()
+            steps.append(UnionStep([c], legacy=True))
+            continue
+        experts = set(experts)
+        if capacity is not None and len(experts) > capacity:
+            flush()
+            steps.append(UnionStep([c], sorted(experts), oversize=True))
+            continue
+        if group and capacity is not None and len(union | experts) > capacity:
+            flush()
+        group.append(c)
+        union |= experts
+    flush()
+    return steps
+
+
+@contextmanager
+def _probe_neutral():
+    """Run the real MoE block for its router indices only, without double counting anything it records.
+
+    The probe builds the block's graph (router, adaptive top-k, shared expert) once more than the real call does. What that
+    would have touched outside the graph is held still: the adaptive top-k patch's route observer, keep statistics and
+    ``_OVERLAP`` (which would launch the shared expert early for a result that is thrown away), and the score-sync/top-k
+    profile timers. Host-window profiling (``FLASHNEXT_HOST_WINDOW=1``) is not neutralised: it counts real host time."""
+    from models.flashnext import expert_cache
+
+    timers = expert_cache._TIMERS
+    keys = [k for k in timers if k.startswith("score_sync") or k in ("topk_python", "shared_expert", "router_sync")]
+    saved_timers = {k: timers[k] for k in keys}
+    adaptive = sys.modules.get("models.flashnext.adaptive_topk")
+    saved = None
+    if adaptive is not None:
+        saved = (adaptive._OVERLAP[0], adaptive._ROUTE_OBSERVER[0], adaptive._KEEP_SUM[0], adaptive._KEEP_COUNT[0],
+                 dict(adaptive._LAST_KEEPS))
+        adaptive._OVERLAP[0] = False
+        adaptive._ROUTE_OBSERVER[0] = None
+    try:
+        yield
+    finally:
+        timers.update(saved_timers)
+        if adaptive is not None:
+            adaptive._OVERLAP[0], adaptive._ROUTE_OBSERVER[0], adaptive._KEEP_SUM[0], adaptive._KEEP_COUNT[0] = saved[:4]
+            adaptive._LAST_KEEPS.clear()
+            adaptive._LAST_KEEPS.update(saved[4])
+
+
+class RouteUnion:
+    """One streamed layer's route-union state inside an ``ExpertWindow`` (see the module docstring).
+
+    ``StreamingSwitchGLU.__call__`` hands every prompt-sized call to ``call`` while ``window.route_union`` is this object:
+    in ``probe`` mode it records the router indices and returns a zero placeholder (no read, no ring use); in ``run`` mode it
+    runs the layer's ``_issue`` on the staged operands with the indices remapped to staged positions."""
+
+    def __init__(self, window, glu):
+        self.window = window
+        self.glu = glu
+        self.mode = "probe"
+        self.recorded = []                      # indices of the probed calls (probe mode)
+        self.checks = []                        # lazy "every routed expert is staged" flags (run mode)
+        self.weights = self.table = self.member = None
+        self.num_experts = int(glu.gate_proj.num_experts)
+        self.groups = []                        # one dict per staged group (trace)
+
+    # -- the MoE call ----------------------------------------------------------------------------------------------------
+    def call(self, glu, x, indices, allow_sort):
+        from models.flashnext import expert_cache
+
+        # Side effects of ``StreamingSwitchGLU.__call__`` handled here, one by one:
+        #  * the progress observer (cancellation point and watchdog tick) runs on every call, probe included, so a cancel is
+        #    honoured during phase A as well as phase B;
+        #  * a stale ``_routed_host`` hand-off is dropped (only the adaptive one-sync decode path sets it);
+        #  * the router sync and ``_ROUTE_TRACE`` belong to the ordinary path, which this never takes: the trace callback is
+        #    called once per chunk in run mode from the indices the probe already synchronised.
+        observer = expert_cache._PREFILL_PROGRESS
+        if observer is not None:
+            observer(glu.layer_id)
+        if getattr(glu, "_routed_host", None) is not None:
+            object.__setattr__(glu, "_routed_host", None)
+        if self.mode == "probe":
+            self.recorded.append(indices)
+            return mx.zeros((*indices.shape, glu.down_proj.output_dims), dtype=x.dtype)
+        if self.weights is None:
+            raise RuntimeError("route-union: MoE call with no staged experts")
+        self.checks.append(mx.all(self.member[indices]))
+        local = self.table[indices]
+        if expert_cache._ROUTE_TRACE[0] is not None:
+            expert_cache._ROUTE_TRACE[0](glu.layer_id, indices.reshape(-1).tolist())
+        return glu._issue(mx.expand_dims(x, (-2, -3)), indices, (glu.gate_proj, glu.up_proj, glu.down_proj), local,
+                          self.weights, allow_sort, time.perf_counter() if expert_cache._PROFILE else 0.0)
+
+    # -- staging ---------------------------------------------------------------------------------------------------------
+    def capacity(self):
+        """Experts one staging may hold: the ring half, or None (no ring, or the ring has disabled itself)."""
+        ring = self.window.ring
+        if ring is None or getattr(ring, "disabled", None):
+            return None
+        try:
+            return int(ring.ring.half_experts)
+        except Exception:
+            return None
+
+    def stage(self, wanted, routed_hosts):
+        """Read ``wanted`` (sorted expert ids) once and make it the operand of the next chunks: ring first, else the layer's
+        own read path. ``routed_hosts`` are the group's routed ids (host lists), used only to seed the decode pool."""
+        from models.flashnext import expert_cache
+
+        glu, window = self.glu, self.window
+        ring = window.ring
+        began = time.perf_counter()
+        try:
+            active_before = round(mx.get_active_memory() / 1e6)
+        except Exception:
+            active_before = None
+        recording = prefill_reads.ACTIVE[0]
+        stats_mark = prefill_reads.mark(ring) if recording is not None else None
+        expert_cache._prefill_trace("prefill_expert_fetch_begin", layer=glu.layer_id, experts=len(wanted))
+        weights = None
+        if ring is not None:
+            weights = ring.stage(glu.gate_proj.cache.store, glu.gate_proj.cache.prefix.rsplit(".", 1)[0], wanted)
+        via_ring = weights is not None
+        if via_ring and os.environ.get("FLASHNEXT_PREFILL_SEED_DECODE") == "1" and ring.pending is not None:
+            routed = [e for host in routed_hosts for e in host]
+            ring.seed_decode(glu.layer_id, {e: i for i, e in enumerate(wanted)}, routed)
+        if weights is None:
+            weights = glu._read_weights((glu.gate_proj, glu.up_proj, glu.down_proj), wanted)
+        expert_cache._prefill_trace("prefill_expert_fetch_end", layer=glu.layer_id,
+                                    seconds=round(time.perf_counter() - began, 3))
+        lookup = np.zeros(self.num_experts, dtype=np.uint32)
+        lookup[wanted] = np.arange(len(wanted), dtype=np.uint32)
+        member = np.zeros(self.num_experts, dtype=bool)
+        member[wanted] = True
+        self.table, self.member, self.weights = mx.array(lookup), mx.array(member), weights
+        elapsed = time.perf_counter() - began
+        nbytes = len(wanted) * prefill_reads.expert_bytes(glu)
+        stats = window.stats
+        stats["layers"] += 1
+        stats["ring_layers" if via_ring else "fallback_layers"] += 1
+        stats["bytes"] += nbytes
+        stats["read_seconds"] += elapsed
+        try:
+            window.layer_reads.append([glu.layer_id, round(elapsed, 3), active_before, round(mx.get_active_memory() / 1e6)])
+        except Exception:
+            pass
+        if recording is not None:
+            recording.note("layer-union", glu, wanted, via_ring, ring, stats_mark)
+        self.groups.append({"experts": len(wanted), "ring": via_ring, "bytes": nbytes})
+
+    def release(self) -> None:
+        """Drop the staged operands and free the ring half. Call only after every graph that used them was evaluated."""
+        self.weights = self.table = self.member = None
+        if self.window.ring is not None:
+            self.window.ring._retire()
+
+
+def _union_layer(window, union, layer, index, states, inputs, positions, cache, mask_for, chunk_spans, freeze_edges, report,
+                 count):
+    """One layer in route-union order. Updates ``states`` in place; returns per-chunk (seconds, MLX active MB) lists.
+
+    Phase A (every chunk in order): the layer's first half with the layer's cache, the cache state made concrete (the inner
+    snapshot freeze happens here, right after the layer finished that chunk's cache update, as in the chunk loop), then the
+    chunk's router indices through the real MoE block in probe mode (a chunk of at most 8 tokens runs the whole layer here). Phase B (group by group): stage the group's experts,
+    then run the real MoE block and the second half of every chunk of the group, evaluating each chunk as the chunk loop does."""
+    n = len(inputs)
+    seconds = [0.0] * n
+    memory = [None] * n
+    firsts = [None] * n
+    sets = [None] * n                           # per chunk: sorted unique routed experts, None when unknown
+    hosts = [None] * n                          # per chunk: every routed id (host list), for decode seeding
+    layer_cache = cache[index]
+    window.route_union = union
+
+    def freeze(c):
+        if chunk_spans[c][1] in freeze_edges and c + 1 < n:
+            from models.flashnext import prefix_cache
+
+            report.frozen.setdefault(chunk_spans[c][1], [None] * count)[index] = prefix_cache.freeze_cache(layer_cache)
+
+    for c, chunk in enumerate(inputs):
+        began = time.perf_counter()
+        if chunk.size <= TINY_CHUNK_TOKENS:
+            # A decode-sized chunk never takes the window path of the MoE call (and compile_glue may route a one-token layer
+            # call differently): run the layer whole, exactly as the chunk loop does, at its place in this phase.
+            states[c] = layer(states[c], chunk, mask=mask_for(c), cache=layer_cache, position_ids=positions[c])
+            mx.eval(states[c], layer_cache.state)
+            freeze(c)
+            seconds[c] += time.perf_counter() - began
+            memory[c] = _active_mb()
+            continue
+        mixed, hyper_input, injection_weights = layer_first_half(layer, states[c], chunk, mask_for(c), layer_cache,
+                                                                 positions[c])
+        union.recorded.clear()
+        union.mode = "probe"
+        with _probe_neutral():
+            layer.mlp(mixed)                    # the placeholder result is discarded unevaluated
+        if len(union.recorded) != 1:
+            union.recorded.clear()
+            report.union_refused["probe-count"] = report.union_refused.get("probe-count", 0) + 1
+        mx.eval(mixed, hyper_input, injection_weights, layer_cache.state, union.recorded)
+        freeze(c)
+        if union.recorded:
+            flat = np.array(union.recorded[0]).reshape(-1)
+            sets[c], hosts[c] = np.unique(flat).tolist(), flat.tolist()
+        union.recorded.clear()
+        firsts[c] = (mixed, hyper_input, injection_weights)
+        seconds[c] += time.perf_counter() - began
+
+    pending = [c for c in range(n) if firsts[c] is not None]       # chunks whose second half is still to run
+    steps = partition_groups([sets[c] for c in pending], union.capacity())
+    for step in steps:
+        chunks = [pending[i] for i in step.chunks]
+        if step.legacy:
+            began = time.perf_counter()
+            c = chunks[0]
+            window.route_union = None           # the existing path: all experts of the layer for >8 rows
+            mixed, hyper_input, injection_weights = firsts[c]
+            states[c] = layer_second_half(layer.mlp(mixed), hyper_input, injection_weights)
+            mx.eval(states[c])
+            firsts[c] = None
+            window.end_layer()                  # never reuse its operands once a later group may recycle the ring half
+            seconds[c] += time.perf_counter() - began
+            memory[c] = _active_mb()
+            continue
+        window.route_union = union
+        union.stage(step.experts, [hosts[c] for c in chunks])
+        for c in chunks:
+            began = time.perf_counter()
+            union.mode = "run"
+            mixed, hyper_input, injection_weights = firsts[c]
+            branch = layer.mlp(mixed)
+            if len(union.checks) != 1:
+                raise RuntimeError("route-union: the MoE block did not call the streamed experts exactly once")
+            routed_ok = union.checks.pop()
+            states[c] = layer_second_half(branch, hyper_input, injection_weights)
+            mx.eval(states[c], routed_ok)       # the chunk's graph (and its flag) is complete before the next chunk or group
+            if not bool(routed_ok.item()):
+                raise RuntimeError("route-union: a chunk routed outside its staged experts (probe and execution disagree)")
+            firsts[c] = None
+            seconds[c] += time.perf_counter() - began
+            memory[c] = _active_mb()
+        union.release()
+    window.route_union = None
+
+    groups = [step for step in steps if not step.legacy]
+    ring_groups = sum(1 for g in union.groups if g["ring"])
+    report.union_layers += 1
+    report.union.append([union.glu.layer_id,
+                         len({e for s in sets if s for e in s}), sum(len(s) for s in sets if s), len(groups), ring_groups,
+                         len(union.groups) - ring_groups, sum(g["bytes"] for g in union.groups)])
+    return seconds, memory
+
+
+def _active_mb():
+    try:
+        return round(mx.get_active_memory() / 1e6)
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------------------------------------------- driver
@@ -403,6 +801,9 @@ def _position_ids(language, inputs, offset: int, cache):
     return position_ids
 
 
+UNION_COLUMNS = ("layer", "union", "chunk_sets", "groups", "ring_groups", "fallback_groups", "expert_bytes")
+
+
 @dataclass
 class WindowReport:
     tokens: int = 0
@@ -419,6 +820,31 @@ class WindowReport:
     fallback_layers: int = 0
     prefetch_layers: int = 0
     frozen: dict = field(default_factory=dict)              # relative chunk edge -> per-layer frozen caches (inner snapshots)
+    # Route-union order only (empty otherwise). ``union`` rows follow ``UNION_COLUMNS``; ``union_refused`` counts why a layer
+    # (or a chunk's probe) fell back to the all-experts path. ``ring_layers``/``fallback_layers`` above count staged GROUPS here.
+    union_layers: int = 0
+    union: list = field(default_factory=list)
+    union_refused: dict = field(default_factory=dict)
+
+    def union_summary(self) -> dict:
+        rows = self.union
+        return {"layers": self.union_layers, "refused": dict(self.union_refused), "columns": list(UNION_COLUMNS),
+                "per_layer": [list(row) for row in rows],
+                "union_experts": sum(row[1] for row in rows), "chunk_set_experts": sum(row[2] for row in rows),
+                "groups": sum(row[3] for row in rows), "ring_groups": sum(row[4] for row in rows),
+                "fallback_groups": sum(row[5] for row in rows), "expert_gb": round(sum(row[6] for row in rows) / 1e9, 3)}
+
+
+def _begin_union(window, layer, report):
+    """A ``RouteUnion`` for this layer, or None after counting why the all-experts path runs it instead."""
+    glu = _streamed_glu(layer)
+    try:
+        if glu is None:
+            raise UnionRefused("not-streamed", "no StreamingSwitchGLU")
+        return window.begin_union(layer, glu)
+    except UnionRefused as refusal:
+        report.union_refused[refusal.reason] = report.union_refused.get(refusal.reason, 0) + 1
+        return None
 
 
 def _streamed_glu(layer):
@@ -461,6 +887,16 @@ def run_window(language, ids, cache, chunk_spans, offset: int, window=None, chec
     ssm_masks = [None] * len(chunk_spans)
     from mlx_vlm.models.qwen4_exp import language as q4
 
+    def mask_for(index, layer, c):
+        if index == body.fa_idx:
+            # The model builds the mask from the first full-attention cache before any layer runs, i.e. at this
+            # chunk's start offset; the cache is at exactly that offset here too.
+            fa_masks[c] = q4._create_qwen3_5_attention_mask(states[c], cache[body.fa_idx])
+        if index == body.ssm_idx:
+            ssm_masks[c] = q4._create_qwen3_5_ssm_mask(states[c], cache[body.ssm_idx])
+        return ssm_masks[c] if layer.is_linear else fa_masks[c]
+
+    use_union = window is not None and hasattr(window, "begin_union") and route_union_enabled()
     previous = expert_cache._LAYER_WINDOW[0]
     expert_cache._LAYER_WINDOW[0] = window
     try:
@@ -471,27 +907,30 @@ def run_window(language, ids, cache, chunk_spans, offset: int, window=None, chec
                 prefetch(_streamed_glu(layers[index + 1]))      # overlaps this layer's compute (opt-in, no-op otherwise)
             chunk_times = []
             chunk_memory = []
-            for c, chunk in enumerate(inputs):
-                chunk_began = time.perf_counter()
-                if index == body.fa_idx:
-                    # The model builds the mask from the first full-attention cache before any layer runs, i.e. at this
-                    # chunk's start offset; the cache is at exactly that offset here too.
-                    fa_masks[c] = q4._create_qwen3_5_attention_mask(states[c], cache[body.fa_idx])
-                if index == body.ssm_idx:
-                    ssm_masks[c] = q4._create_qwen3_5_ssm_mask(states[c], cache[body.ssm_idx])
-                mask = ssm_masks[c] if layer.is_linear else fa_masks[c]
-                states[c] = layer(states[c], chunk, mask=mask, cache=cache[index], position_ids=positions[c])
-                # One evaluation per (layer, chunk): bounds the lazy graph and keeps the cache arrays concrete.
-                mx.eval(states[c], cache[index].state)
-                if chunk_spans[c][1] in freeze_edges and c + 1 < len(chunk_spans):
-                    from models.flashnext import prefix_cache
+            union = None
+            if use_union:
+                union = _begin_union(window, layer, report)
+            if union is not None:
+                seconds, chunk_memory = _union_layer(window, union, layer, index, states, inputs, positions, cache,
+                                                     lambda c, index=index, layer=layer: mask_for(index, layer, c),
+                                                     chunk_spans, freeze_edges, report, count)
+                chunk_times = [round(value, 3) for value in seconds]
+            else:
+                for c, chunk in enumerate(inputs):
+                    chunk_began = time.perf_counter()
+                    mask = mask_for(index, layer, c)
+                    states[c] = layer(states[c], chunk, mask=mask, cache=cache[index], position_ids=positions[c])
+                    # One evaluation per (layer, chunk): bounds the lazy graph and keeps the cache arrays concrete.
+                    mx.eval(states[c], cache[index].state)
+                    if chunk_spans[c][1] in freeze_edges and c + 1 < len(chunk_spans):
+                        from models.flashnext import prefix_cache
 
-                    report.frozen.setdefault(chunk_spans[c][1], [None] * count)[index] = prefix_cache.freeze_cache(cache[index])
-                chunk_times.append(round(time.perf_counter() - chunk_began, 3))
-                try:
-                    chunk_memory.append(round(mx.get_active_memory() / 1e6))
-                except Exception:
-                    chunk_memory.append(None)
+                        report.frozen.setdefault(chunk_spans[c][1], [None] * count)[index] = prefix_cache.freeze_cache(cache[index])
+                    chunk_times.append(round(time.perf_counter() - chunk_began, 3))
+                    try:
+                        chunk_memory.append(round(mx.get_active_memory() / 1e6))
+                    except Exception:
+                        chunk_memory.append(None)
             report.chunk_seconds.append(chunk_times)
             report.chunk_memory_mb.append(chunk_memory)
             if window is not None:
@@ -514,6 +953,8 @@ def run_window(language, ids, cache, chunk_spans, offset: int, window=None, chec
         raise
     finally:
         expert_cache._LAYER_WINDOW[0] = previous
+        if use_union:
+            window.route_union = None
         drain = getattr(window, "drain", None)
         if drain is not None:
             drain()

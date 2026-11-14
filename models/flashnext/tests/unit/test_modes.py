@@ -24,7 +24,7 @@ class FlagNameTests(unittest.TestCase):
                  store.FLAG_UNCACHED_EXPERT_READS, layer_major.FLAG_PREFETCH,
                  expert_pool.BUFFERED_FILL_FLAG, ngram.FLAG_DEDUP, memory_controller.FLAG_SWAP_CEILING,
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
-                 prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS}
+                 prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):

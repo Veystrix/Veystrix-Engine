@@ -29,7 +29,7 @@ from veystrix.bench.telemetry import current as benchmark_trace
 
 from mlx_vlm.models.switch_layers import _gather_sort, _scatter_unsort
 
-from . import hostwindow
+from . import hostwindow, prefill_reads
 from .slab_pack import (
     DOWN_BIASES_OFFSET,
     DOWN_SCALES_OFFSET,
@@ -1752,6 +1752,11 @@ class StreamingSwitchGLU(nn.Module):
         flat_input = x.reshape(-1, x.shape[-1])
         window = _LAYER_WINDOW[0]
         if window is not None and scores is None and self.layer_id >= 0 and flat_input.shape[0] > 8:
+            union = getattr(window, "route_union", None)
+            if union is not None:
+                # Route-union layer-major (FLASHNEXT_PREFILL_ROUTE_UNION): the driver is probing this chunk's routes or running
+                # it on a staged subset of the layer's experts. ``window.route_union`` is None unless that flag is on.
+                return union.call(self, x, indices, allow_sort)
             observer = _PREFILL_PROGRESS
             if observer is not None:
                 observer(self.layer_id)             # cancellation point and watchdog tick, before the layer's read
@@ -2032,6 +2037,10 @@ class StreamingSwitchGLU(nn.Module):
             ).reshape(indices.shape)
         weights = None
         ring = _PREFILL_RING[0]
+        # FLASHNEXT_PREFILL_READ_STATS: a multi-row (prefill) read is counted; ``recording`` is None when the flag is off.
+        recording = prefill_reads.ACTIVE[0] if flat_input.shape[0] > 8 else None
+        stats_mark = prefill_reads.mark(ring) if recording is not None else None
+        via_ring = False
         trace_began = time.perf_counter()
         _prefill_trace("prefill_expert_fetch_begin", layer=self.layer_id, experts=len(wanted))
         try:
@@ -2042,10 +2051,13 @@ class StreamingSwitchGLU(nn.Module):
                     self.gate_proj.cache.store,
                     self.gate_proj.cache.prefix.rsplit(".", 1)[0], wanted,
                 )
+                via_ring = weights is not None
                 if weights is not None and os.environ.get("FLASHNEXT_PREFILL_SEED_DECODE") == "1":
                     ring.seed_decode(self.layer_id, order, routed)
             if weights is None:
                 weights = self._read_weights(projections, wanted)
+            if recording is not None:
+                recording.note("chunk", self, wanted, via_ring, ring, stats_mark)
         except BaseException as exc:
             _prefill_trace("prefill_expert_fetch_error", layer=self.layer_id, error=type(exc).__name__,
                            seconds=round(time.perf_counter() - trace_began, 3))

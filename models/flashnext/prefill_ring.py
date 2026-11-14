@@ -116,10 +116,11 @@ def ring_halves() -> int:
     """Ring halves for this prefill: 2 when layer-major prefetch asks for the overlapped ring, else 1.
 
     Two halves let the next layer's rows be read while the current layer computes; the scratch pool grows by one half
-    (about 1.5 GB at 512 experts). Off unless layer-major and layer-prefetch are both enabled."""
+    (about 1.5 GB at 512 experts). Off unless layer-major and layer-prefetch are both enabled. The route-union order
+    (``FLASHNEXT_PREFILL_ROUTE_UNION``) ignores layer prefetch (a layer's union is unknown a layer ahead), so it keeps one half."""
     from . import layer_major
 
-    return 2 if layer_major.enabled() and layer_major.prefetch_enabled() else 1
+    return 2 if layer_major.enabled() and layer_major.prefetch_enabled() and not layer_major.route_union_enabled() else 1
 
 
 def scratch_enabled() -> bool:

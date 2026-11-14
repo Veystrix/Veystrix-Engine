@@ -23,3 +23,7 @@ The opt-in cooperative HTTP path already admits separate request states and favo
 ## Return
 
 Return the code change, benchmark command, result-directory links, exact model and executable identities, and enough raw evidence to reproduce the result. Keep exact greedy parity, sampled-distribution parity and approximate quantization results identifiable by configuration. Freeze flags only after the release gate passes on both checkpoints.
+
+## Status
+
+The outcome of this brief, the app verification and the list of work still open are in [the 14 November handover](handoff-2026-11-14.md).

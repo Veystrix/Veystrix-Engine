@@ -19,3 +19,21 @@ Run before every release. "Ran" means executed on this repo state; "NOT RUN" mea
 | Layer-major long-lived server safety; 16K+ throughput; logit-level equivalence | — | **NOT RUN — OWNER TRAVELLING** |
 | Hardware validation of the signed app (entitlements for MLX/Metal) | — | **NOT RUN** |
 | Interactive chat flow test; `test_safe_memory_preflight` | — | **NOT RUN** |
+
+## Status on 2026-11-14 (branch `unlimited-generation`, local commits only)
+
+The table above is the 10 November record. These checks were run again on 14 November; details and evidence paths are in [the handover](../performance/handoff-2026-11-14.md).
+
+| Check | Status on 14 November |
+|---|---|
+| Shared runtime unit tests | Ran: 933 OK (11 skipped) |
+| Flash-Next unit tests | Ran: 2253 OK (3 skipped) |
+| Nemotron unit tests | Ran: 171 OK (8 skipped) |
+| Swift app logic tests | Ran: 71 pass |
+| Engine bundle build + import smoke | Ran: passed (`dist/engine-20261114`). A bundle built between `a86802d` and `b0d786d` could not start a model |
+| App builds (ad-hoc, free channel) and launches with engine stopped | Ran: opens, starts no engine, quits, no crash report |
+| Real-checkpoint launch and chat through the packaged engine | Ran under the run guard with the owner's saved settings: Nemotron and Qwen each answered one plain and one streaming chat completion; Qwen also with the low-memory prefill setting |
+| Interactive chat flow in the app window | **NOT RUN** (nobody clicked through the app) |
+| Installed app in `/Applications` | **NOT UPDATED**: still the 13 November build |
+| Developer ID signing, notarization, Sparkle appcast | **NOT RUN — no credentials** |
+| 20 tok/s release gate | **OPEN on both models** (Flash-Next 2.25–2.86 tok/s, Nemotron 5.3–6.5 tok/s) |

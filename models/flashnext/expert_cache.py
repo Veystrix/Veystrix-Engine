@@ -1968,12 +1968,25 @@ class StreamingSwitchGLU(nn.Module):
         hidden_size = flat_input.shape[-1]
         width = indices.shape[-1]
         tokens = flat_input.shape[0]
-        local = mx.array(
-            [SLOT_BIT | slots[e] for e in routed], dtype=mx.uint32,
-        ).reshape(tokens, width)
+        pool_routes = [SLOT_BIT | slots[e] for e in routed]
+        local = mx.array(pool_routes, dtype=mx.uint32).reshape(tokens, width)
         weights = self._get_dummy_streamed_weights(hidden_size)
         executor = self._executor(("pool", hidden_size, width), width, hidden_size, width)
         options = {}
+        if (os.environ.get("FLASHNEXT_METAL_BLOCK_MOE") == "1" and tokens >= 2
+                and executor.available and resident_activation is None):
+            # Multi-row verification: experts shared between rows are read
+            # once. Two pairs per group measured fastest in every routing
+            # pattern; FLASHNEXT_METAL_BLOCK_MOE_ROWS=4 or 8 selects more.
+            from .metal_runtime import block_plan
+
+            requested = os.environ.get("FLASHNEXT_METAL_BLOCK_MOE_ROWS")
+            rows = int(requested) if requested in ("4", "8") else 2
+            group_routes, group_pairs = block_plan(pool_routes, rows)
+            options["block"] = (
+                mx.array(group_routes, dtype=mx.uint32),
+                mx.array(group_pairs, dtype=mx.uint32),
+            )
         if resident_activation is not None:
             missing_count = len(missing_positions)
             missing_executor = self._executor(("pool", hidden_size, missing_count),

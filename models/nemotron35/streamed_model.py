@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from pathlib import Path
 
 import mlx.core as mx
@@ -117,10 +118,54 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
             # MOE-04/05: the layer after next is prefetched from the previous pass's routes when opted in.
             switch.lookahead_layer = (moe_layers[position + 2]
                                       if position + 2 < len(moe_layers) else None)
-    pack_path = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_PACK")
-    if pack_path:
-        from models.shared.expert_pack import ExpertPack
-
-        reader.pack = ExpertPack(Path(pack_path).expanduser(), root, index, "nemotron35")
+    try:
+        _attach_pack(reader, root, index)
+    except BaseException:
+        pool.close()
+        reader.close()
+        raise
     dense_bytes = sum(v.nbytes for v in dense.values())
     return StreamedModel(model, pool, reader, config, dense_bytes)
+
+
+def _attach_pack(reader, root, index) -> None:
+    """Open the expert pack, if any, and decide how it is used.
+
+    ``VEYSTRIX_NEMOTRON_EXPERT_MAP``: ``0`` (default) never maps; ``auto`` maps the pack found at its default
+    path for this checkpoint and otherwise streams from the shards; ``1`` requires a mapped pack.
+    ``VEYSTRIX_NEMOTRON_EXPERT_PACK`` names a pack explicitly. Without ``…_MAP=1`` an explicit pack keeps its
+    earlier meaning: positioned reads from the pack."""
+    from models.shared.expert_pack import ExpertPack, default_path
+
+    from .streamed_experts import MAP_FLAG
+
+    mode = (os.environ.get(MAP_FLAG) or "0").strip().lower()
+    if mode not in ("auto", "0", "1"):
+        raise ValueError(f"{MAP_FLAG} must be auto, 0 or 1")
+    explicit = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_PACK")
+    if explicit and mode != "1":
+        reader.pack = ExpertPack(Path(explicit).expanduser(), root, index, "nemotron35")
+        return
+    if mode == "0":
+        return
+    path = Path(explicit).expanduser() if explicit else default_path(root, index, "nemotron35")
+    if not path.is_file():
+        if mode == "1":
+            raise CheckpointError(f"{MAP_FLAG}=1 but there is no expert pack at {path}; build one with "
+                                  "python -m models.shared.pack_experts nemotron35 <checkpoint>")
+        return
+    try:
+        pack = ExpertPack(path, root, index, "nemotron35", mapped=True)
+    except (OSError, ValueError) as error:
+        if mode == "1":
+            raise CheckpointError(f"expert pack {path} cannot be used: {error}") from error
+        print(f"expert pack {path} ignored ({error}); streaming experts from the checkpoint", file=sys.stderr)
+        return
+    reader.pack = pack
+    if not reader.use_mapping():
+        pack.close()
+        reader.pack = None
+        if mode == "1":
+            raise CheckpointError(f"expert pack {path} does not cover every routed layer on aligned records")
+        print(f"expert pack {path} ignored (partial or unaligned); streaming experts from the checkpoint",
+              file=sys.stderr)

@@ -118,11 +118,20 @@ def budget(machine: Machine) -> int:
 
 def make_plan(config: dict, machine: Machine, *, dense_bytes: int, context_tokens: int | None = None,
               chunk_tokens: int = 2048, pool_bytes: int | None = None, allocator_slack: int = GIB // 2,
-              shrink: bool = True, int8_kv: bool = False, lightning: bool = False, prefix_cache_bytes: int = 0) -> Plan:
+              shrink: bool = True, int8_kv: bool = False, lightning: bool = False, prefix_cache_bytes: int = 0,
+              routed_expert_bytes: int | None = None) -> Plan:
     """Fit context, chunk and pool into the budget, shrinking pool, then chunk; refuse if the core cannot fit.
 
     ``pool_bytes=None`` sizes the expert pool automatically: as large as fits (up to AUTO_POOL_MAX) while leaving
-    AUTO_POOL_HEADROOM of the budget unplanned. A larger pool means more expert hits and fewer SSD reads."""
+    AUTO_POOL_HEADROOM of the budget unplanned.
+
+    When ``routed_expert_bytes`` is given and the machine cannot hold the routed experts in memory beside the
+    dense core and the OS reserve, the automatic size is zero. On such a machine the kernel's file cache is the
+    expert cache, and a pool takes its memory from that cache while holding copies of what the cache held a
+    moment ago: decode routes through four fifths of all experts within 128 tokens, so the pool turns over every
+    few tokens. Measured on the 16 GB M4 with the real checkpoint (INT8 KV, 128 tokens after a prefix hit, three
+    rounds each, 14 November 2026): no pool 7.1-7.4 tok/s and 195-202 MB read per token; 2 GiB 6.4-7.2 and
+    245-260 MB; 3 GiB 5.3-5.5 and 290 MB. An explicit size is never overridden."""
     swap_only = swap_only_benchmark()
     if machine.pressure >= 4 and not swap_only:
         raise AdmissionRefused('system memory pressure is critical; retry when it falls')
@@ -140,6 +149,9 @@ def make_plan(config: dict, machine: Machine, *, dense_bytes: int, context_token
                             + (INT8_ATTENTION_SCRATCH_BYTES if int8_kv else 0)),
                         reserve_bytes=allocator_slack + prefix_cache_bytes, int8_kv=int8_kv)
 
+    if pool_bytes is None and routed_expert_bytes is not None and not pool_pays_off(
+            machine, dense_bytes=dense_bytes, routed_expert_bytes=routed_expert_bytes):
+        pool_bytes = 0
     if pool_bytes is None:
         base = build(0, chunk_tokens).total_bytes
         room = limit - base - AUTO_POOL_HEADROOM
@@ -167,6 +179,11 @@ def make_plan(config: dict, machine: Machine, *, dense_bytes: int, context_token
         f'insufficient memory: even without an expert pool the model needs about {est.total_bytes / GIB:.2f} GiB '
         f'(dense core {dense_bytes / GIB:.2f} GiB, context {context_tokens}) but only {limit / GIB:.2f} GiB '
         f'may be planned (available {machine.available / GIB:.2f} GiB). Close apps or lower the context.')
+
+
+def pool_pays_off(machine: Machine, *, dense_bytes: int, routed_expert_bytes: int) -> bool:
+    """Whether this machine can keep every routed expert in memory beside the dense core and the OS reserve."""
+    return machine.total >= dense_bytes + routed_expert_bytes + max(MIN_OS_RESERVE, machine.total // 4)
 
 
 def check_request(plan: Plan, machine: Machine, *, new_tokens: int, cached_tokens: int) -> None:

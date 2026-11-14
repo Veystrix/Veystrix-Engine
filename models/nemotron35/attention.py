@@ -1,6 +1,8 @@
 """Block-backed affine INT8 attention for the streamed Nemotron-H mixer."""
 from __future__ import annotations
 
+import os
+
 import mlx.core as mx
 from mlx_lm.models.cache import QuantizedKVCache
 from mlx_lm.models.nemotron_h import NemotronHAttention
@@ -11,6 +13,13 @@ FORMAT = "affine-int8-g64"
 GROUP_SIZE = 64
 BLOCK_TOKENS = 4096
 QUERY_TOKENS = 128
+# The running softmax is evaluated after every 4,096-token block so a prefill chunk's score scratch stays bounded
+# (128 queries x 32 heads x 4,096 keys is 67 MB per block). One decoded token needs 0.5 MB per block, and the
+# evaluation is then only a GPU round trip per block and layer: 48 of them per token at 30K context. Decode leaves
+# the blocks to the caller's single evaluation. Same operations in the same order, bit-identical output; measured
+# with the real model's attention shape, per token over six layers: 32.0 -> 9.8 ms at 20K, 54.5 -> 16.9 ms at 30K.
+# Set to 1 to evaluate after every block for decode as well.
+BLOCK_EVAL_FLAG = "VEYSTRIX_NEMOTRON_ATTENTION_BLOCK_EVAL"
 
 
 class AttentionCache:
@@ -88,6 +97,7 @@ def attend(queries, cache, scale):
     kv_heads = cache.blocks[0].keys[0].shape[-3]
     dtype = queries.dtype
     offset = cache.offset - length
+    bounded = length > 1 or os.environ.get(BLOCK_EVAL_FLAG) == "1"
     outputs = []
     for start in range(0, length, QUERY_TOKENS):
         end = min(length, start + QUERY_TOKENS)
@@ -120,7 +130,8 @@ def attend(queries, cache, scale):
                 total = total + normalizer * correction
                 result = result + weighted * correction
             previous_max, normalizer, weighted = maximum, total, result
-            mx.eval(previous_max, normalizer, weighted)
+            if bounded:
+                mx.eval(previous_max, normalizer, weighted)
         outputs.append((weighted / normalizer).reshape(batch, heads, end - start, dim).astype(dtype))
     return mx.concatenate(outputs, axis=2)
 

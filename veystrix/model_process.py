@@ -48,8 +48,12 @@ class ProcessDriver:
             features.append("short-throughput")
         if is_flashnext and self.flashnext_bounded_prefill:
             features.append("prefill-16gb")
+        # The pool setting is Flash-Next's. Nemotron sizes its own pool from the machine (none on a Mac that
+        # cannot hold its experts in memory, where a pool measured slower: models/nemotron35/admission.py).
+        # VEYSTRIX_NEMOTRON_POOL_GB in the router's environment still fixes a size.
+        nemotron_pool = os.environ.get("VEYSTRIX_NEMOTRON_POOL_GB") or "auto"
         args = Namespace(model=model.family, checkpoint=model.checkpoint, host="127.0.0.1", port=port,
-                         pool_gb=("auto" if model.family == "nemotron35-lightning" and self.pool_gb == "0" else self.pool_gb),
+                         pool_gb=(nemotron_pool if model.family == "nemotron35-lightning" else self.pool_gb),
                          enable=features, prefix_dir=self.prefix_dir,
                          preferences_file=None, no_auto_purge=is_flashnext and self.flashnext_memory_policy == "absolute-swap-only",
                          threshold=1.0 if tiered else None)

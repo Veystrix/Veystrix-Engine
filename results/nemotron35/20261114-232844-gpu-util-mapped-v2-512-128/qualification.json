@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "status": "stopped",
+  "model": "nemotron35",
+  "checkpoint": "/Users/vincent/models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit-mlx-community",
+  "prompt_tokens": 512,
+  "output_tokens": 128,
+  "mode": "cold-process",
+  "concurrency": 1,
+  "warmup_excluded_tokens": 0,
+  "expected_token_sha256": null,
+  "reference_host": {
+    "code": {
+      "commit": "c0ec5d94754b6d6cfb6a8bc0aa76537f666efd78",
+      "tracked_diff_sha256": "b93ed327d8627318ea5e7ec527b35a2f3b96c1493d003b1f9b5470fd7c18295c"
+    },
+    "dependencies": {
+      "python": "3.12.16",
+      "mlx": "0.32.2",
+      "mlx-lm": "0.31.3",
+      "mlx-vlm": "0.6.17"
+    },
+    "host": {
+      "platform": "macOS-27.2-arm64-arm-64bit",
+      "macos": "27.2",
+      "model": "Mac16,12",
+      "soc": "Apple M4",
+      "ram_bytes": 17179869184,
+      "storage": {
+        "device": null,
+        "media": null,
+        "solid_state": null,
+        "device_bytes": null,
+        "filesystem_bytes": 494384795648,
+        "filesystem_free_bytes": 131808362496
+      },
+      "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35586147)\t80%; AC attached; not charging present: true",
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+    }
+  },
+  "checkpoint_metadata": {
+    "config.json": "2d4bdc543efd8ccd68fccbf1231b1d1216ab2a0482229ea5638d448127973b27",
+    "generation_config.json": "0ed94823ae737b507aef6af01e837041b7aa2fb0306793a310cd201d89a31ff4",
+    "model.safetensors.index.json": "4c12ae32746441ec65e94d8cf312462ac10ab0d3c80513bba3d1c1ca3f2ed9ca",
+    "tokenizer.json": "623c34567aebb18582765289fbe23d901c62704d6518d71866e0e58db892b5b7",
+    "tokenizer_config.json": "ec380f0a6c0c2e294eb2435f5ec521fb2121cfc970e6ebf023d06829714a4eaa",
+    "chat_template.jinja": "58933db77d3099b4f78c55a38347a72e1ea05b97d6bd8f38775303dc0194e0a9"
+  },
+  "checkpoint_shards": {
+    "model-00001-of-00004.safetensors": {
+      "bytes": 5118631442,
+      "mtime_ns": 1794344725170473543,
+      "inode": 21568225
+    },
+    "model-00002-of-00004.safetensors": {
+      "bytes": 5291568433,
+      "mtime_ns": 1794344723649484590,
+      "inode": 21568224
+    },
+    "model-00003-of-00004.safetensors": {
+      "bytes": 5291568429,
+      "mtime_ns": 1794344725088553348,
+      "inode": 21568223
+    },
+    "model-00004-of-00004.safetensors": {
+      "bytes": 2073657055,
+      "mtime_ns": 1794344591234065030,
+      "inode": 21568226
+    }
+  },
+  "harness_sha256": "c4101ee529657796f9c8fa71adee9133908aea306bc79ddfb665f628ee614d5a",
+  "checkpoint_content_sha256": null,
+  "resident_experts": 0,
+  "nemotron_pool_gb": 0.0,
+  "overrides": {
+    "VEYSTRIX_NEMOTRON_DECODE_PROFILE_DIR": "/Users/vincent/Documents/Veystrix/results/nemotron35/20261114-232844-gpu-util-mapped-v2-512-128/profile"
+  },
+  "rows": [],
+  "runtime_environment": {
+    "FLASHNEXT_AUTO_PURGE": "0",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512",
+    "FLASHNEXT_PREFILL_CHUNK_TOKENS": "128",
+    "FLASHNEXT_PREFIX_ASYNC_WRITE": "0",
+    "FLASHNEXT_PREFIX_CACHE": "1",
+    "FLASHNEXT_PREFIX_CACHE_BOUNDARIES": "system",
+    "FLASHNEXT_PREFIX_CACHE_MIN_TOKENS": "256",
+    "FLASHNEXT_PREFIX_CACHE_RAM_GB": "0",
+    "FLASHNEXT_PREFIX_CACHE_RESTORE": "1",
+    "FLASHNEXT_PROMPT_LOOKUP": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "VEYSTRIX_NEMOTRON_DECODE_PROFILE_DIR": "/Users/vincent/Documents/Veystrix/results/nemotron35/20261114-232844-gpu-util-mapped-v2-512-128/profile",
+    "VEYSTRIX_NEMOTRON_KV": "bf16",
+    "VEYSTRIX_NEMOTRON_NATIVE_MTP": "0",
+    "VEYSTRIX_NEMOTRON_PREFIX_CACHE": "1",
+    "VEYSTRIX_NEMOTRON_PROMPT_LOOKUP": "0"
+  },
+  "error": "RuntimeError: memory floor crossed during inference (3167109120 bytes)",
+  "gate": {
+    "passed": false,
+    "reason": "Assess after the external guard has written its terminal record"
+  }
+}

@@ -222,6 +222,7 @@ class FakeReader:
     layers = (3, 4, 6)
     bytes_read = 0
     read_seconds = 0.0
+    mapped, mapped_experts = False, 0     # the pool asks every reader whether experts are mapped
 
     def __init__(self, delay=0.0):
         self.delay = delay

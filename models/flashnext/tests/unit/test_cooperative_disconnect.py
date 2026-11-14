@@ -18,7 +18,7 @@ import mlx.core as mx
 from mlx_vlm.models.qwen3_5 import language as base_language
 
 from models.flashnext.adaptive_topk import apply as patch_topk, set_renorm_blend, set_threshold
-from models.flashnext.patch_rmsnorm import apply as patch_norm
+from models.flashnext.patch_rmsnorm import apply as patch_norm, restore as restore_norm
 from models.flashnext.qwen4_verifier import Qwen4ExactSpeculativeVerifier
 from models.flashnext.tests.unit.test_speculative_tiny import tiny_language
 from veystrix.backends.flashnext import FlashNextBackend
@@ -76,7 +76,8 @@ class Conversation:
 class FlashNextDisconnectTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        patch_norm()
+        if patch_norm():               # process-wide: undo it when this class installed it
+            cls.addClassCleanup(restore_norm)
         patch_topk()
         cls.language = tiny_language()
         base_language._EXACT_SPECULATIVE_VERIFIER = Qwen4ExactSpeculativeVerifier()

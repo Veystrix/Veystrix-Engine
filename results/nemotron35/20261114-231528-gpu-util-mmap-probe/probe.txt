@@ -1,0 +1,16 @@
+page 16384
+fc1.weight model-00001-of-00004.safetensors offset%4 2 offset%page 14866 len 2494464 len%page 4096
+fc1.scales model-00001-of-00004.safetensors offset%4 2 offset%page 2962 len 155904 len%page 8448
+fc1.biases model-00001-of-00004.safetensors offset%4 2 offset%page 2066 len 155904 len%page 8448
+fc2.weight model-00001-of-00004.safetensors offset%4 2 offset%page 4114 len 2494464 len%page 4096
+fc2.scales model-00001-of-00004.safetensors offset%4 2 offset%page 15122 len 155904 len%page 8448
+fc2.biases model-00001-of-00004.safetensors offset%4 2 offset%page 9490 len 155904 len%page 8448
+pread+mx.array pass 0: load 7.41 ms/layer  compute 1.59 ms/layer  -> x23 = 207 ms/token
+pread+mx.array pass 1: load 1.95 ms/layer  compute 1.34 ms/layer  -> x23 = 76 ms/token
+pread+mx.array pass 2: load 1.93 ms/layer  compute 1.12 ms/layer  -> x23 = 70 ms/token
+mmap+dlpack    pass 0: load 0.52 ms/layer  compute 1.06 ms/layer  -> x23 = 36 ms/token
+mmap+dlpack    pass 1: load 0.24 ms/layer  compute 1.01 ms/layer  -> x23 = 29 ms/token
+mmap+dlpack    pass 2: load 0.24 ms/layer  compute 1.02 ms/layer  -> x23 = 29 ms/token
+identical outputs False
+active MB 1.556374 peak MB 68.871954
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 1.0, "available_floor_gib": 8.6, "swap_baseline_mib": 999, "swap_peak_mib": 999, "swap_end_mib": 999, "compressor_baseline_mib": 439, "compressor_peak_mib": 439, "swapout_mib": 0, "compressed_gib_total": 0.0, "thermal_seconds": {"0": 1}}

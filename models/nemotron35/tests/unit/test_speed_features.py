@@ -137,6 +137,148 @@ class PrefetchTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "pack size"):
                 ExpertPack(path, root, index, "nemotron35")
 
+    def _packed(self, folder, **build_options):
+        from models.nemotron35.safetensors_index import index_checkpoint
+        from models.shared.expert_pack import build, default_path
+
+        root = Path(_dir) / "ck"
+        index = index_checkpoint(root)
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": str(folder)}):
+            path = default_path(root, index, "nemotron35")
+        build(root, index, "nemotron35", path, **build_options)
+        return path
+
+    def test_mapped_pack_is_opt_in_and_equals_streamed_reads_without_reading(self):
+        from models.nemotron35.backend_core import EngineCore
+
+        with tempfile.TemporaryDirectory() as folder:
+            self._packed(folder)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder}):
+                os.environ.pop("VEYSTRIX_NEMOTRON_EXPERT_MAP", None)
+                baseline = self.load(prefetch=True)          # a pack on disk changes nothing by default
+            self.addCleanup(baseline.close)
+            self.assertFalse(baseline.reader.mapped)
+            self.assertIsNone(baseline.reader.pack)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "auto"}):
+                candidate = self.load(prefetch=True)
+            self.addCleanup(candidate.close)
+            self.assertTrue(candidate.reader.mapped)
+            tokens = [1, 4, 7, 5, 9, 3, 8, 2, 6]
+            for layer_major in (0, 4):
+                expected_core = EngineCore(baseline, chunk_tokens=2, layer_major_tokens=layer_major)
+                actual_core = EngineCore(candidate, chunk_tokens=2, layer_major_tokens=layer_major)
+                expected, actual = expected_core.prefill(tokens), actual_core.prefill(tokens)
+                self.assertTrue(mx.array_equal(expected, actual).item())
+                for token in (5, 11, 40):
+                    expected, actual = expected_core.decode(token), actual_core.decode(token)
+                    self.assertTrue(mx.array_equal(expected, actual).item())
+                drafted = actual_core.verify_decode(7, [3, 9], cancelled=lambda: False)
+                self.assertEqual(expected_core.verify_decode(7, [3, 9], cancelled=lambda: False), drafted)
+            # The pack was written a moment ago, so the kernel still holds every record: nothing is read.
+            self.assertEqual(candidate.reader.bytes_read, 0)
+            self.assertLessEqual(candidate.pool.resident_bytes, candidate.pool.budget)   # views, bounded like copies
+            stats = candidate.pool.stats()
+            self.assertTrue(stats["mapped"])
+            self.assertGreater(stats["mapped_experts"], 0)
+            self.assertEqual((stats["misses"], stats["prefetch_issued"], stats["staged_bytes"]), (0, 0, 0))
+            self.assertGreater(stats["hits"], 0)
+
+    def test_mapped_experts_not_in_memory_are_read_first_and_the_result_is_unchanged(self):
+        from models.nemotron35.backend_core import EngineCore
+
+        with tempfile.TemporaryDirectory() as folder:
+            self._packed(folder)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_MAP": "0"}):
+                baseline = self.load(prefetch=True)
+            self.addCleanup(baseline.close)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "1"}):
+                candidate = self.load(prefetch=True)
+            self.addCleanup(candidate.close)
+            pack = candidate.reader.pack
+            self.assertTrue(pack.resident(1, 0))
+            pack.resident = lambda layer, expert: False          # as if the kernel had evicted every record
+            expected_core = EngineCore(baseline, chunk_tokens=2)
+            actual_core = EngineCore(candidate, chunk_tokens=2)
+            tokens = [1, 4, 7, 5, 9, 3]
+            self.assertTrue(mx.array_equal(expected_core.prefill(tokens), actual_core.prefill(tokens)).item())
+            for token in (5, 11, 40):
+                self.assertTrue(mx.array_equal(expected_core.decode(token), actual_core.decode(token)).item())
+            stats = candidate.pool.stats()
+            self.assertGreater(stats["misses"] + stats["prefetch_used"], 0)
+            self.assertGreater(stats["prefetch_issued"], 0)
+            self.assertEqual(stats["bytes_read"] % pack.payload, 0)
+            self.assertGreater(stats["bytes_read"], 0)
+            self.assertLessEqual(stats["resident_bytes"], candidate.pool.budget)
+            # Cancellation is still seen while a read is awaited.
+            from models.nemotron35.runtime import Cancelled
+            with self.assertRaises(Cancelled):
+                actual_core.decode(5, cancelled=lambda: True)
+
+    def test_zero_copy_import_of_streamed_reads_is_opt_in_and_exact(self):
+        from models.nemotron35.backend_core import EngineCore
+
+        baseline = self.load(prefetch=True)
+        self.addCleanup(baseline.close)
+        self.assertFalse(baseline.reader.zero_copy)
+        with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_ZERO_COPY": "1"}):
+            candidate = self.load(prefetch=True)
+        self.addCleanup(candidate.close)
+        self.assertTrue(candidate.reader.zero_copy)
+        expected_core, actual_core = EngineCore(baseline, chunk_tokens=2), EngineCore(candidate, chunk_tokens=2)
+        tokens = [1, 4, 7, 5, 9, 3]
+        self.assertTrue(mx.array_equal(expected_core.prefill(tokens), actual_core.prefill(tokens)).item())
+        for token in (5, 11, 40):
+            self.assertTrue(mx.array_equal(expected_core.decode(token), actual_core.decode(token)).item())
+        self.assertGreater(candidate.reader.bytes_read, 0)
+
+    def test_mapping_is_refused_for_a_partial_pack_and_required_mode_fails_closed(self):
+        from models.nemotron35.inventory import CheckpointError
+
+        with tempfile.TemporaryDirectory() as folder:
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "1"}):
+                with self.assertRaisesRegex(CheckpointError, "no expert pack"):
+                    self.load()
+            path = self._packed(folder, layers=[1])
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "auto"}), \
+                    unittest.mock.patch("sys.stderr"):
+                partial = self.load()
+            self.addCleanup(partial.close)
+            self.assertFalse(partial.reader.mapped)
+            self.assertIsNone(partial.reader.pack)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "1"}):
+                with self.assertRaisesRegex(CheckpointError, "every routed layer"):
+                    self.load()
+            with path.open("r+b") as handle:
+                handle.truncate(path.stat().st_size - 1)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_EXPERT_PACK_DIR": folder,
+                                                      "VEYSTRIX_NEMOTRON_EXPERT_MAP": "auto"}), \
+                    unittest.mock.patch("sys.stderr"):
+                damaged = self.load()
+            self.addCleanup(damaged.close)
+            self.assertFalse(damaged.reader.mapped)
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EXPERT_MAP": "maybe"}):
+                with self.assertRaisesRegex(ValueError, "auto, 0 or 1"):
+                    self.load()
+
+    def test_expert_kernel_flags_separate_snapshot_identity_only_when_set(self):
+        from models.nemotron35 import streamed_experts as se
+        baseline = make(prefix_cache=False)
+        self.addCleanup(baseline.close)
+        self.assertNotIn("expert_kernel", baseline._session_identity())
+        for flag in ("GATHER", "EXACT_ROWS"):
+            with unittest.mock.patch.object(se, flag, True):
+                candidate = make(prefix_cache=False)
+                self.addCleanup(candidate.close)
+                identity = candidate._session_identity()
+            self.assertEqual(identity["expert_kernel"], {"gather": flag == "GATHER", "exact_rows": flag == "EXACT_ROWS"})
+            self.assertNotEqual(identity, baseline._session_identity())
+            self.assertEqual(candidate._prefix_identity()["expert_kernel"], identity["expert_kernel"])
+
     def test_parallel_mamba_prefill_keeps_fp32_state_and_separates_snapshot_identity(self):
         baseline = make(prefix_cache=False, chunk_tokens=160, layer_major_tokens=0)
         self.addCleanup(baseline.close)
@@ -259,6 +401,19 @@ class AutoPoolTests(unittest.TestCase):
         tight = machine(available=int(2.6 * 2**30))
         plan = admission.make_plan(self.cfg, tight, dense_bytes=1_252_009_856, pool_bytes=None)
         self.assertEqual(plan.pool_bytes, 0)
+
+    def test_auto_pool_is_zero_when_the_machine_cannot_hold_the_routed_experts(self):
+        gib = 2**30
+        sizes = dict(dense_bytes=1_252_009_856, routed_expert_bytes=16_523_329_536)
+        self.assertFalse(admission.pool_pays_off(machine(), **sizes))
+        self.assertTrue(admission.pool_pays_off(machine(total=32 * gib), **sizes))
+        small = admission.make_plan(self.cfg, machine(), pool_bytes=None, **sizes)
+        self.assertEqual(small.pool_bytes, 0)
+        large = admission.make_plan(self.cfg, machine(total=32 * gib, available=24 * gib, gpu_limit=24 * gib),
+                                    pool_bytes=None, **sizes)
+        self.assertEqual(large.pool_bytes, admission.AUTO_POOL_MAX)
+        explicit = admission.make_plan(self.cfg, machine(), pool_bytes=2 * gib, **sizes)
+        self.assertEqual(explicit.pool_bytes, 2 * gib)        # an explicit size is never overridden
 
     def test_env_auto_and_bounds(self):
         self.assertIsNone(admission.pool_bytes_from_env({}))
@@ -766,6 +921,24 @@ class StockKernelTests(unittest.TestCase):
             self.assertLess(float(mx.max(mx.abs(fast - slow))), 0.05)
         finally:
             streamed.close()
+
+    def test_gather_cap_is_reported_in_pool_statistics(self):
+        from models.nemotron35 import streamed_experts as se
+        streamed = load_streamed(Path(_dir) / "ck", pool_bytes=0, config_check=permissive_config_check)
+        self.addCleanup(streamed.close)
+        tokens = mx.array([[3, 9, 1, 5, 7, 2, 11, 4, 6, 8, 10, 12]])
+        self.assertNotIn("gather", streamed.pool.stats())
+        with unittest.mock.patch.object(se, "GATHER", True):
+            mx.eval(streamed.model(tokens, cache=streamed.model.make_cache()))
+            taken = streamed.pool.stats()["gather"]
+            self.assertEqual(taken["max_experts"], se.GATHER_MAX_EXPERTS)
+            self.assertGreater(taken["calls"], 0)
+            self.assertEqual(taken["over_cap"], 0)
+            with unittest.mock.patch.object(se, "GATHER_MAX_EXPERTS", 0):
+                mx.eval(streamed.model(tokens, cache=streamed.model.make_cache()))
+                refused = streamed.pool.stats()["gather"]
+        self.assertEqual(refused["calls"], taken["calls"])
+        self.assertEqual(refused["over_cap"], taken["calls"])
 
 
 class ContextQualificationTests(unittest.TestCase):

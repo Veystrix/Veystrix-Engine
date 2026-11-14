@@ -14,7 +14,8 @@ class CompileGlueTests(unittest.TestCase):
     def setUp(self):
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpGatedResidual
 
-        patch_rmsnorm.apply()
+        if patch_rmsnorm.apply():      # process-wide: undo it when this test installed it
+            self.addCleanup(patch_rmsnorm.restore)
         config = types.SimpleNamespace(
             hc_count=4, hidden_size=256, rms_norm_eps=1e-6, hc_lowrank=32,
         )

@@ -28,6 +28,21 @@ class ModelProcessTests(unittest.TestCase):
   self.assertEqual(command[command.index("--max-incremental-prefill") + 1], "32768")
   self.assertNotIn("kv-tiered4", driver._command(nemotron, 8080))
 
+ def test_pool_setting_is_flashnext_only_and_nemotron_sizes_its_own(self):
+  from unittest.mock import patch
+  driver = ProcessDriver(pool_gb="2")
+  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
+  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
+  with patch.dict(os.environ):
+   os.environ.pop("VEYSTRIX_NEMOTRON_POOL_GB", None)
+   command = driver._command(flashnext, 8080)
+   self.assertEqual(command[command.index("--pool-gb") + 1], "2")
+   command = driver._command(nemotron, 8080)
+   self.assertEqual(command[command.index("--pool-gb") + 1], "auto")
+   os.environ["VEYSTRIX_NEMOTRON_POOL_GB"] = "1"
+   command = driver._command(nemotron, 8080)
+   self.assertEqual(command[command.index("--pool-gb") + 1], "1")
+
  def test_speed_profile_only_applies_to_qwen(self):
   driver = ProcessDriver(flashnext_speed=True)
   flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")

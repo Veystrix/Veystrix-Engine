@@ -71,7 +71,8 @@ public struct LaunchPlan: Equatable, Sendable {
             }
         }
 
-        // Nemotron's expert pool is sized from free memory when the setting is left at "none" (0 would disable it).
+        // The pool setting applies to Qwen only. The engine sizes Nemotron's pool itself (model_process.py):
+        // VEYSTRIX_NEMOTRON_POOL_GB when set, otherwise automatic, which is no pool on a 16 GB Mac.
         let poolArgument = String(settings.decodePool.rawValue)
         var args = ["-m", "veystrix.model_router",
                     "--host", "127.0.0.1",                       // loopback only, always
@@ -120,6 +121,8 @@ public struct LaunchPlan: Equatable, Sendable {
         if !settings.nemotronMTPPath.isEmpty { env["VEYSTRIX_NEMOTRON_MTP_PATH"] = settings.nemotronMTPPath }
         // When memory is short the engine purges the macOS file cache by itself (conditional, never during a request;
         // needs the narrow `sudo -n /usr/sbin/purge` permission, otherwise it records that and backs off).
+        // This reaches Nemotron only: with the absolute-swap-only policy passed above, the router starts Qwen
+        // with --no-auto-purge (model_process.py), which is why Qwen's engine log says "auto purge off".
         env["FLASHNEXT_AUTO_PURGE"] = "1"
         // Choosing Nemotron and pressing Start (after the load confirmation) is the approval for real inference.
         if settings.selectedModel == .nemotron35 { env["VEYSTRIX_NEMOTRON_AUTHORIZED"] = "1" }

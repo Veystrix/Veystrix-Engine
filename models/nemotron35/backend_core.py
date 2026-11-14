@@ -18,6 +18,9 @@ from .runtime import Cancelled
 from .attention import AttentionCache
 
 
+PREFILL_CACHE_LIMIT_MB = 512
+
+
 class EngineCore:
     def __init__(self, streamed, *, chunk_tokens: int, layer_major_tokens: int = 0, int8_kv: bool = False):
         if chunk_tokens <= 0 or layer_major_tokens < 0:
@@ -211,8 +214,13 @@ class EngineCore:
             pool.speculate = True
 
     def prefill(self, tokens, *, cancelled=lambda: False, progress=None, boundary=None, emit_logits=True, anchor=None, save_anchor=None):
-        """Feed tokens in bounded chunks and return next-token logits."""
-        limit = int(os.environ.get("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB") or "0")
+        """Feed tokens in bounded chunks and return next-token logits.
+
+        MLX's cache of freed buffers is capped for the duration (``VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB``,
+        default 512, 0 = uncapped). Uncapped, an 8,192-token prefill of the real checkpoint held 3.4 GB of freed
+        buffers: available memory fell to 3.7 GiB and macOS compressed 17-18 GiB. With the cap the same prefill
+        kept 5.7 GiB available, compressed 1.1 GiB and ran at 178 against 164-172 tok/s, with the same tokens."""
+        limit = int(os.environ.get("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB") or PREFILL_CACHE_LIMIT_MB)
         if limit < 0:
             raise ValueError("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB must be non-negative")
         with cache_cap(limit):

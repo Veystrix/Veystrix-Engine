@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--fail-fast", action="store_true", help="stop the matrix after the first failed cell")
     parser.add_argument("--rounds", type=int, default=1, help="independent guarded processes per cell")
     parser.add_argument("--seconds-per-cell", type=int, default=1800)
+    parser.add_argument("--swap-growth-mib", type=float, default=16,
+                        help="swap growth the guard tolerates before it stops a cell; zero stopped a healthy "
+                             "launch on a 3 MiB tick (14 November 2026)")
     parser.add_argument("--cooldown-seconds", type=int, default=120,
                         help="maximum wait for nominal thermal pressure before each cell")
     parser.add_argument("--qwen-keepwarm", action="store_true", help="keep the GPU busy between Qwen expert reads")
@@ -75,7 +78,7 @@ def run_matrix(args, out, thermal):
                    FLASHNEXT_NATIVE_MTP="off", VEYSTRIX_NEMOTRON_NATIVE_MTP="0", VEYSTRIX_NEMOTRON_KV="bf16",
                    FLASHNEXT_PREFILL_CHUNK_TOKENS="128", VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB="512")
         command = [sys.executable, str(ROOT / "scripts/flashnext/real_run_guard.py"),
-                   "--log", str(guard), "--floor-samples", "1", "--swap-growth-mib", "0",
+                   "--log", str(guard), "--floor-samples", "1", "--swap-growth-mib", str(args.swap_growth_mib),
                    "--max-seconds", str(args.seconds_per_cell), "--", sys.executable, "-m",
                    "veystrix.bench.qualification", "--model", model, "--checkpoint", str(checkpoints[model]),
                    "--prompt-tokens", str(size), "--output-tokens", str(count), "--mode", mode]

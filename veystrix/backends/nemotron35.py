@@ -102,6 +102,7 @@ AUTHORIZE_ENV = "VEYSTRIX_NEMOTRON_AUTHORIZED"
 RUNTIME_VERSION = "veystrix-nemotron35-stream-1"
 _SESSION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 UNLIMITED = (1 << 31) - 1
+PREFILL_BUFFER_RELEASE_BYTES = 256 * 2**20   # a prefill that left less than this in MLX's buffer cache keeps it
 LAYER_MAJOR_DEFAULT = 8192   # layer-major prefill segment in tokens (measured: 17% faster, 39% less SSD read, 40% lower peak than chunk-major); 0 = chunk-major
 
 
@@ -226,7 +227,9 @@ class NemotronBackend(Conversation):
             context_tokens = (declared_positions if context_tokens is None
                               else min(int(context_tokens), declared_positions))
         # Plan from the exact dense-core size implied by the verified inventory, BEFORE reading any weight.
-        plan = admission.make_plan(config, machine, dense_bytes=estimate_bytes(config)["dense_bytes"],
+        sizes = estimate_bytes(config)
+        plan = admission.make_plan(config, machine, dense_bytes=sizes["dense_bytes"],
+                                   routed_expert_bytes=sizes["routed_expert_bytes"],
                                    context_tokens=context_tokens, chunk_tokens=chunk, pool_bytes=pool,
                                    int8_kv=kv == "int8", lightning=config_check is None,
                                    prefix_cache_bytes=prefix_ram + mtp_reserve
@@ -669,6 +672,7 @@ class NemotronBackend(Conversation):
             prefilled_tokens=len(feed),
             prefill_seconds=prefill_seconds, restore_seconds=restore_seconds, snapshot_seconds=time.perf_counter() - snapshot_began, outcome=outcome,
             layer_major=anchored_segment or bool(self.core.layer_major_tokens and len(feed) > self.core.chunk_tokens))
+        self._release_prefill_buffers(mx)
         if on_prefilled:
             on_prefilled()
         sampler = Sampler(self.sampling)
@@ -795,6 +799,22 @@ class NemotronBackend(Conversation):
                       prefetch_issued=pool1["prefetch_issued"] - pool0["prefetch_issued"], reused_tokens=restored)
         return "".join(pieces), stats
 
+    @staticmethod
+    def _release_prefill_buffers(mx) -> int:
+        """Return the buffers a prefill freed to the system before decode starts; returns the bytes released.
+
+        MLX keeps freed buffers for reuse, and decode reuses almost none of a prefill's: 3.4 GB sat in that cache
+        through the whole decode after an 8,192-token prefill (real checkpoint, 14 November 2026). They are
+        resident, so the file cache that serves decode's experts was 3.4 GB smaller for it. Nothing computed
+        changes. ``VEYSTRIX_NEMOTRON_KEEP_PREFILL_BUFFERS=1`` keeps them."""
+        if os.environ.get("VEYSTRIX_NEMOTRON_KEEP_PREFILL_BUFFERS") == "1":
+            return 0
+        cached = int(mx.get_cache_memory())
+        if cached < PREFILL_BUFFER_RELEASE_BYTES:
+            return 0
+        mx.clear_cache()
+        return cached
+
     def _tick(self) -> None:
         try:  # keeps the out-of-process watchdog informed when it is running
             from models.flashnext import progress
@@ -837,6 +857,7 @@ class NemotronBackend(Conversation):
 
     def _session_identity(self) -> dict:
         if self._identity is None:
+            from models.nemotron35 import streamed_experts
             from models.nemotron35.mamba_scan import fingerprint
 
             root = Path(self.model_path)
@@ -851,6 +872,10 @@ class NemotronBackend(Conversation):
                 "quantization": self.config.get("quantization"), "state_dtypes": f"{self.kv_format}-kv/fp32-ssm",
                 **fingerprint(self.streamed.model),
                 **({"metal_affine_fma": True} if os.environ.get("VEYSTRIX_NEMOTRON_METAL_FMA_DEQUANT") == "1" else {}),
+                # The routed-expert kernel changes rounding, so state written under one is not restored under another.
+                # Absent when both flags are off, which keeps every existing snapshot and session valid.
+                **({"expert_kernel": {"gather": streamed_experts.GATHER, "exact_rows": streamed_experts.EXACT_ROWS}}
+                   if streamed_experts.GATHER or streamed_experts.EXACT_ROWS else {}),
                 "weight_index": digest("model.safetensors.index.json"),
                 "weights": [(name, info.st_size, info.st_mtime_ns, info.st_ino)
                             for name in sorted(set(index["weight_map"].values()))

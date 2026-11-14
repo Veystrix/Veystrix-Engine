@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import ctypes
 import hashlib
 import fcntl
 import json
@@ -15,6 +16,8 @@ import struct
 import tempfile
 
 ALIGNMENT = 64 * 1024
+RESIDENT_SAMPLES = 4      # pages probed per record, spread evenly, plus the last one
+_LIBC = ctypes.CDLL(None, use_errno=True)
 HEADER = struct.Struct("<8sI")
 MAGIC = b"VXEXPK01"
 _PATTERNS = {
@@ -60,6 +63,20 @@ def source_layout(directory, index, runtime):
         "parts": list(parts), "sizes": sizes, "payload_bytes": payload,
         "stride": (payload + ALIGNMENT - 1) // ALIGNMENT * ALIGNMENT,
     }
+
+
+DEFAULT_DIRECTORY = "~/.cache/veystrix/expert-packs"
+DIRECTORY_ENV = "VEYSTRIX_EXPERT_PACK_DIR"
+
+
+def default_path(directory, index, runtime):
+    """Where the full pack of this checkpoint is kept: one file per source identity.
+
+    The identity covers the config and every shard's size, mtime and inode, so a
+    changed or replaced checkpoint never finds an older pack."""
+    _, layout = source_layout(directory, index, runtime)
+    base = Path(os.environ.get(DIRECTORY_ENV) or DEFAULT_DIRECTORY).expanduser()
+    return base / f"{runtime}-{layout['identity'][:16]}.pack"
 
 
 def build(directory, index, runtime, destination, *, layers=None, content_addressed=False):
@@ -156,6 +173,16 @@ class ExpertPack:
             if uncached:
                 fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
             self.mapping = mmap.mmap(fd, 0, access=mmap.ACCESS_READ) if mapped else None
+            self._base = None
+            if self.mapping is not None:
+                import numpy
+
+                # Only the address is kept; the one-byte view is released at the end of the statement.
+                self._base = numpy.frombuffer(self.mapping, dtype=numpy.uint8, count=1).ctypes.data
+                pages = -(-self.payload // mmap.PAGESIZE)
+                step = max(1, pages // RESIDENT_SAMPLES)
+                self._samples = [index * mmap.PAGESIZE for index in sorted({*range(0, pages, step), pages - 1})]
+                self._probe = (ctypes.c_char * 1)()
         except BaseException:
             os.close(fd)
             raise
@@ -165,6 +192,23 @@ class ExpertPack:
         if not 0 <= expert < self.count:
             raise ValueError("invalid packed expert index")
         return ALIGNMENT + (self.layers[layer] * self.count + expert) * self.stride
+
+    def resident(self, layer, expert):
+        """Whether the kernel holds this record in memory, from a sample of its pages (mapped packs only).
+
+        Every page of a record is read and used together, so the pages age together and a sample of
+        RESIDENT_SAMPLES pages spread over the record is enough. A wrong answer costs time, never
+        correctness: a missed cold page is faulted in by whoever touches it, and a record wrongly called cold
+        is read from the file cache. A full mincore over a 5.6 MB record costs 80 us; the sample about 4 us."""
+        if self._base is None:
+            return False
+        start = self._base + self.offset(layer, expert)
+        for position in self._samples:
+            if _LIBC.mincore(ctypes.c_void_p(start + position), ctypes.c_size_t(1), self._probe) != 0:
+                return False
+            if not self._probe[0][0] & 1:
+                return False
+        return True
 
     def read_into(self, layer, expert, buffers, *, read=os.preadv):
         if not 0 <= expert < self.count or sum(buffer.nbytes for buffer in buffers) != self.payload:
@@ -189,7 +233,10 @@ class ExpertPack:
 
     def close(self):
         if self.mapping is not None:
-            self.mapping.close()
+            try:
+                self.mapping.close()
+            except BufferError:
+                pass  # zero-copy arrays still view the mapping; it is unmapped when the last one is released
             self.mapping = None
         if self.fd is not None:
             os.close(self.fd)

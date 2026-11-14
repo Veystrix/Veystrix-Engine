@@ -15,10 +15,12 @@ struct SettingsView: View {
                     .onSubmit(applyPort).onChange(of: port.value) { _, _ in applyPort() }
                     .help("The engine always binds to 127.0.0.1. Default 8080.")
                     .accessibilityLabel("Local API port")
-                Picker("Decode memory pool", selection: $model.settings.decodePool) {
+                Picker("Qwen decode memory pool", selection: $model.settings.decodePool) {
                     ForEach(DecodePool.allCases) { Text($0.title).tag($0) }
                 }
                 Text(model.settings.decodePool.explanation).font(.callout).foregroundStyle(.secondary)
+                Text("Nemotron sizes its own pool: none on a Mac whose memory cannot hold all of its experts, where a pool measured slower than the system file cache.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Qwen faster prefill and decode (experimental)", isOn: $model.settings.flashNextSpeed)
                 Text("Uses 4K prefill windows and buffered reads when the decode pool is available. Restart to apply.")
                     .font(.callout).foregroundStyle(.secondary)

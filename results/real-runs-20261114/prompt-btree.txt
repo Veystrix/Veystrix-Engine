@@ -1,0 +1,9 @@
+<|im_start|>system
+You are a senior software engineer. Answer precisely and completely.<|im_end|>
+<|im_start|>user
+Explain how a B-tree keeps itself balanced when keys are inserted, including what happens when a node overflows and how a split propagates to the root. Then write a complete Python implementation of a B-tree with search and insert, with a short comment on each method, and finish with a small usage example that inserts twenty keys and prints the tree level by level.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+

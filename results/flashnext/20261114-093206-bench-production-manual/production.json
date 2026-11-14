@@ -1,0 +1,176 @@
+{
+  "prompt_source": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/prompt-btree.txt",
+  "prompt": "<|im_start|>system\nYou are a senior software engineer. Answer precisely and completely.<|im_end|>\n<|im_start|>user\nExplain how a B-tree keeps itself balanced when keys are inserted, including what happens when a node overflows and how a split propagates to the root. Then write a complete Python implementation of a B-tree with search and insert, with a short comment on each method, and finish with a small usage example that inserts twenty keys and prints the tree level by level.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+  "prompt_sha256": "eca3583ccb1f994dcb842c803aef696b42a8a211fa8a62e4dbf97608e7c5bcd9",
+  "chat_template": "preformatted; no additional template",
+  "sampling": "greedy",
+  "seed_policy": "deterministic argmax; no sampling seed",
+  "token_limit": 128,
+  "quality_gate": "not run; exact token equality only",
+  "status": "failed",
+  "comparison": "none",
+  "fresh_arms": false,
+  "routing_altering": false,
+  "condition_definitions": {
+    "baseline": {}
+  },
+  "effective_environment": {
+    "FLASHNEXT_METAL_RUNTIME": "1",
+    "FLASHNEXT_METAL_G64": "1",
+    "FLASHNEXT_SLAB_G64": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_SLAB_PACK_REQUIRE_EXISTING": "0",
+    "FLASHNEXT_SLAB_POLICY": "skew",
+    "FLASHNEXT_SLAB_PROFILE": "frozen",
+    "FLASHNEXT_SLAB_MIN_SLOTS": "4",
+    "FLASHNEXT_SLAB_MAX_SLOTS": "6",
+    "FLASHNEXT_SLAB_NUM_LAYERS": "12",
+    "FLASHNEXT_FUSED_SHARED": "1",
+    "FLASHNEXT_FUSED_SHARED_PARTS": "0",
+    "FLASHNEXT_FUSED_UP_SWIGLU": "1",
+    "FLASHNEXT_PROFILE_IO": "0",
+    "FLASHNEXT_PREAD_CHUNK": "2",
+    "FLASHNEXT_READ": "pread",
+    "FLASHNEXT_GPU_KEEPWARM": "1",
+    "FLASHNEXT_STREAM_EMBED": "1",
+    "FLASHNEXT_COMPILE_HC": "1",
+    "FLASHNEXT_COMPILE_NORM": "1",
+    "FLASHNEXT_NORM_WEIGHT_CACHE": "1",
+    "FLASHNEXT_IO_QOS": "user-interactive",
+    "FLASHNEXT_NGRAM_PARALLEL_MIN": "16",
+    "FLASHNEXT_QSA_CACHE_POOLED_KEYS": "1",
+    "FLASHNEXT_QSA_SCATTER_DECODE": "1",
+    "FLASHNEXT_OVERLAP": "0",
+    "FLASHNEXT_RDAHEAD": "0",
+    "FLASHNEXT_IO_WORKERS": "8",
+    "FLASHNEXT_STREAM_PACK": "1",
+    "FLASHNEXT_STREAM_PACK_CHUNK": "2",
+    "FLASHNEXT_ONE_SYNC": "1",
+    "FLASHNEXT_COMPILE_GDN": "1",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_PREFIX_CACHE": "0",
+    "FLASHNEXT_PROMPT_LOOKUP": "0"
+  },
+  "conditions": [],
+  "raw_arms": {
+    "baseline": []
+  },
+  "resident_experts": 8,
+  "schema_version": 1,
+  "telemetry": "timing",
+  "expected_token_sha256": null,
+  "protocol": {
+    "concurrency": 1,
+    "arms_ceiling": 5,
+    "min_arms": 5,
+    "discard_first_per_condition": 0,
+    "reload_backend_per_arm": false,
+    "process": "in-process",
+    "page_cache": "as found"
+  },
+  "checkpoint": "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+  "checkpoint_identity": "c97330e20b55d7d4069d405e127531f5a461df2e0102d14ce20351b2870d5715",
+  "runtime_source_fingerprint": "9bf93b070f55b0ae10afcc9f3a3128f747958a2eee2c04df87b0b1cff7f1d432",
+  "source_fingerprint": "9bf93b070f55b0ae10afcc9f3a3128f747958a2eee2c04df87b0b1cff7f1d432",
+  "benchmark_source_fingerprint": "729590fe0a9880df86d50e9942a3cc57ef4962738a7c2e771c95402657878598",
+  "source_fingerprints": {
+    "runtime": "9bf93b070f55b0ae10afcc9f3a3128f747958a2eee2c04df87b0b1cff7f1d432",
+    "benchmark": "729590fe0a9880df86d50e9942a3cc57ef4962738a7c2e771c95402657878598"
+  },
+  "stage0_provenance": {
+    "code": {
+      "commit": "e2307b732d236015470d6293528bd8e924c0241e",
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "dependencies": {
+      "python": "3.12.16",
+      "mlx": "0.32.2",
+      "mlx-lm": "0.31.3",
+      "mlx-vlm": "0.6.17"
+    },
+    "host": {
+      "platform": "macOS-27.2-arm64-arm-64bit",
+      "macos": "27.2",
+      "model": "Mac16,12",
+      "soc": "Apple M4",
+      "ram_bytes": 17179869184,
+      "storage": {
+        "device": null,
+        "media": null,
+        "solid_state": null,
+        "device_bytes": null,
+        "filesystem_bytes": 494384795648,
+        "filesystem_free_bytes": 158817443840
+      },
+      "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35586147)\t79%; AC attached; not charging present: true",
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+    },
+    "checkpoint_metadata_sha256": {
+      "config.json": "4efd5f41c47e8de9f55c678df4a237cbbc78e4d517dad42a906889f7d94f79a2",
+      "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "model.safetensors.index.json": "8848503860c7da8619fdc8d5e65201868f8f1d21d69d2e21166c95522379ff77",
+      "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+      "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+    }
+  },
+  "runtime_source_fingerprints": {
+    "runtime": "9bf93b070f55b0ae10afcc9f3a3128f747958a2eee2c04df87b0b1cff7f1d432",
+    "benchmark": "729590fe0a9880df86d50e9942a3cc57ef4962738a7c2e771c95402657878598"
+  },
+  "current_arm": {
+    "round": 1,
+    "condition": "baseline",
+    "environment": {
+      "FLASHNEXT_STREAM_PACK": "1",
+      "FLASHNEXT_COMPILE_NORM": "1",
+      "FLASHNEXT_PREAD_CHUNK": "2",
+      "FLASHNEXT_SLAB_MAX_SLOTS": "6",
+      "FLASHNEXT_SLAB_PACK_REQUIRE_EXISTING": "0",
+      "FLASHNEXT_ONE_SYNC": "1",
+      "FLASHNEXT_COMPILE_HC": "1",
+      "FLASHNEXT_SLAB_POLICY": "skew",
+      "FLASHNEXT_SLAB_PROFILE": "frozen",
+      "FLASHNEXT_METAL_RUNTIME": "1",
+      "FLASHNEXT_SLAB_G64": "0",
+      "FLASHNEXT_METAL_G64": "1",
+      "FLASHNEXT_GPU_KEEPWARM": "1",
+      "FLASHNEXT_QSA_CACHE_POOLED_KEYS": "1",
+      "FLASHNEXT_NATIVE_MTP": "on",
+      "FLASHNEXT_READ": "pread",
+      "FLASHNEXT_FUSED_SHARED_PARTS": "0",
+      "FLASHNEXT_NORM_WEIGHT_CACHE": "1",
+      "FLASHNEXT_PROMPT_LOOKUP": "0",
+      "FLASHNEXT_STREAM_EMBED": "1",
+      "FLASHNEXT_EXPERT_POOL_GB": "0",
+      "FLASHNEXT_PREFIX_CACHE": "0",
+      "FLASHNEXT_FUSED_UP_SWIGLU": "1",
+      "FLASHNEXT_OVERLAP": "0",
+      "FLASHNEXT_PROFILE_IO": "0",
+      "FLASHNEXT_COMPILE_GDN": "1",
+      "FLASHNEXT_FUSED_SHARED": "1",
+      "FLASHNEXT_NGRAM_PARALLEL_MIN": "16",
+      "FLASHNEXT_RDAHEAD": "0",
+      "FLASHNEXT_SLAB_PACK": "0",
+      "FLASHNEXT_QSA_SCATTER_DECODE": "1",
+      "FLASHNEXT_SLAB_NUM_LAYERS": "12",
+      "FLASHNEXT_IO_QOS": "user-interactive",
+      "FLASHNEXT_STREAM_PACK_CHUNK": "2",
+      "VEYSTRIX_MEMORY_POLICY": "legacy",
+      "FLASHNEXT_SLAB_GLOBAL": "0",
+      "FLASHNEXT_IO_WORKERS": "8",
+      "FLASHNEXT_SLAB_MIN_SLOTS": "4"
+    }
+  },
+  "failure": {
+    "type": "KeyboardInterrupt",
+    "message": "benchmark terminated before completion"
+  },
+  "source_fingerprints_at_failure": {
+    "runtime": "9bf93b070f55b0ae10afcc9f3a3128f747958a2eee2c04df87b0b1cff7f1d432",
+    "benchmark": "729590fe0a9880df86d50e9942a3cc57ef4962738a7c2e771c95402657878598"
+  }
+}

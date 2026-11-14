@@ -1,9 +1,10 @@
 # Flash-Next Stage 3: cost-aware pool policy and decode prefetch
 
 Stage 3 adds a fourth expert-pool eviction policy, `cost-aware`, and an
-opt-in decode prefetch. Both are off by default. No real-model run has been
-made: the only numbers in this document come from an offline replay of one
-recorded route trace (see "Not yet measured").
+opt-in decode prefetch. Both are off by default. The numbers in this document
+come from an offline replay of one recorded route trace. A real paired run was
+attempted on 14 November 2026 and could not complete inside the 3 GiB
+available-memory floor (see "Not yet measured").
 
 ## What it adds
 
@@ -242,9 +243,14 @@ the frequency term is on. One trace and three turns cannot say more.
 
 ## Not yet measured
 
-- No real-model run has been made for Stage 3. Tokens per second, physical
-  MB/token, blocking-read ms/token and token digests on the real checkpoint
-  are unverified. Every number above is modelled bytes from a replay.
+- No real paired result exists for Stage 3. On 14 November 2026 the pair
+  `--pool-policy lru cost-aware` was stopped by the run guard for available
+  memory under 3 GiB: while loading with a 1 GB pool (2.66 GiB), and after
+  the first arm with a 0.5 GB pool (2.84 GiB). That one arm, `lru` at 0.5 GB,
+  decoded at 2.5 tok/s with a pool hit rate of 0.0. No `cost-aware` arm ran
+  ([real-run record](real-runs-2026-11-14.md)). Tokens per second, physical
+  MB/token, blocking-read ms/token and token digests for the policy remain
+  unverified. Every number above is modelled bytes from a replay.
 - The prefetch model is an upper bound (reads always complete in time and never
   delay demand reads) and its R is assumed. The runtime also expires queued
   reads whose deadline passed and counts `late`, `cancelled` and `expired`

@@ -320,6 +320,9 @@ def build_parser():
                         help="Pool policy of both --expert-prefetch arms (default lru)")
     parser.add_argument("--isolated-pool-gb", type=float,
                         help="Pool size in decimal GB for --pool-policy and --expert-prefetch (default 2, 0.5 to 2)")
+    parser.add_argument("--flag-pool-gb", type=float,
+                        help="Pool size in GiB for both arms of a --set-flag comparison (default 2, 0 to 2); "
+                             "lower it when the fixed 2 GiB pool does not leave the required memory headroom")
     parser.add_argument("--max-tokens", type=int,
                         help="Override the output-token cap (default 24, or 96 for --large-workload)")
     parser.add_argument("--large-workload", action="store_true",
@@ -352,6 +355,8 @@ def main():
                           or args.pool_compare or args.edf_io or args.route_lookahead
                           or args.parallel_mamba):
         parser.error("--set-flag requires --performance-v2 and runs alone")
+    if args.flag_pool_gb is not None and (not args.set_flag or not 0 <= args.flag_pool_gb <= 2):
+        parser.error("--flag-pool-gb needs --set-flag and a size from 0 to 2")
     if args.max_tokens is not None and (args.max_tokens < 1 or args.max_tokens > 2048):
         parser.error("--max-tokens must be between 1 and 2048")
     if message := pool_option_error(args):
@@ -425,6 +430,8 @@ def performance_v2(args, model_id):
     pool_gb = 2 if args.large_workload or isolated else None
     if pool_arms:
         pool_gb = f"{2.0 if args.isolated_pool_gb is None else args.isolated_pool_gb:g}"
+    if args.flag_pool_gb is not None:
+        pool_gb = f"{args.flag_pool_gb:g}"
     pools = ({"baseline": args.pool_compare[0], "candidate": args.pool_compare[1]}
              if args.pool_compare else None)
     if isolated:

@@ -4,8 +4,8 @@ Stage 9 asks for speculative Nemotron decoding at 20 tok/s or more through the
 shared draft and verification framework. Native MTP with exact verification
 already exists (`VEYSTRIX_NEMOTRON_NATIVE_MTP`, depth from
 `VEYSTRIX_NEMOTRON_MTP_DEPTH`, 1 to 4). This pass adds the adaptive draft
-depth built for Flash-Next Stage 5. Nothing here was run on the real
-checkpoint; there is no speed figure.
+depth built for Flash-Next Stage 5. Real-checkpoint figures from
+14 November 2026 are under "Measured on the real checkpoint".
 
 ## What it adds
 
@@ -31,21 +31,26 @@ through every depth, and a forced mismatch at every draft position.
 `core.mtp_adaptive_stats()` returns the controller's state. The flight
 recorder's `nemotron_decode_mode` record carries `mtp_adaptive`.
 
-## Not yet measured
+## Measured on the real checkpoint
 
-These need the real checkpoint and the owner's approval, on AC power with Low
-Power Mode off:
+14 November 2026, paired server harness, greedy, no expert pool, 576-token
+prompt that asks for repeated code lines to be copied (favourable to draft
+acceptance); details in [the real-run record](real-runs-2026-11-14.md). The
+six arms of each pair share one token digest.
 
-- Greedy digest with adaptive depth on and off.
-- Decode tok/s, accepted tokens per round and physical MB per accepted token,
-  fixed depth against adaptive, at the 128- and 512-token gates.
+| Pair | Tokens | Plain tok/s (median of 3) | MTP tok/s (median of 3) |
+|---|---|---|---|
+| Fixed depth 2 | 128 | 4.94 | 4.94 |
+| Adaptive, ceiling 4 | 512 | 5.03 | 4.71 |
 
-The 8K comparison recorded on 2026-11-13
-([native MTP at 8K](native-mtp-8k-1024-2026-11-13.md)) used a fixed depth of
-two.
+Native MTP does not speed up Nemotron decoding in this configuration. The 8K
+code-review prompt and any pool of 1 GiB or more did not fit the 3 GiB
+available-memory floor on the day, so there is no figure for them. Accepted
+tokens per round and physical MB per accepted token were not recorded by the
+harness.
 
 ## Still missing for Stage 9
 
 - An external drafter (DFlash, DSpark) has not been evaluated against the
   16 GB budget.
-- The 20 tok/s gate has not been attempted.
+- The 20 tok/s gate is not met: the best measured decode is 5.0 tok/s.

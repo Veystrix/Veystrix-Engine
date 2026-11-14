@@ -52,6 +52,10 @@ done
 # Nemotron ships its runtime, not its model-free tests.
 find "$OUT/lib/models/nemotron35" -name 'test_*.py' -delete
 find "$OUT/lib" \( -name tests -o -name bench -o -name __pycache__ -o -name '*.md' \) -prune -exec rm -rf {} +
+# The engine imports its telemetry and memory sampler at module load (veystrix.bench.telemetry is a no-op
+# unless a benchmark activates it). Ship exactly that import closure, not the qualification harnesses.
+mkdir -p "$OUT/lib/veystrix/bench"
+cp "$ROOT/veystrix/bench/"{__init__.py,telemetry.py,memory.py,provenance.py} "$OUT/lib/veystrix/bench/"
 # The production safety guard and optional layer diagnostics currently share these
 # benchmark utilities. Ship only their exact import closure, not the test suite.
 mkdir -p "$OUT/lib/models/flashnext/tests/bench"

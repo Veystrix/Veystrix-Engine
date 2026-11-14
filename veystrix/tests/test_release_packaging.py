@@ -176,5 +176,68 @@ class ScannerTests(unittest.TestCase):
             self.assertIn("private paths", nope.stdout)
 
 
+class EngineBundleClosureTests(unittest.TestCase):
+    """The bundle script removes every ``tests`` and ``bench`` directory and copies a named few files back.
+
+    An engine module that imports a removed module at load makes the packaged app unable to start a model
+    while every source-tree test still passes. Found 2026-11-14: ``veystrix/bench`` was removed although
+    ``expert_cache`` and both backends import ``veystrix.bench.telemetry`` at load."""
+
+    SCRIPT = ROOT / "packaging" / "engine" / "build_engine_bundle.sh"
+    PACKAGES = ("veystrix", "models/flashnext", "models/nemotron35", "models/shared")
+
+    def shipped(self):
+        import re
+
+        kept = set()
+        for folder, names in re.findall(r'cp "\$ROOT/([\w/]+)/"\{([^}]+)\} "\$OUT/lib/', self.SCRIPT.read_text()):
+            kept.update(f"{folder}/{name}" for name in names.split(","))
+        for single in re.findall(r'cp "\$ROOT/([\w/.]+\.py)" "\$OUT/lib/', self.SCRIPT.read_text()):
+            kept.add(single)
+        return kept
+
+    def engine_modules(self):
+        for package in self.PACKAGES:
+            for path in sorted((ROOT / package).rglob("*.py")):
+                relative = path.relative_to(ROOT)
+                pruned = {"tests", "bench"} & set(relative.parts[:-1])
+                if not pruned and not (relative.parts[:2] == ("models", "nemotron35") and path.name.startswith("test_")):
+                    yield relative, path
+        for kept in self.shipped():
+            yield Path(kept), ROOT / kept
+
+    def test_copied_back_files_exist(self):
+        kept = self.shipped()
+        self.assertIn("veystrix/bench/telemetry.py", kept)
+        for name in kept:
+            self.assertTrue((ROOT / name).is_file(), name)
+
+    def test_load_time_imports_of_shipped_modules_stay_inside_the_bundle(self):
+        import ast
+
+        kept = self.shipped()
+        missing = []
+        for relative, path in self.engine_modules():
+            package = list(relative.parts[:-1])
+            for node in ast.parse(path.read_text()).body:          # module level only: lazy imports are optional paths
+                if isinstance(node, ast.ImportFrom):
+                    base = package[:len(package) - node.level + 1] if node.level else []
+                    targets = [".".join(base + (node.module.split(".") if node.module else []))]
+                    targets += [targets[0] + "." + alias.name for alias in node.names]
+                elif isinstance(node, ast.Import):
+                    targets = [alias.name for alias in node.names]
+                else:
+                    continue
+                for target in targets:
+                    parts = target.split(".")
+                    if parts[0] not in ("veystrix", "models") or not {"tests", "bench"} & set(parts):
+                        continue
+                    as_file, as_package = "/".join(parts) + ".py", "/".join(parts) + "/__init__.py"
+                    exists = (ROOT / as_file).is_file() or (ROOT / as_package).is_file()
+                    if exists and as_file not in kept and as_package not in kept:
+                        missing.append(f"{relative} imports {target} at load, which the bundle removes")
+        self.assertEqual(missing, [])
+
+
 if __name__ == "__main__":
     unittest.main()

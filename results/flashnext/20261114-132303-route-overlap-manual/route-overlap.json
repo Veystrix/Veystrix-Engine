@@ -1,0 +1,76 @@
+{
+  "decode_tokens": 768,
+  "turns": 3,
+  "layers": 48,
+  "record_bytes": 3211264,
+  "pinned_per_layer_in_recording": 8,
+  "experts_per_token_per_layer": {
+    "mean": 7.92,
+    "p50": 8,
+    "p90": 8,
+    "max": 9,
+    "samples": 36864
+  },
+  "window_union_experts_per_layer": {
+    "16": {
+      "mean": 49.24,
+      "p50": 48,
+      "p90": 69,
+      "max": 98,
+      "samples": 2304
+    },
+    "64": {
+      "mean": 107.77,
+      "p50": 106,
+      "p90": 148,
+      "max": 206,
+      "samples": 576
+    },
+    "128": {
+      "mean": 144.57,
+      "p50": 142,
+      "p90": 195,
+      "max": 268,
+      "samples": 288
+    },
+    "256": {
+      "mean": 191.82,
+      "p50": 189,
+      "p90": 254,
+      "max": 333,
+      "samples": 144
+    }
+  },
+  "prefill_reuse": {
+    "chunk_tokens": 128,
+    "window_tokens": 512,
+    "windows": 1,
+    "chunk_major_experts_per_layer": {
+      "mean": 591.27,
+      "p50": 582,
+      "p90": 793,
+      "max": 988,
+      "samples": 48
+    },
+    "window_union_experts_per_layer": {
+      "mean": 288.35,
+      "p50": 297,
+      "p90": 361,
+      "max": 403,
+      "samples": 48
+    },
+    "reads_ratio_chunk_major_over_union": 2.051
+  },
+  "cross_conversation_same_layer_share": 0.0627,
+  "consecutive_token_share": 0.4081,
+  "top_k_per_layer_routing_share": {
+    "4": 0.1422,
+    "8": 0.2276,
+    "16": 0.3353,
+    "32": 0.4714,
+    "64": 0.6402,
+    "128": 0.8265
+  },
+  "trace": "results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7"
+}

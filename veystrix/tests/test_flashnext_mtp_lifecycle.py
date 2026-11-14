@@ -45,6 +45,7 @@ class FakeMTPDecoder:
 
     def __init__(self, target_cache):
         self.target_cache = target_cache
+        self.depth = 3
         self.appended = []
         self.generated = 0
 

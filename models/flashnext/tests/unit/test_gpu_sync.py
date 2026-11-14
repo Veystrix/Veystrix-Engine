@@ -228,7 +228,8 @@ class ProductionCodeTests(unittest.TestCase):
 
         self.assertIs(pool_lifecycle._gpu_synchronize(), gpu_sync.synchronize)
         backend = (ROOT / "veystrix/backends/flashnext.py").read_text()
-        self.assertEqual(backend.count("gpu_sync.synchronize"), 4)        # request cleanup, after_request, before_prefill, _release_between_turns
+        # request cleanup, after_request, before_prefill, _release_between_turns, memory budget
+        self.assertEqual(backend.count("gpu_sync.synchronize"), 5)
         self.assertIn("from .gpu_sync import synchronize", (ROOT / "models/flashnext/prefill_ring.py").read_text())
         self.assertTrue(callable(prefill_ring.fence))
 

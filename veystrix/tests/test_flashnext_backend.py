@@ -330,7 +330,7 @@ class UnlimitedGenerationTests(unittest.TestCase):
 
         class FakeMTP:
             def __init__(self, _language, depth=3):
-                del depth
+                self.depth = depth
                 self.target_cache = None
 
             def append(self, _ids):

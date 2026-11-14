@@ -24,6 +24,8 @@ Evidence behind the choices (see docs/flashnext/performance-engineering-report-2
 """
 from __future__ import annotations
 
+from models.flashnext.prefill_16gb import PREFILL_16GB
+
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -108,6 +110,7 @@ EXPERIMENTAL_OFF = {
 }
 # Offline-tested only. Each is explicit (--enable NAME), never a default, and labelled in the banner.
 EXPERIMENTAL = {
+    "prefill-16gb": (PREFILL_16GB, "bounded prefill chunks, expert scratch reuse and uncached reads"),
     "qsa-gather": ({"FLASHNEXT_QSA_KERNEL": "gather"},
                    "bounded selected-block attention; real-checkpoint qualification pending"),
     "kv-k16v4": ({"FLASHNEXT_KV_CACHE_DTYPE": "k16v4", "FLASHNEXT_QSA_KERNEL": "gather"},
@@ -168,7 +171,7 @@ EXPERIMENTAL["short-throughput"] = (
     "experimental 4K hybrid layer-major prefill and buffered decode expert pool",
 )
 LAYER_MAJOR_MODES = {"layer-major", "layer-major-4k", "layer-major-hybrid-4k", "short-throughput"}
-OWNED = frozenset({*COMMON, *PREFILL_OFF, *AGENTIC_PREFILL, *EXPERIMENTAL_OFF,
+OWNED = frozenset({*COMMON, *PREFILL_OFF, *AGENTIC_PREFILL, *EXPERIMENTAL_OFF, *PREFILL_16GB,
                    "FLASHNEXT_PREFILL_CHUNK_BUDGET_MB", "FLASHNEXT_PREFILL_WINDOW_TOKENS", "FLASHNEXT_KV_GROUP_SIZE", "FLASHNEXT_KV_BITS",
                    "FLASHNEXT_KV_LAYER_MODES",
                    "FLASHNEXT_EXPERT_POOL_GB", "FLASHNEXT_EXPERT_POOL_AUTO", "FLASHNEXT_PREFIX_CACHE_DIR", "FLASHNEXT_PREFIX_CACHE_RAM_GB",

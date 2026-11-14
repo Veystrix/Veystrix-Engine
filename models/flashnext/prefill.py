@@ -767,7 +767,9 @@ def _prefill_target_checked(
     with prefill_memory.cache_cap():
         if not ring_on:
             return body()
-        with prefill_ring.session(language, int(ids.shape[1])) as ring:
+        # A restored prefix can leave a short suffix with a wide route
+        # union. Size the lease against the original prompt for eligibility.
+        with prefill_ring.session(language, int(ids.shape[1]) + int(offset)) as ring:
             result = body()
             if ring is not None:
                 # Nothing the caller keeps may still read ring memory lazily.

@@ -120,6 +120,8 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
                                       if position + 2 < len(moe_layers) else None)
     if os.environ.get("VEYSTRIX_NEMOTRON_OVERLAP_SHARED", "1") != "0":
         _overlap_shared_experts(model, moe_layers)
+    from . import fast_ssm
+    fast_ssm.install()                  # prefill-sized scans use the fused kernel unless VEYSTRIX_NEMOTRON_FAST_SSM=0
     from . import cache_routing
     cache_routing.install(model)         # off unless VEYSTRIX_NEMOTRON_CACHE_ROUTING is observe or swap
     try:

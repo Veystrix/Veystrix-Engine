@@ -118,6 +118,8 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
             # MOE-04/05: the layer after next is prefetched from the previous pass's routes when opted in.
             switch.lookahead_layer = (moe_layers[position + 2]
                                       if position + 2 < len(moe_layers) else None)
+    from . import cache_routing
+    cache_routing.install(model)         # off unless VEYSTRIX_NEMOTRON_CACHE_ROUTING is observe or swap
     try:
         _attach_pack(reader, root, index)
     except BaseException:

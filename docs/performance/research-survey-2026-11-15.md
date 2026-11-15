@@ -36,3 +36,21 @@ EVICT only helps when an extra verified row costs less than the token it can win
 3. **Lossy options**, if the owner ever accepts them, with the cost stated first: 2-bit or mixed-precision experts (breaks tool calling per flash-moe), expert budgeting. Not started.
 
 Not read in full: the arXiv text of EVICT, MoE-APEX, DyMoE, SliceMoE, MoE-CORE and flash-moe's `paper/flash_moe.pdf` and `results.tsv` (58 experiments, not fetched).
+
+## Second pass (same day, after "keep searching, no new weights")
+
+| Source | Idea | Result here |
+| --- | --- | --- |
+| MINE (arXiv 2611.09424), EntroLLM, `drxddy/ecq`, DFloat11 | Lossless entropy coding of weights to read fewer bytes | **Measured on the real Nemotron checkpoint** (`scratchpad/entropy.py`, read-only, 8 expert tensors from layers 1, 8, 20, 40): 4-bit values carry 3.65–3.73 bits of entropy, so packed bytes compress to about 7.43/8; the bf16 scales and biases compress well (high byte about 1.1 bits of 8). Ideal order-0 coding gives **84.4% of the original size, a 15.6% cut at best**. Real coding loses some of that, needs a decoder kernel and a repacked copy of 14 GB of experts. flash-moe's LZ4 test lost 13%. Not worth building. |
+| "Who Should Own the Expert Cache?" (arXiv 2608.12103, read in full) | Kernel page cache as the expert tier | Recency serves essentially the same demand as an oracle frequency policy; an oracle-pinned arena is only 1.09–1.11x faster; kernel readahead advice with 64.7% recall changes time by 0.3%, perfect one-layer advice 5%. Confirms the macOS file cache is the right tier and prefetch cannot add much. |
+| Mixture of Cache-Conditional Experts (arXiv 2412.00099) | Bias router toward resident experts, training-free | Lossy but needs no new weights. Already built for Qwen here (`routing.py` `cache-aware`, +8.3%, 16.8% fewer reads, 2026-08-31). Ported to Nemotron as an opt-in, off-by-default switch: `models/nemotron35/cache_routing.py` (below). |
+| Layered Prefill (MLSys 2026) | Layer groups instead of token chunks so experts load once per prefill | Already in the repo as layer-major prefill. |
+| 125B Qwen3.8 at 18 tok/s on 64 GB (lilting.ch) | "N-gram table on SSD" | An embedding table inside a 1.75-bit build (KLD 0.23) on a 64 GB machine. Not a speed-up technique and needs new weights. |
+
+### Real Rakazo traffic on Qwen (usage log, 11 requests of 11–15K tokens)
+
+The previous reply is cached with the prompt (cached = previous prompt + previous completion exactly), so the uncached tail is only the new group messages. A tail still costs: 27 tokens 7.8 s, 94 tokens 16.7 s, 392 tokens 38.5 s, 849 tokens 44.6 s; that is decode-like cost for small tails because a few tokens share almost no expert reads. Decode is 1.6–2.9 tok/s, so a 237-token reply took 125 s and a 27-token one 12 s. **Reply length and the number of requests per group message set the bots' latency; the engine is near its limit.** Shorter bot replies are the largest lever left for the Rakazo workload, and it is outside the engine.
+
+### Cache-aware routing for Nemotron (built, offline-tested, not yet measured on the real model)
+
+`VEYSTRIX_NEMOTRON_CACHE_ROUTING=off|observe|swap` (default off), `…_EPSILON` (0.02), `…_WINDOW` (3 tokens), `…_STATS` (JSON path). Decode rows only; prefill and verification route exactly. `observe` counts how many swaps each tolerance would allow and changes no output; `swap` takes a recently used expert in place of a non-resident one scoring within epsilon. Tiny-model tests: `models/nemotron35/tests/unit/test_cache_routing.py` (observe and epsilon 0 reproduce exact routing, prefill is exact, swap prefers recent experts and keeps weights normalised). A real run of `observe` then `swap` is needed before any claim; it needs the live engine stopped, and `swap` needs a quality check on tool-call prompts before it is offered anywhere.

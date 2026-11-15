@@ -163,6 +163,16 @@ Teacher-forced quality, 4,224 tokens (scored positions in the masked region): ba
 
 Server check with both flags (guarded private server on port 18080 with the app's flags, `--enable kv-tiered4 --enable short-throughput`, prefix cache on): a 3,432-token cold request answered in 43.1 s including 24 decoded tokens (baseline server 52.6 s); the identical request restored 3,425 of 3,432 tokens from the prefix cache in 11.5 s (baseline 11.1 s; decode about 2 tok/s in both); a 6,375-token cold request, which runs the masked path past position 2,051, finished cleanly in 73.9 s; no errors in the log. The greedy text of the cold and the restored request differs in wording in both builds (the restore path continues from a snapshot taken at a different chunk edge), so that difference is not caused by the flags. The dense prefix and masked path apply only to calls of at least 16 queries; decode and speculative verification keep the per-query gather (unit test). The baseline server's third request was cut when the run guard stopped it at thermal level 2 (the machine had been under load for most of the session).
 
+Longer context, teacher-forced at N = 8,320 (scored positions in the masked region; history up to 8,320 keys), with the noise scale of the same prompt for reference (baseline run with 1,024-token prefill chunks):
+
+| Pair | mean KL | median | p95 | top-1 agree |
+|---|---|---|---|---|
+| baseline vs dense prefix + masked sparse | 0.0193 | 0.0018 | 0.049 | 0.976 |
+| baseline vs baseline at chunk 1,024 | 0.0110 | 0.0016 | 0.047 | 0.976 |
+| chunk 1,024 vs dense prefix + masked sparse | 0.0128 | 0.0015 | 0.045 | 0.984 |
+
+NLL of the true next token: baseline 1.1351, chunk 1,024 1.1249, flags 1.1047; next-token accuracy 0.685 / 0.693 / 0.701 (127 positions). The flags change the distributions about as much as a chunk-size change does at the median and the 95th percentile, with a somewhat heavier mean (a few positions, plausibly where the top-512 block selection flips on a near-tie); the true-token likelihood does not get worse. Prefill 95.3 s (baseline) against 70.2 s (flags) in this run. Evidence: `*night-ql8320-*`.
+
 ### PLE n-gram rows: prefetch tried and dropped
 
 The one PLE layer costs 3.9 s of a 4,096-token prefill (the n-gram embedding reads 16 random rows per token, 65,536 rows, from a 128-shard table on SSD; `FLASHNEXT_NGRAM_PARALLEL_MIN=16` is already in the served environment, and without it a cold 4K prefill measured 60.8 s against 46.8 s). The row ids depend only on the token ids, so I tried queueing every row of the prompt on the read pool before the layers (`FLASHNEXT_PLE_PREFETCH`, exact by construction: unit-tested against the module's own ids). Cold 4K prefill, page cache purged before each arm: off 33.8 s, on 36.8 s, physical reads 84.1 -> 87.3 GB. During prefill every store descriptor is `F_NOCACHE` (the `uncached-prefill-reads` mode), so the warmed pages are not kept and each lookup reads its page again (a row is about 80 bytes but a read moves a 16 KB page: about 3 GB of physical reads per 4,096 tokens, already in the baseline). Warming through a cached descriptor would keep the pages but put 3-6 GB of page cache behind a 4-8K prompt, which the uncached mode exists to avoid. Reverted; nothing of it is in the tree.

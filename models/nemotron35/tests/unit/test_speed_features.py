@@ -834,6 +834,31 @@ class LayerMajorTests(unittest.TestCase):
             for x, y in zip(base[3], state):
                 self.assertTrue(bool(mx.all(x == y)), (pipelined, segment))
 
+    def test_shared_expert_starts_early_for_prefill_rows_only_and_changes_nothing(self):
+        import os
+        from unittest.mock import patch
+
+        outputs = []
+        for flag in ("0", "1"):
+            with patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_OVERLAP_SHARED": flag}):
+                s, core = self.core(100, pool_bytes=0)
+            try:
+                calls = []
+                for layer in core.model.backbone.layers:
+                    switch = getattr(layer.mixer, "switch_mlp", None)
+                    if switch is not None and switch.shared_fn is not None:
+                        inner = switch.shared_fn
+                        switch.shared_fn = lambda x, inner=inner: (calls.append(x.shape[1]), inner(x))[1]
+                logits = core.prefill(self.TOKENS)
+                decoded = core.decode(3)
+                outputs.append((f32(logits), f32(decoded), calls))
+            finally:
+                s.close()
+        self.assertEqual(outputs[0][2], [])                       # off: the shared expert never starts early
+        self.assertTrue(outputs[1][2] and all(width > 1 for width in outputs[1][2]))   # on: prefill rows only, not decode
+        self.assertTrue(bool(mx.all(outputs[0][0] == outputs[1][0])))
+        self.assertTrue(bool(mx.all(outputs[0][1] == outputs[1][1])))
+
     def test_each_layers_experts_are_read_once_per_segment(self):
         a_s, a = self.core(0, pool_bytes=0)
         b_s, b = self.core(len(self.TOKENS) + 4, pool_bytes=0)

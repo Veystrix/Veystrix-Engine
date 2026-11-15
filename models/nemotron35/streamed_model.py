@@ -118,6 +118,8 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
             # MOE-04/05: the layer after next is prefetched from the previous pass's routes when opted in.
             switch.lookahead_layer = (moe_layers[position + 2]
                                       if position + 2 < len(moe_layers) else None)
+    if os.environ.get("VEYSTRIX_NEMOTRON_OVERLAP_SHARED", "1") != "0":
+        _overlap_shared_experts(model, moe_layers)
     from . import cache_routing
     cache_routing.install(model)         # off unless VEYSTRIX_NEMOTRON_CACHE_ROUTING is observe or swap
     try:
@@ -128,6 +130,37 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
         raise
     dense_bytes = sum(v.nbytes for v in dense.values())
     return StreamedModel(model, pool, reader, config, dense_bytes)
+
+
+class OverlappedSharedMoE(nemotron_h.NemotronHMoE):
+    """The stock MoE block, except that the shared expert's result may already have been started by the routed-expert
+    layer (``StreamedSwitchMLP``) while the SSD was being read. The values are the same operations on the same input."""
+
+    def __call__(self, x):
+        residuals = x
+        inds, scores = self.gate(x)
+        if self.moe_latent_size is not None:
+            x = self.fc1_latent_proj(x)
+        self.switch_mlp.shared_result = None
+        y = self.switch_mlp(x, inds)
+        y = (y * scores[..., None]).sum(axis=-2).astype(y.dtype)
+        if self.moe_latent_size is not None:
+            y = self.fc2_latent_proj(y)
+        if self.config.n_shared_experts is not None:
+            started, self.switch_mlp.shared_result = self.switch_mlp.shared_result, None
+            y = y + (started[1] if started is not None and started[0] is residuals else self.shared_experts(residuals))
+        return y
+
+
+def _overlap_shared_experts(model, moe_layers) -> None:
+    """Let each routed-expert layer start its block's shared expert before it waits for the routed experts' reads.
+    Not for latent-projection models (the layer then sees a projected input, not the block's input)."""
+    for layer in moe_layers:
+        mixer = model.backbone.layers[layer].mixer
+        if getattr(mixer, "moe_latent_size", None) is not None or not hasattr(mixer, "shared_experts"):
+            continue
+        mixer.__class__ = OverlappedSharedMoE
+        mixer.switch_mlp.shared_fn = lambda x, mixer=mixer: mixer.shared_experts(x)
 
 
 def _attach_pack(reader, root, index) -> None:

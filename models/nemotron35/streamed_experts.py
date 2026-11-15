@@ -820,6 +820,8 @@ class StreamedSwitchMLP(nn.Module):
         self.next_gate = None
         self.lookahead_layer = None      # the MoE layer after next, prefetched from route history
         self._fma = None
+        self.shared_fn = None            # the layer's shared expert, started while the routed experts are being read
+        self.shared_result = None        # (input, output) of that early evaluation, taken by the MoE block
 
     def _prefetch_next(self, flat, rows_n):
         nxt = self.next_gate
@@ -892,7 +894,7 @@ class StreamedSwitchMLP(nn.Module):
         return mx.quantized_matmul(nn.relu2(h), weights['fc2.weight'], weights['fc2.scales'], weights['fc2.biases'],
                                    group_size=self.group_size, bits=4)
 
-    def _pipelined(self, flat, ids, unique, lead, dtype, profile, started, routed_at):
+    def _pipelined(self, x, flat, ids, unique, lead, dtype, profile, started, routed_at):
         """Several rows (prefill): each expert is computed as soon as its weights are here, while the remaining reads
         run, instead of after the last one. The same operations on the same rows as the loop below, so the result is
         bit-identical; only the order in which experts are computed differs, and the output is reassembled by position."""
@@ -910,7 +912,7 @@ class StreamedSwitchMLP(nn.Module):
                 mx.async_eval(*batch)
                 batch.clear()
 
-        self.pool.fetch(self.layer, unique.tolist(), on_ready=compute)
+        self.pool.fetch(self.layer, unique.tolist(), on_ready=compute, after_submit=lambda: self._start_shared(x))
         if profile is not None:
             profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())
         order_of_experts = [int(e) for e in unique]
@@ -918,6 +920,14 @@ class StreamedSwitchMLP(nn.Module):
             [ys[e] for e in order_of_experts], axis=0)
         order = np.argsort(np.concatenate([positions[e] for e in order_of_experts]))
         return stacked[mx.array(order)].reshape(*lead, k, flat.shape[-1]).astype(dtype)
+
+    def _start_shared(self, x):
+        """The shared expert does not depend on the routes: start it once the reads are submitted so the GPU runs it
+        while the SSD works. (Started before the reads are submitted it delayed them and decode lost 10%.)"""
+        if self.shared_fn is not None:
+            shared = self.shared_fn(x)
+            mx.async_eval(shared)
+            self.shared_result = (x, shared)
 
     def __call__(self, x, indices):
         lead = x.shape[:-1]
@@ -959,8 +969,8 @@ class StreamedSwitchMLP(nn.Module):
         if PIPELINE and not self.pool.reader.mapped and not (GATHER and len(unique) <= GATHER_MAX_EXPERTS):
             if GATHER:
                 self.pool.gather_over_cap += 1      # same count as the loop below keeps
-            return self._pipelined(flat, ids, unique, lead, x.dtype, profile, started, routed_at)
-        arrays = self.pool.fetch(self.layer, unique.tolist())
+            return self._pipelined(x, flat, ids, unique, lead, x.dtype, profile, started, routed_at)
+        arrays = self.pool.fetch(self.layer, unique.tolist(), after_submit=lambda: self._start_shared(x))
         if profile is not None:
             profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())
         if GATHER:      # counted so telemetry shows when the cap sent a call down the per-expert path instead

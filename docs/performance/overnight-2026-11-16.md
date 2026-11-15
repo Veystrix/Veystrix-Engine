@@ -144,6 +144,23 @@ Quality, teacher-forced on the real checkpoint (`qwen_logit.py`: prefill N-128 n
 
 The first generated token of the 4,096-token cold-prefill pair differed (a high-entropy prompt), which is consistent with these KLs. Not made the default: the fingerprint change invalidates existing Qwen prefix snapshots once, and the app's launch flags are the owner's. Suggested: add `FLASHNEXT_QSA_DENSE_PREFIX=1` to the Qwen launch environment. Evidence: `*night-qattn-*`, `*night-qwen-prof-*`, `*night-qp4096-*`, `*night-ql*`.
 
+### Masked sparse attention (second part, opt-in, rounding-level)
+
+The sparse queries (those past position 2,051) still paid for a per-query gather: 722 ms per full-attention layer for a 2,048-token chunk over a 2,048-token history (gather and dequantize 384 ms, index selection 119 ms, SDPA about 270 ms), although the whole K/V history of a 4K prompt is only 8 MB in bf16 per layer. `FLASHNEXT_QSA_MASKED_SPARSE=1` (default off, registered with `FLASHNEXT_QSA_MASKED_MAX_KEYS`, default 16,384, and `FLASHNEXT_QSA_MASKED_TILE`, default 256; part of the cache fingerprint as `qsa_masked_sparse`) dequantizes the history once with the same `gather_selected` the per-query path uses and runs one masked `scaled_dot_product_attention` per query tile with the existing exact selection mask (`_chunk_mask(scatter=True)`, pinned to `_selected_indices` by the existing tests). Same selected tokens, same dequantized values, only the SDPA reduction order differs. Histories longer than the cap keep the per-query gather. Unit test: tiny model, logits equal to the gather path with tiles of 5 and 7, with and without the dense prefix, and with the cap forcing the gather.
+
+One full-attention layer, real weights, 2,048-token chunks: first chunk 607 ms -> 121 ms (dense prefix), second chunk 722 ms -> 173 ms (masked sparse).
+
+Cold prefill, app config (`kv-tiered4` + `short-throughput`), natural text, cool machine, AC, thermal level 0, swap unchanged, same first generated token in every pair:
+
+| Prompt tokens | baseline | dense prefix | dense prefix + masked sparse |
+|---|---|---|---|
+| 4,096 | 48.0 s (85 tok/s) | 41.3 s (99 tok/s) | 33.9 s (121 tok/s, +42%) |
+| 8,192 | 95.1 s (86 tok/s) | not run | 72.4 s (113 tok/s, +31%) |
+
+MLX peak 6.85 / 7.05 GB (unchanged), available-memory floor 4.1-4.3 GiB (the same as the baseline arm).
+
+Teacher-forced quality, 4,224 tokens (scored positions in the masked region): baseline vs dense + masked mean KL 0.0073, median 0.0032, p95 0.0225, top-1 agreement 0.953; NLL 1.1709 -> 1.1661; next-token accuracy 0.646 / 0.638. Dense prefix alone: KL 0.0067. Suggested launch flags if adopted: `FLASHNEXT_QSA_DENSE_PREFIX=1 FLASHNEXT_QSA_MASKED_SPARSE=1`. Both change the cache fingerprint (existing Qwen prefix snapshots are not restored once). Evidence: `*night-qattn-masked`, `*night-qp4096-masked`, `*night-qp8192-*`, `*night-ql4224-masked`.
+
 ## Qwen (Flash-Next) one-chunk cold prefills: layer-major with read-ahead for 1,024-2,048 tokens (opt-in, exact)
 
 The app launches Qwen with `--enable kv-tiered4 --enable short-throughput`, i.e. the mode `layer-major-hybrid-4k`: 4,096-token layer-major windows, `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=2049`, and windows of up to 2,048 tokens executed chunk-major. So a prompt of 2,049 tokens or more already uses layer-major with read-ahead, and a prompt of up to 2,048 tokens (one chunk) takes `prefill._run_chunks`' one-span shortcut: each layer reads its routed experts and then computes, nothing overlapped. At 1,600 tokens that was 62 GB read (about 21 s of SSD time) in series with the compute, 34.8 s in all.

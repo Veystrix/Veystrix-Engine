@@ -72,3 +72,18 @@ Short prefills are SSD-bound by nature: at 512 tokens the router uses 107 of 128
 - Submitting layers with `mx.async_eval` instead of `mx.eval` in layer-major prefill: 311 against 314 tok/s, no CPU bubbles to remove.
 - `mx.compile` on the Mamba SSD scan: bit-identical but 41.2 against 41.3 ms. Step 128 instead of 256 is 15% faster for the scan but changes rounding and is worth only about 2% of prefill.
 - Dequantize + dense bf16 matmul instead of `quantized_matmul` for the large projections: bit-identical for M >= 384 and about 10% faster per GEMM (about 3% of prefill); not done, and not bit-equal at M = 96 so unusable for per-expert calls.
+
+## Quality check of all three prefill changes together (real checkpoint, teacher-forced)
+
+`logit_seq.py`: prefill 12,160 tokens of natural text (repository docs and code), then score the last 128 positions (all-position logits, true next token known). Legacy = `PREFETCH_ORDER=legacy`, `PIPELINE_EXPERTS=0`, `ATTENTION_PREFILL_SDPA=0`.
+
+| Pair | mean KL | median | p95 | top-1 agree |
+|---|---|---|---|---|
+| legacy vs legacy (repeat run) | 0 | 0 | 0 | 1.000 |
+| legacy vs new | 0.0099 | 0.0034 | 0.050 | 0.945 |
+| legacy vs legacy at chunk 1024 | 0.0114 | 0.0038 | 0.042 | 0.938 |
+| new vs legacy at chunk 1024 | 0.0123 | 0.0040 | 0.056 | 0.977 |
+
+Mean negative log-likelihood of the true next token: legacy 2.0845, new 2.0922, legacy at chunk 1024 2.0875; next-token accuracy 0.465 / 0.457 / 0.457 (127 positions, so one token is 0.008). The new build moves the distributions as much as halving the prefill chunk size does and no more. The prefetch order and the pipelining are bit-identical; the whole difference comes from the attention change (rounding only, closer to an fp32 reference).
+
+Harness comparison, same cell (8,192 tokens, INT8 KV, prompt lookup, prefix cache on, memory sampler on): legacy 231.9 tok/s (TTFT 35.4 s), new 293.5 tok/s (TTFT 27.9 s), decode 7.66 / 7.70 tok/s, available-memory floor 5.13 / 5.11 GiB (`results/nemotron35/*stage11-qualification-manual`, the two newest).

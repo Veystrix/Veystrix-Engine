@@ -31,7 +31,7 @@ class KeepWarmTests(unittest.TestCase):
 
     def test_spins_until_every_read_is_done(self):
         pending = Future()
-        timer = threading.Timer(0.01, pending.set_result, args=(None,))
+        timer = threading.Timer(0.3, pending.set_result, args=(None,))
         timer.start()
         with mock.patch.object(expert_cache, "_keepwarm_spin") as spin, \
                 mock.patch.object(expert_cache, "_KEEPWARM_PERIOD", [0.001]):
@@ -42,7 +42,7 @@ class KeepWarmTests(unittest.TestCase):
 
     def test_stream_pack_wait_spins_while_reads_run(self):
         pending = Future()
-        timer = threading.Timer(0.01, pending.set_result, args=(None,))
+        timer = threading.Timer(0.3, pending.set_result, args=(None,))
         timer.start()
         read = expert_cache._StreamedPackRead(None, [pending])
         with mock.patch.object(expert_cache, "_keepwarm_spin") as spin, \

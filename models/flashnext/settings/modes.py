@@ -107,6 +107,9 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_UNCACHED_EXPERT_READS": "0",         # buffered reads are the reference; uncached reads are an explicit opt-in below
     "FLASHNEXT_EXPERT_POOL_BUFFERED_FILL": "0",     # decode pool fills bypass the file cache (F_NOCACHE); buffered fills are an opt-in below
     "FLASHNEXT_NGRAM_DEDUP": "0",                  # bounded per-lookup dedup is an unmeasured prototype
+    "FLASHNEXT_LAYER_MAJOR_SINGLE": "0",           # one-chunk prefills use the reference path; layer-major for them is an opt-in below
+    "FLASHNEXT_QSA_DENSE_PREFIX": "0",             # per-query gather is the reference; the dense prefix is an explicit opt-in below
+    "FLASHNEXT_QSA_MASKED_SPARSE": "0",            # likewise for the masked sparse path
 }
 # Offline-tested only. Each is explicit (--enable NAME), never a default, and labelled in the banner.
 EXPERIMENTAL = {
@@ -169,6 +172,15 @@ EXPERIMENTAL = {
     "short-pool-reuse": ({"FLASHNEXT_SHORT_PREFILL_POOL_REUSE": "1"},
                          "reuse resident pool experts in short prefills; replay predicts under 5% hits"),
 }
+EXPERIMENTAL["qsa-fast-prefill"] = (
+    {"FLASHNEXT_QSA_DENSE_PREFIX": "1", "FLASHNEXT_QSA_MASKED_SPARSE": "1"},
+    "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
+    "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
+    "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint")
+EXPERIMENTAL["single-chunk-layer-major"] = (
+    {"FLASHNEXT_LAYER_MAJOR_SINGLE": "1", "FLASHNEXT_LAYER_MAJOR_MIN_TOKENS": "1024"},
+    "experimental: prefills of 1,024-2,048 tokens (one chunk) use the layer-major order so the next layer's experts are read "
+    "while the current one computes; exact; real 1,200/1,600-token cold prefill 1.14x/1.3x")
 THROUGHPUT_FEATURES = ("layer-major-hybrid-4k", "layer-prefetch", "uncached-prefill-reads", "pool-buffered-fill")
 EXPERIMENTAL["short-throughput"] = (
     {key: value for feature in THROUGHPUT_FEATURES for key, value in EXPERIMENTAL[feature][0].items()},
@@ -269,6 +281,10 @@ def plan_mode(mode, *, pool_gb=None, enable=(), available_gb=None, prefix_dir=No
         raise ModeError("choose only one layer-major window size")
     if "uncached-reads" in enable and {"uncached-prefill-reads", "short-throughput"}.intersection(enable):
         raise ModeError("choose one of uncached-reads (all phases) and uncached-prefill-reads (prefill only)")
+    if "single-chunk-layer-major" in enable and not LAYER_MAJOR_MODES.intersection(enable):
+        raise ModeError("single-chunk-layer-major needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
+    if "qsa-fast-prefill" in enable and not {"kv-k16v4", "kv-k8v4", "kv-tiered4", "qsa-gather"}.intersection(enable):
+        raise ModeError("qsa-fast-prefill needs the gather QSA kernel (kv-tiered4, kv-k8v4, kv-k16v4 or qsa-gather)")
     if "layer-prefetch" in enable and not LAYER_MAJOR_MODES.intersection(enable):
         raise ModeError("layer-prefetch needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
     if "layer-prefetch" in enable and "prefill-16gb-union" in enable:
@@ -338,6 +354,8 @@ def plan_mode(mode, *, pool_gb=None, enable=(), available_gb=None, prefix_dir=No
         flags, label = EXPERIMENTAL[name]
         env.update(flags)
         labels[name] = label
+    if "single-chunk-layer-major" in enable:
+        env.update(EXPERIMENTAL["single-chunk-layer-major"][0])      # its 1,024 minimum wins over a hybrid mode's, whatever the order
     if {"kv-k16v4", "kv-k8v4", "kv-tiered4", "qsa-gather"} & set(enable):
         # The experimental path needs the staged headroom and pressure stops,
         # even when the normal AGENTIC profile is configured for swap-only.

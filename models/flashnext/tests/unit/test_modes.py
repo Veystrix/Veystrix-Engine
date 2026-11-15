@@ -24,7 +24,8 @@ class FlagNameTests(unittest.TestCase):
                  store.FLAG_UNCACHED_EXPERT_READS, layer_major.FLAG_PREFETCH,
                  expert_pool.BUFFERED_FILL_FLAG, ngram.FLAG_DEDUP, memory_controller.FLAG_SWAP_CEILING,
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
-                 prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION}
+                 prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION,
+                 qsa_chunk.FLAG_DENSE_PREFIX, qsa_chunk.FLAG_MASKED_SPARSE, "FLASHNEXT_LAYER_MAJOR_SINGLE"}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):
@@ -175,6 +176,26 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.env["FLASHNEXT_PREFILL_RELEASE_DECODE_POOL"], "0")   # the manager releases the pool
         self.assertEqual(set(plan.labels), {"memory-manager", "prefix-profiles"})
         self.assertIn("EXPERIMENTAL", M.banner(plan))
+
+    def test_prefill_speed_options_compose_and_default_off(self):
+        base = ["kv-tiered4", "short-throughput"]
+        plain = M.plan_mode("agentic", pool_gb=2, enable=base, prefix_dir="/tmp/x", serve=True).env
+        for key in ("FLASHNEXT_LAYER_MAJOR_SINGLE", "FLASHNEXT_QSA_DENSE_PREFIX", "FLASHNEXT_QSA_MASKED_SPARSE"):
+            self.assertEqual(plain[key], "0")
+        self.assertEqual(plain["FLASHNEXT_LAYER_MAJOR_MIN_TOKENS"], "2049")
+        for order in (base + ["single-chunk-layer-major", "qsa-fast-prefill"], ["qsa-fast-prefill", "single-chunk-layer-major"] + base):
+            env = M.plan_mode("agentic", pool_gb=2, enable=order, prefix_dir="/tmp/x", serve=True).env
+            self.assertEqual(env["FLASHNEXT_LAYER_MAJOR_SINGLE"], "1")
+            self.assertEqual(env["FLASHNEXT_LAYER_MAJOR_MIN_TOKENS"], "1024")      # wins over the hybrid mode's, in any order
+            self.assertEqual((env["FLASHNEXT_QSA_DENSE_PREFIX"], env["FLASHNEXT_QSA_MASKED_SPARSE"]), ("1", "1"))
+            self.assertEqual(env["FLASHNEXT_QSA_KERNEL"], "gather")
+        with patch.dict(os.environ, {"FLASHNEXT_QSA_DENSE_PREFIX": "1"}):             # a stale inherited value is replaced
+            applied = M.apply_mode(dict(os.environ), M.plan_mode("agentic", pool_gb=2, enable=base, prefix_dir="/tmp/x", serve=True))
+            self.assertEqual(applied["FLASHNEXT_QSA_DENSE_PREFIX"], "0")
+        with self.assertRaises(M.ModeError):
+            M.plan_mode("agentic", pool_gb=2, enable=["qsa-fast-prefill"], prefix_dir="/tmp/x", serve=True)
+        with self.assertRaises(M.ModeError):
+            M.plan_mode("agentic", pool_gb=2, enable=["kv-tiered4", "single-chunk-layer-major"], prefix_dir="/tmp/x", serve=True)
 
     def test_bad_requests_are_refused(self):
         for call in (lambda: M.plan_mode("fast"), lambda: M.plan_mode(M.CHAT, enable=["nope"]),

@@ -170,6 +170,95 @@ class SpeculativeTinyTest(unittest.TestCase):
             for token in expected[:8]:
                 mx.eval(self.language(mx.array([[token]], dtype=mx.uint32), cache=reference).logits)
 
+    def _reference_tokens(self, first, count):
+        reference = self.prefill()
+        tokens = [first]
+        for _ in range(count - 1):
+            logits = self.language(mx.array([[tokens[-1]]], dtype=mx.uint32), cache=reference).logits
+            tokens.append(int(mx.argmax(logits[0, -1]).item()))
+        return tokens
+
+    def _follow_logits(self, cache, token):
+        return self.language(mx.array([[token]], dtype=mx.uint32), cache=cache).logits
+
+    def _committed_reference(self, tokens):
+        cache = self.prefill()
+        for token in tokens:
+            mx.eval(self.language(mx.array([[token]], dtype=mx.uint32), cache=cache).logits)
+        return cache
+
+    def test_prompt_lookup_v2_and_rollback_keep_greedy_tokens(self):
+        """A draft that is right for two tokens and then wrong exercises the partial-accept path in all three modes."""
+        from unittest import mock
+        from models.flashnext.speculative import prompt_lookup_tokens
+        from models.shared.prompt_lookup import ThroughputGate
+
+        expected = self._reference_tokens(5, 10)
+        wrong = (expected[3] + 1) % 64
+        draft = [expected[1], expected[2], wrong, expected[4], expected[5]]
+        history = [59, 5, *draft, 60, 59]
+        for v2, rollback in ((False, False), (True, False), (True, True)):
+            candidate = self.prefill()
+            environment = {"VEYSTRIX_LOOKUP_V2": "1" if v2 else "0", "FLASHNEXT_LOOKUP_ROLLBACK": "1" if rollback else "0"}
+            stats = {}
+            with mock.patch.dict("os.environ", environment), \
+                    mock.patch.object(ThroughputGate, "allow", return_value=True):
+                actual = list(prompt_lookup_tokens(self.language, candidate, history, mx.array([5], dtype=mx.uint32),
+                                                   8, set(), lambda: None, stats=stats))
+            self.assertEqual(actual, expected[:8], (v2, rollback))
+            self.assertGreater(stats["proposed"], 0)
+            follow = self._follow_logits(candidate, expected[8])
+            reference = self._follow_logits(self._committed_reference(expected[:8]), expected[8])
+            if rollback:
+                self.assertLess(float(mx.max(mx.abs(follow - reference)).item()), 1e-3)
+            else:
+                self.assertTrue(mx.array_equal(follow, reference).item(), (v2, rollback))
+
+    def test_sampled_prompt_lookup_with_top_k_one_equals_plain_sampling(self):
+        """top-k 1 leaves no randomness, so the lookup path must emit exactly what one-at-a-time sampling emits."""
+        from unittest import mock
+        from models.flashnext.speculative import prompt_lookup_tokens
+        from models.shared.prompt_lookup import ThroughputGate
+        from veystrix.sampling import Sampler, Sampling
+
+        settings = Sampling(temperature=1.0, top_p=1.0, top_k=1, min_p=0.0, presence_penalty=0.0)
+        plain, reference = Sampler(settings), self.prefill()
+        expected = [5]
+        for _ in range(9):
+            logits = self.language(mx.array([[expected[-1]]], dtype=mx.uint32), cache=reference).logits
+            expected.append(int(plain(logits[0, -1]).item()))
+        wrong = (expected[3] + 1) % 64
+        history = [59, 5, expected[1], expected[2], wrong, expected[4], 60, 59]
+        for rollback in (False, True):
+            candidate = self.prefill()
+            with mock.patch.dict("os.environ", {"FLASHNEXT_LOOKUP_ROLLBACK": "1" if rollback else "0"}), \
+                    mock.patch.object(ThroughputGate, "allow", return_value=True):
+                actual = list(prompt_lookup_tokens(self.language, candidate, history, mx.array([5], dtype=mx.uint32),
+                                                   8, set(), lambda: None, sampler=Sampler(settings)))
+            self.assertEqual(actual, expected[:8], rollback)
+
+    def test_sampled_prompt_lookup_leaves_the_cache_holding_exactly_the_emitted_tokens(self):
+        from unittest import mock
+        from models.flashnext.speculative import prompt_lookup_tokens
+        from models.shared.prompt_lookup import ThroughputGate
+        from veystrix.sampling import Sampler, Sampling
+
+        # A flat target (temperature 8) with a wide support: drafts are sometimes kept and often rejected.
+        for seed in range(5):
+            mx.random.seed(seed)
+            sampler = Sampler(Sampling(temperature=8.0, top_p=1.0, top_k=0, min_p=0.0, presence_penalty=0.5))
+            candidate = self.prefill()
+            history = [59, 5, 9, 13, 5, 9, 13, 5, 9, 13, 60, 5]
+            with mock.patch.object(ThroughputGate, "allow", return_value=True):
+                emitted = list(prompt_lookup_tokens(self.language, candidate, history, mx.array([5], dtype=mx.uint32),
+                                                    12, set(), lambda: None, sampler=sampler))
+            self.assertEqual(len(emitted), 12)
+            self.assertTrue(all(0 <= token < 64 for token in emitted))
+            self.assertEqual(emitted[0], 5)
+            follow = self._follow_logits(candidate, 3)
+            reference = self._follow_logits(self._committed_reference(emitted), 3)
+            self.assertTrue(mx.array_equal(follow, reference).item(), seed)
+
     def test_prompt_lookup_depth_and_acceptance_cooldown(self):
         from models.shared.prompt_lookup import ThroughputGate
 

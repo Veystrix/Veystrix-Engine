@@ -1164,20 +1164,37 @@ class MTPGreedy:
                 yield token
 
 
-def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_cancel):
-    """Greedy Flash-Next decode using the existing singleton-equivalent verifier."""
+def lookup_rollback_enabled():
+    """FLASHNEXT_LOOKUP_ROLLBACK=1: keep the verified prefix from the verifier's intermediate GDN states instead of
+    restoring the snapshot and replaying it. The states match singleton decoding to about 1e-6 rather than bit for bit."""
+    return os.environ.get("FLASHNEXT_LOOKUP_ROLLBACK", "0") == "1"
+
+
+def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_cancel, sampler=None, stats=None):
+    """Flash-Next decode that drafts from the context and verifies with the singleton-equivalent verifier.
+
+    Greedy when ``sampler`` is None or greedy. With a sampling ``sampler`` the verify is lossless speculative sampling
+    against point-mass drafts (``Sampler.verify_point_mass``): the tokens follow the distribution of one-at-a-time
+    sampling. ``stats`` (a dict) receives the gate's counters when the generator ends.
+    """
     from mlx_vlm.models.qwen3_5 import language as qwen35_language
 
-    from models.shared.prompt_lookup import PromptLookup, ThroughputGate
+    from models.shared.prompt_lookup import make_gate, make_lookup
     from . import memory_controller
     from .qwen4_verifier import Qwen4ExactSpeculativeVerifier
 
     qwen35_language._EXACT_SPECULATIVE_VERIFIER = Qwen4ExactSpeculativeVerifier()
-    lookup, gate = PromptLookup(history), ThroughputGate()
+    # The verification workspace holds 8 rows (one token plus up to 7 drafts); see veystrix/backends/flashnext.py.
+    lookup, gate = make_lookup(history), make_gate(7)
+    sampled = sampler is not None and not sampler.settings.greedy
+    use_rollback = lookup_rollback_enabled()
     produced = 0
     value = int(first.item())
 
     trace = benchmark_trace.get()
+
+    def pick(row):
+        return int(sampler(row).item()) if sampled else int(mx.argmax(row).item())
 
     def singleton(current, want_logits=True):
         started = trace.clock() if trace is not None else None
@@ -1187,65 +1204,83 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
             mx.eval([entry.state for entry in cache])
             result = None
         else:
-            result = int(mx.argmax(out.logits[0, -1]).item())
+            result = pick(out.logits[0, -1])
         if trace is not None:
             trace.end_round("target_round", started, positions=1, cache_commit_only=not want_logits)
         return result
 
-    while produced < horizon and value not in stops:
-        check_cancel()
-        began = time.perf_counter()
-        draft_ns = trace.clock() if trace is not None else None
-        lookup.append(value)
-        drafts = (
-            lookup.propose(min(gate.depth, horizon - produced - 1))
-            if gate.allow() and not memory_controller.forbid_optional() else []
-        )
-        # Stop delimiters never enter the cache or the emitted token tape.
-        for index, draft in enumerate(drafts):
-            if draft in stops:
-                drafts = drafts[:index]
-                break
-        if trace is not None:
-            trace.end_round("draft_round", draft_ns, proposed=len(drafts))
-        if not drafts:
-            yield value
-            produced += 1
-            began = time.perf_counter()
-            value = singleton(value, want_logits=produced < horizon)
-            gate.observe(False, 1, time.perf_counter() - began)
-            continue
-
-        snapshot = snapshot_cache(cache)
-        ids = mx.array([[value, *drafts]], dtype=mx.uint32)
-        verify_ns = trace.clock() if trace is not None else None
-        out = language(ids, cache=cache, speculative_verify=True, return_hidden=True, skip_logits=True)
-        predictions = language.speculative_argmax_from_hidden(out.hidden_states[-1])[0].tolist()
-        committed = [value]
-        matched = predictions[:len(drafts)] == drafts
-        if trace is not None:
-            accepted = 0
-            for predicted, draft in zip(predictions, drafts):
-                if predicted != draft:
-                    break
-                accepted += 1
-            trace.end_round("target_round", verify_ns, positions=len(drafts) + 1,
-                            verification=True, accepted=accepted)
-        if matched:
-            committed.extend(drafts)
-            value = predictions[-1]
-        else:
-            restore_cache(cache, snapshot)
-            value = singleton(value)
-            for draft in drafts:
-                if draft != value or draft in stops:
-                    break
-                committed.append(draft)
-                value = singleton(draft, want_logits=produced + len(committed) < horizon)
-        gate.observe(True, len(committed), time.perf_counter() - began, proposed=len(drafts))
-        for current in committed:
+    try:
+        while produced < horizon and value not in stops:
             check_cancel()
-            produced += 1
-            yield current
-        for current in committed[1:]:
-            lookup.append(current)
+            began = time.perf_counter()
+            draft_ns = trace.clock() if trace is not None else None
+            lookup.append(value)
+            if sampled:
+                sampler.observe(value)
+            drafts = (
+                lookup.propose(min(gate.depth, horizon - produced - 1))
+                if gate.allow() and not memory_controller.forbid_optional() else []
+            )
+            # Stop delimiters never enter the cache or the emitted token tape.
+            for index, draft in enumerate(drafts):
+                if draft in stops:
+                    drafts = drafts[:index]
+                    break
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
+            if not drafts:
+                yield value
+                produced += 1
+                began = time.perf_counter()
+                value = singleton(value, want_logits=produced < horizon)
+                gate.observe(False, 1, time.perf_counter() - began)
+                continue
+
+            snapshot = snapshot_cache(cache)
+            ids = mx.array([[value, *drafts]], dtype=mx.uint32)
+            verify_ns = trace.clock() if trace is not None else None
+            out = language(ids, cache=cache, speculative_verify=True, return_hidden=True, skip_logits=True)
+            if sampled:
+                rows = language.speculative_logits_from_hidden(out.hidden_states[-1])[0]
+                kept, following = sampler.verify_point_mass(rows, drafts)
+            else:
+                predictions = language.speculative_argmax_from_hidden(out.hidden_states[-1])[0].tolist()
+                kept = 0
+                for predicted, draft in zip(predictions, drafts):
+                    if predicted != draft:
+                        break
+                    kept += 1
+                following = predictions[kept]
+            committed = [value, *drafts[:kept]]
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(drafts) + 1,
+                                verification=True, accepted=kept)
+            if kept < len(drafts):
+                if use_rollback:
+                    rollback_verified(language, cache, snapshot, out, len(drafts) + 1, kept + 1, materialize=True)
+                else:
+                    restore_cache(cache, snapshot)
+                    if sampled:
+                        # The redraw is already chosen; the cache only has to hold the kept tokens, one at a time.
+                        for current in committed:
+                            singleton(current, want_logits=False)
+                    else:
+                        # Greedy: the singleton replay also re-derives the next token, as before.
+                        following = singleton(value)
+                        committed = [value]
+                        for draft in drafts:
+                            if draft != following or draft in stops:
+                                break
+                            committed.append(draft)
+                            following = singleton(draft, want_logits=produced + len(committed) < horizon)
+            value = following
+            gate.observe(True, len(committed), time.perf_counter() - began, proposed=len(drafts))
+            for current in committed:
+                check_cancel()
+                produced += 1
+                yield current
+            for current in committed[1:]:
+                lookup.append(current)
+    finally:
+        if stats is not None:
+            stats.update(gate.stats())

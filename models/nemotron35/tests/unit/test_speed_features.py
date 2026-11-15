@@ -498,6 +498,42 @@ class PrefixCacheTests(unittest.TestCase):
             self.assertTrue(all(mx.array_equal(a, b).item() for a, b in
                                 zip(reference.state_arrays(), candidate.state_arrays(), strict=True)))
 
+    def test_sampled_lookup_with_top_k_one_equals_plain_sampling_and_leaves_state_exact(self):
+        """top-k 1 leaves no randomness: the lookup path must emit what one-at-a-time sampling emits, with the same state."""
+        from models.nemotron35.backend_core import EngineCore
+        from models.shared.prompt_lookup import ThroughputGate
+        from veystrix.sampling import Sampler, Sampling
+
+        directory = Path(_dir) / "sampled-lookup"
+        write_checkpoint(directory, config=dict(TINY_CONFIG, head_dim=64))
+        models = [load_streamed(directory, pool_bytes=0, config_check=permissive_config_check) for _ in range(2)]
+        for model in models:
+            self.addCleanup(model.close)
+        reference, candidate = [EngineCore(model, chunk_tokens=4, int8_kv=True) for model in models]
+        settings = Sampling(temperature=1.0, top_p=1.0, top_k=1, min_p=0.0, presence_penalty=0.0)
+        prompt = self.PROMPT[:12]
+        plain = Sampler(settings)
+        first = int(plain(reference.prefill(prompt)).item())
+        expected = [first]
+        for _ in range(7):
+            expected.append(int(plain(reference.decode(expected[-1])).item()))
+        wrong = (expected[3] + 1) % 64
+        history = [*prompt, first, expected[1], expected[2], wrong, expected[4], 60, first]
+        candidate.prefill(prompt)
+        stats = {}
+        with unittest.mock.patch.object(ThroughputGate, "allow", return_value=True):
+            actual = list(candidate.prompt_lookup_tokens(history, mx.array([first]), 6, set(), lambda: False,
+                                                         sampler=Sampler(settings), stats=stats))
+        self.assertEqual(actual, expected[:6])
+        self.assertGreater(stats["proposed"], 0)
+        reference.reset()
+        reference.prefill(prompt)
+        for token in actual:
+            reference.decode(token)
+        self.assertEqual(candidate.cached_tokens, reference.cached_tokens)
+        self.assertTrue(all(mx.array_equal(a, b).item() for a, b in
+                            zip(reference.state_arrays(), candidate.state_arrays(), strict=True)))
+
     def test_ram_restore_is_independent_and_rejects_replaced_disk_state(self):
         with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_PREFIX_RAM_MB": "8"}):
             backend = self.backend()

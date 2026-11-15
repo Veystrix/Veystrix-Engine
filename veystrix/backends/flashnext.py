@@ -1262,6 +1262,7 @@ class FlashNextBackend(Conversation):
             decoder.set_route_observer(self.routing._observe)
 
         sampler = Sampler(self.sampling)
+        lookup_stats: dict = {}
 
         def standard_tokens():
             nonlocal token
@@ -1314,7 +1315,8 @@ class FlashNextBackend(Conversation):
 
         use_prompt_lookup = (
             os.environ.get("FLASHNEXT_PROMPT_LOOKUP") == "1"
-            and decoder is None and gate_probe is None and budget_state is None and self.sampling.greedy
+            and decoder is None and gate_probe is None and budget_state is None
+            and (self.sampling.greedy or os.environ.get("VEYSTRIX_LOOKUP_SAMPLING") == "1")
             and self.routing_profile in ("standard", "exact-quality")
             and self.routing.threshold == 1.0 and not swap_enabled()
             and not quantized_kv.fingerprint_parts()
@@ -1324,6 +1326,7 @@ class FlashNextBackend(Conversation):
 
             tokens = prompt_lookup_tokens(
                 self.language, self.cache, self.tape, token, generation_horizon, self.stops, check_cancel,
+                sampler=sampler, stats=lookup_stats,
             )
         else:
             tokens = standard_tokens() if decoder is None else decoder.generate(generation_horizon, self.stops)
@@ -1393,6 +1396,8 @@ class FlashNextBackend(Conversation):
             decode_gc.restore(gc_suspended)
             try:
                 tokens.close()
+                if lookup_stats:
+                    flight_recorder.record("lookup_stats", sampled=not self.sampling.greedy, **lookup_stats)
             finally:
                 try:
                     if decoder is not None:

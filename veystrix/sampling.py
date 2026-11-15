@@ -114,17 +114,16 @@ class Sampler:
             self.observe(int(token))
         return token
 
-    def __call__(self, logits):
-        """`logits` is the final row, shape (1, vocab) or (vocab,)."""
+    def distribution(self, logits):
+        """The distribution `__call__` draws from, for one row of logits.
+
+        Returns ``(ids, masked)``: ``masked`` holds the logits that survive presence penalty, temperature, top-k, min-p and
+        top-p (the rest are -inf); ``ids`` maps its positions to token ids, or is None when ``masked`` spans the vocabulary.
+        """
         import mlx.core as mx
 
         s = self.settings
         row = logits.reshape(-1)
-        if s.greedy:
-            # Shape (1,), not a scalar: the decode loop feeds `token[None]`
-            # to the model and needs (1, 1).
-            return mx.argmax(row, axis=-1).reshape(1).astype(mx.uint32)
-
         if s.presence_penalty and self._seen:
             seen = mx.array(sorted(self._seen), dtype=mx.int32)
             hits = mx.zeros(row.shape[0], dtype=row.dtype)
@@ -143,32 +142,11 @@ class Sampler:
             # Masked entries are -inf, so they never enter the nucleus; the
             # kept-first-crossing rule below still guarantees a non-empty set.
             kept = mx.sort(kept, axis=-1)
-            small = mx.take(row, kept, axis=-1)
-            return self._note_sampled(self._finish(small, kept))
+            return kept, self._mask(mx.take(row, kept, axis=-1))
+        return None, self._mask(row)
 
-        probabilities = mx.softmax(row, axis=-1)
-
-        if s.min_p > 0.0:
-            floor = s.min_p * mx.max(probabilities)
-            row = mx.where(probabilities < floor, -mx.inf, row)
-            probabilities = mx.softmax(row, axis=-1)
-
-        if 0.0 < s.top_p < 1.0:
-            order = mx.argsort(-probabilities, axis=-1)
-            ordered = mx.take(probabilities, order, axis=-1)
-            carried = mx.cumsum(ordered, axis=-1)
-            # Keep the first token whose cumulative mass crosses top_p, so the
-            # nucleus is never empty when one token already exceeds it.
-            keep = carried - ordered < s.top_p
-            allowed = mx.zeros(row.shape[0], dtype=mx.bool_)
-            allowed = allowed.at[order].add(keep)
-            row = mx.where(allowed, row, -mx.inf)
-
-        token = mx.random.categorical(row)
-        return self._note_sampled(token.reshape(1).astype(mx.uint32))
-
-    def _finish(self, small, kept):
-        """Sample from the top-k survivor set and map the index back."""
+    def _mask(self, small):
+        """Apply min-p and top-p to logits and return them with the excluded entries at -inf."""
         import mlx.core as mx
 
         s = self.settings
@@ -183,11 +161,56 @@ class Sampler:
             order = mx.argsort(-probabilities, axis=-1)
             ordered = mx.take(probabilities, order, axis=-1)
             carried = mx.cumsum(ordered, axis=-1)
+            # Keep the first token whose cumulative mass crosses top_p, so the
+            # nucleus is never empty when one token already exceeds it.
             keep = carried - ordered < s.top_p
             allowed = mx.zeros(small.shape[0], dtype=mx.bool_)
             allowed = allowed.at[order].add(keep)
             small = mx.where(allowed, small, -mx.inf)
+        return small
 
-        drawn = mx.random.categorical(small)
-        token = mx.take(kept, drawn, axis=-1)
-        return token.reshape(1).astype(mx.uint32)
+    def __call__(self, logits):
+        """`logits` is the final row, shape (1, vocab) or (vocab,)."""
+        import mlx.core as mx
+
+        row = logits.reshape(-1)
+        if self.settings.greedy:
+            # Shape (1,), not a scalar: the decode loop feeds `token[None]`
+            # to the model and needs (1, 1).
+            return mx.argmax(row, axis=-1).reshape(1).astype(mx.uint32)
+
+        kept, masked = self.distribution(row)
+        drawn = mx.random.categorical(masked)
+        token = drawn if kept is None else mx.take(kept, drawn, axis=-1)
+        return self._note_sampled(token.reshape(1).astype(mx.uint32))
+
+    def verify_point_mass(self, rows, drafts):
+        """Lossless speculative sampling for drafts that come from the context.
+
+        ``rows[i]`` are the logits after the i-th verified input token (``len(rows) == len(drafts) + 1``); the caller has
+        already observed the token that preceded row 0. A draft is a point mass, so it is accepted with the probability the
+        target gives it, and a rejected position is redrawn from the target with that token removed. The tokens that come
+        out follow the same distribution as sampling one at a time. Returns ``(accepted, next_token)``: how many drafts were
+        kept, and the token that follows them (a redraw after a rejection, an ordinary draw after the last one).
+        """
+        import mlx.core as mx
+
+        for index, draft in enumerate(drafts):
+            kept, masked = self.distribution(rows[index])
+            probabilities = mx.softmax(masked, axis=-1)
+            hit = (kept == draft) if kept is not None else (mx.arange(masked.shape[0]) == draft)
+            chance = mx.sum(mx.where(hit, probabilities, 0.0))
+            draw = mx.random.uniform()
+            mx.eval(chance, draw)
+            # A draft that already holds (almost) all the mass leaves nothing to redraw from, so it stands.
+            if float(draw.item()) < float(chance.item()) or float(chance.item()) > 0.999999:
+                self.observe(draft)
+                continue
+            residual = mx.where(hit, -mx.inf, masked)
+            drawn = mx.random.categorical(residual)
+            token = drawn if kept is None else mx.take(kept, drawn, axis=-1)
+            return index, int(token.item())
+        kept, masked = self.distribution(rows[len(drafts)])
+        drawn = mx.random.categorical(masked)
+        token = drawn if kept is None else mx.take(kept, drawn, axis=-1)
+        return len(drafts), int(token.item())

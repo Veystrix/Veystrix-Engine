@@ -147,7 +147,8 @@ class EngineCore:
             self._mtp_anchor = part[-1:]
             mx.eval(self._mtp_anchor)
 
-    def _segment_layer_major(self, chunks, *, last: bool, cancelled, anchor_cache=None, verify=False, keep_rows=False):
+    def _segment_layer_major(self, chunks, *, last: bool, cancelled, anchor_cache=None, verify=False, keep_rows=False,
+                             logit_rows=False):
         """Run ``tokens`` through the network one layer at a time: every layer processes all chunks of the segment
         before the next layer starts, so a layer's routed experts are read from SSD once per segment instead of once
         per chunk. Per token the arithmetic is identical to chunk-major prefill with the same chunk size: every layer
@@ -199,6 +200,11 @@ class EngineCore:
                     self._advance_mtp(rows, tokens)
             if not last:
                 return None
+            if verify and logit_rows:
+                # Sampled verification needs each row's distribution (one singleton head per row, as in decoding).
+                rows = [self.model.lm_head(backbone.norm_f(row))[0, -1, :] for row in hidden]
+                mx.eval(*rows)
+                return rows
             if verify:
                 # Preserve singleton head arithmetic and avoid a [width, vocab] allocation.
                 picks = [mx.argmax(self.model.lm_head(backbone.norm_f(row)), axis=-1).reshape(-1)
@@ -346,8 +352,12 @@ class EngineCore:
             pool.end_layer()
             pool.speculate = speculate
 
-    def verify_decode(self, token, drafts, *, cancelled):
-        """Verify a short greedy draft with singleton operations and layer-local expert reuse."""
+    def verify_decode(self, token, drafts, *, cancelled, sampler=None):
+        """Verify a short draft with singleton operations and layer-local expert reuse.
+
+        Greedy by default. With a sampling ``sampler`` the draft is a point mass and the verify is lossless speculative
+        sampling (``Sampler.verify_point_mass``); the caller has observed ``token``. Returns ``(committed, next_token)``.
+        """
         from .state import clone_cache
 
         began = perf_counter()
@@ -355,6 +365,22 @@ class EngineCore:
         self.streamed.pool.cancel_check = cancelled
         try:
             values = [token, *drafts]
+            if sampler is not None and not sampler.settings.greedy:
+                rows = self._segment_layer_major(
+                    [[value] for value in values], last=True, cancelled=cancelled, verify=True, logit_rows=True,
+                )
+                kept, following = sampler.verify_point_mass(rows, drafts)
+                if kept == len(drafts):
+                    self.last_round = (len(drafts), perf_counter() - began, 0.0)
+                    return values, following
+                verify_seconds = perf_counter() - began
+                repair_began = perf_counter()
+                self.bind_cache(snapshot)
+                committed = values[:kept + 1]
+                for current in committed:
+                    self.decode(current, cancelled=cancelled, emit_logits=False)
+                self.last_round = (kept, verify_seconds, perf_counter() - repair_began)
+                return committed, following
             verified = self._segment_layer_major(
                 [[value] for value in values], last=True, cancelled=cancelled, verify=True,
                 keep_rows=self._capture_mtp,
@@ -441,37 +467,45 @@ class EngineCore:
                         controller.observe(0, 0, draft_seconds=draft_seconds,
                                            verify_seconds=perf_counter() - step_began)
 
-    def prompt_lookup_tokens(self, history, first, horizon, stops, cancelled):
-        from models.shared.prompt_lookup import PromptLookup, ThroughputGate
+    def prompt_lookup_tokens(self, history, first, horizon, stops, cancelled, sampler=None, stats=None):
+        from models.shared.prompt_lookup import make_gate, make_lookup
         from time import perf_counter
 
-        lookup, gate = PromptLookup(history), ThroughputGate()
+        lookup, gate = make_lookup(history), make_gate(6)
+        sampled = sampler is not None and not sampler.settings.greedy
         produced, value = 0, int(first.item())
-        while produced < horizon and value not in stops:
-            if cancelled():
-                raise Cancelled()
-            lookup.append(value)
-            drafts = lookup.propose(min(gate.depth, horizon - produced - 1)) if gate.allow() else []
-            for index, draft in enumerate(drafts):
-                if draft in stops:
-                    drafts = drafts[:index]
-                    break
-            if not drafts:
-                yield value
-                produced += 1
-                began = perf_counter()
-                logits = self.decode(value, cancelled=cancelled, emit_logits=produced < horizon)
-                if logits is not None:
-                    value = int(mx.argmax(logits, axis=-1).item())
-                gate.observe(False, 1, perf_counter() - began)
-                continue
-            began = perf_counter()
-            committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
-            gate.observe(True, len(committed), perf_counter() - began, proposed=len(drafts))
-            for output in committed:
+        try:
+            while produced < horizon and value not in stops:
                 if cancelled():
                     raise Cancelled()
-                yield output
-            produced += len(committed)
-            for output in committed[1:]:
-                lookup.append(output)
+                lookup.append(value)
+                if sampled:
+                    sampler.observe(value)
+                drafts = lookup.propose(min(gate.depth, horizon - produced - 1)) if gate.allow() else []
+                for index, draft in enumerate(drafts):
+                    if draft in stops:
+                        drafts = drafts[:index]
+                        break
+                if not drafts:
+                    yield value
+                    produced += 1
+                    began = perf_counter()
+                    logits = self.decode(value, cancelled=cancelled, emit_logits=produced < horizon)
+                    if logits is not None:
+                        value = int(sampler(logits).item()) if sampled else int(mx.argmax(logits, axis=-1).item())
+                    gate.observe(False, 1, perf_counter() - began)
+                    continue
+                began = perf_counter()
+                committed, value = self.verify_decode(value, drafts, cancelled=cancelled,
+                                                      sampler=sampler if sampled else None)
+                gate.observe(True, len(committed), perf_counter() - began, proposed=len(drafts))
+                for output in committed:
+                    if cancelled():
+                        raise Cancelled()
+                    yield output
+                produced += len(committed)
+                for output in committed[1:]:
+                    lookup.append(output)
+        finally:
+            if stats is not None:
+                stats.update(gate.stats())

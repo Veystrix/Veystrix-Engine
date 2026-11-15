@@ -698,15 +698,18 @@ class NemotronBackend(Conversation):
         pool.decode_profile = profile = decode_profile.begin(pool)
         gc_suspended = decode_gc.suspend()
         speculative = None
+        lookup_stats: dict = {}
         try:
             if trace is not None:
                 trace.mark("decode_start")
             token = reference_sampler(sampler)(logits) if horizon > 0 else None
             if use_mtp:
                 speculative = self.core.native_mtp_tokens(token, horizon, self.stops, cancel, self.mtp_depth)
-            elif (horizon > 0 and budgets is None and self.sampling.greedy
+            elif (horizon > 0 and budgets is None
+                    and (self.sampling.greedy or os.environ.get("VEYSTRIX_LOOKUP_SAMPLING") == "1")
                     and os.environ.get("VEYSTRIX_NEMOTRON_PROMPT_LOOKUP") == "1"):
-                speculative = self.core.prompt_lookup_tokens(self.tape, token, horizon, self.stops, cancel)
+                speculative = self.core.prompt_lookup_tokens(self.tape, token, horizon, self.stops, cancel,
+                                                             sampler=sampler, stats=lookup_stats)
             while len(produced) < horizon:
                 if speculative is None:
                     value = int(token.item())
@@ -781,6 +784,10 @@ class NemotronBackend(Conversation):
         finally:
             if speculative is not None:
                 speculative.close()
+                if lookup_stats:
+                    from models.flashnext import flight_recorder
+
+                    flight_recorder.record("lookup_stats", sampled=not self.sampling.greedy, **lookup_stats)
             decode_gc.restore(gc_suspended)
             pool.decode_profile = None
             if profile is not None:

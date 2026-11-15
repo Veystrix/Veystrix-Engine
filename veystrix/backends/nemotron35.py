@@ -93,6 +93,7 @@ import re
 from pathlib import Path
 
 from veystrix.backends.base import DecodeTimer
+from veystrix.bench.telemetry import current as benchmark_trace
 from veystrix.conversation import Conversation, IM_END, IM_START
 from veystrix.sampling import Sampler, Sampling
 from veystrix.text import stream_decode
@@ -101,6 +102,7 @@ AUTHORIZE_ENV = "VEYSTRIX_NEMOTRON_AUTHORIZED"
 RUNTIME_VERSION = "veystrix-nemotron35-stream-1"
 _SESSION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 UNLIMITED = (1 << 31) - 1
+PREFILL_BUFFER_RELEASE_BYTES = 256 * 2**20   # a prefill that left less than this in MLX's buffer cache keeps it
 LAYER_MAJOR_DEFAULT = 8192   # layer-major prefill segment in tokens (measured: 17% faster, 39% less SSD read, 40% lower peak than chunk-major); 0 = chunk-major
 
 
@@ -210,8 +212,24 @@ class NemotronBackend(Conversation):
             self.mtp_depth = int(os.environ.get("VEYSTRIX_NEMOTRON_MTP_DEPTH") or "2")
             if not 1 <= self.mtp_depth <= 4:
                 raise ValueError("Nemotron MTP depth must be between 1 and 4")
+        # LCT-05: the installed conversion declares 262,144 positions with no
+        # RoPE scaling. Do not plan or advertise a larger window unless the
+        # numerical qualification is explicitly overridden.
+        from models.nemotron35 import config as config_module
+
+        qualification = config_module.position_qualification(config)
+        # Owner decision: 1M is the default advertised window. Positions past
+        # the declared 262,144 remain numerically unvalidated; setting
+        # VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=0 restores the strict gate.
+        extended_context = os.environ.get("VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT", "1") != "0"
+        declared_positions = qualification["declared_positions"]
+        if not extended_context and declared_positions:
+            context_tokens = (declared_positions if context_tokens is None
+                              else min(int(context_tokens), declared_positions))
         # Plan from the exact dense-core size implied by the verified inventory, BEFORE reading any weight.
-        plan = admission.make_plan(config, machine, dense_bytes=estimate_bytes(config)["dense_bytes"],
+        sizes = estimate_bytes(config)
+        plan = admission.make_plan(config, machine, dense_bytes=sizes["dense_bytes"],
+                                   routed_expert_bytes=sizes["routed_expert_bytes"],
                                    context_tokens=context_tokens, chunk_tokens=chunk, pool_bytes=pool,
                                    int8_kv=kv == "int8", lightning=config_check is None,
                                    prefix_cache_bytes=prefix_ram + mtp_reserve
@@ -234,8 +252,11 @@ class NemotronBackend(Conversation):
                 self.streamed.close()
                 raise
         self.model_path = str(root)
+        self._mtp_path = mtp_path
         self.config = config
         self._strict_prefix_plan = config_check is None
+        self.context_qualification = qualification
+        self._extended_context_allowed = extended_context
         self._system_header = self.encode(f"{IM_START}system\n")
         self._message_end = self.encode(IM_END)
         self.context_limit = self.configured_context = plan.context_tokens
@@ -262,7 +283,7 @@ class NemotronBackend(Conversation):
             from veystrix.universal_cache import CacheManager, GB
             quota = int(prefix_quota_gb * GB) if prefix_quota_gb is not None else None
             manager = CacheManager(prefix_dir, quota_bytes=quota)
-            self.prefix_cache = PrefixCache(None, self._session_identity(), quota_bytes=manager.default_quota,
+            self.prefix_cache = PrefixCache(None, self._prefix_identity(), quota_bytes=manager.default_quota,
                                            manager=manager, ram_budget=prefix_ram, compatible_positions=(self._prefix_positions
                                                                                    if self._strict_prefix_plan else None))
             self._prefix_session = lambda: self.prefix_cache      # what the shared server asks for (health, adoption)
@@ -307,10 +328,103 @@ class NemotronBackend(Conversation):
         return self.core.cached_tokens
 
     def reset(self) -> None:
-        self.core.reset()          # the expert pool stays warm: it holds weights, not conversation state
+        self.core.reset(clear_allocator=not getattr(self, "_batch_child", False))
         self.tape, self.pending = [], []
         self.turn_closed = True
         self._replay_needed = False
+
+    def fork_for_batch(self):
+        from copy import copy
+        from models.nemotron35.backend_core import EngineCore
+
+        if self.mtp_depth or os.environ.get("VEYSTRIX_NEMOTRON_PROMPT_LOOKUP") == "1":
+            return None
+        if not self.sampling.greedy or self._interactive_budgets is not None:
+            return None
+        child = copy(self)
+        child._batch_child = True
+        child.core = EngineCore(self.streamed, chunk_tokens=self.core.chunk_tokens, int8_kv=self.core.int8_kv)
+        child.tape, child.pending = [], []
+        child.turn_closed, child._replay_needed = True, False
+        if self.prefix_cache is not None and self.prefix_cache.manager is not None:
+            from models.nemotron35.prefix_cache import PrefixCache
+
+            parent = self.prefix_cache
+            child.prefix_cache = PrefixCache(
+                None, {**self._prefix_identity(), "batch_plan": "grid128-system-v1"},
+                quota_bytes=parent.manager.default_quota, manager=parent.manager, ram_budget=0,
+            )
+        else:
+            child.prefix_cache = None
+        # The parent compatibility accessor closes over the parent store.
+        child.__dict__.pop("_prefix_session", None)
+        return child
+
+    def batch_scope(self):
+        from models.flashnext.purge_recovery import ACTIVITY
+
+        return ACTIVITY.request()
+
+    def batch_context(self):
+        return self.context_limit
+
+    def batch_prepare(self, tokens):
+        from models.nemotron35 import admission
+
+        self._check_position_qualification(tokens)
+        admission.check_request(self.plan, self._current_machine(), new_tokens=tokens, cached_tokens=0)
+
+    def batch_state_bytes(self, tokens):
+        from models.nemotron35.memory import estimate
+
+        budget = estimate(config=self.config, context_tokens=tokens + 256, non_expert_bytes=0,
+                          expert_pool_bytes=0, activation_bytes=0, reserve_bytes=0, int8_kv=self.core.int8_kv)
+        return budget.total_bytes
+
+    @staticmethod
+    def batch_stats(**fields):
+        return Stats(**fields)
+
+    def batch_prefill(self, chunk, offset, final, sampler):
+        from models.shared.logit_reference import reference_sampler
+
+        self._check_position_qualification(offset + len(chunk))
+        logits = self.core.prefill(chunk, emit_logits=final)
+        return int(reference_sampler(sampler)(logits).item()) if final else None
+
+    def batch_prefix_plan(self, prompt, cached, _width):
+        if cached or self.prefix_cache is None:
+            return cached, None
+        anchor = self._system_boundary(prompt)
+        if anchor is None:
+            return cached, None
+        # The store accepts only the exact anchor produced by this plan.
+        cache, reused = self.prefix_cache.restore(prompt[:anchor + 1])
+        if reused == anchor:
+            self.core.bind_cache(cache)
+            self.tape.extend(self.pending[:reused])
+            del self.pending[:reused]
+            self.last_prefix = LastPrefix(prompt_tokens=len(prompt), hit_tokens=reused,
+                                          prefilled_tokens=len(prompt) - reused, outcome="ssd_hit")
+            return reused, anchor
+        return cached, anchor
+
+    def batch_save_prefix(self):
+        try:
+            self.prefix_cache.save(self.core.cache, self.tape)
+        except (OSError, ValueError):
+            pass
+
+    def batch_decode(self, value, sampler, want_logits):
+        token = self.core.decode(value, sampler=sampler, emit_logits=want_logits)
+        return int(token.item()) if want_logits else None
+
+    def batch_decode_group(self, steps):
+        return self.core.decode_many([(backend.core, token, sampler, want_logits)
+                                      for backend, token, sampler, want_logits in steps])
+
+    def batch_group_key(self):
+        return self.streamed
 
     def reclaim_owned_memory(self, reading=None) -> int:
         """Release the expert pool and allocator cache (called between requests under pressure)."""
@@ -363,20 +477,30 @@ class NemotronBackend(Conversation):
         import mlx.core as mx
         import resource
 
+        from models.nemotron35.mamba_scan import fingerprint as mamba_fingerprint
+
         pool = self.streamed.pool.stats()
         asked = pool["hits"] + pool["misses"]
         used, issued = pool["prefetch_used"], pool["prefetch_issued"]
         snapshot = {
             "model": "nemotron35-lightning", "runtime": RUNTIME_VERSION,
             "configured_context": self.configured_context, "admitted_context": self.context_limit,
-            "kv_format": self.kv_format, "million_token_validation": False,
+            "kv_format": self.kv_format,
+            "million_token_validation": self.context_qualification["million_token_qualified"],
+            "context_qualification": self.context_qualification,
+            "extended_context_enabled": self._extended_context_allowed,
+            **mamba_fingerprint(self.streamed.model),
             "planned_memory": self.plan.summary(),
             "metal_active_bytes": mx.get_active_memory(), "metal_peak_bytes": mx.get_peak_memory(),
             "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-            "pool": {"budget_gib": round(pool["budget_bytes"] / 2**30, 2), "resident_gib": round(pool["resident_bytes"] / 2**30, 2),
+            "pool": {"policy": self.streamed.pool.policy,
+                     "expert_pack_records": self.streamed.reader.packed_reads,
+                     "budget_gib": round(pool["budget_bytes"] / 2**30, 2), "resident_gib": round(pool["resident_bytes"] / 2**30, 2),
                      "hit_rate": round(pool["hits"] / asked, 3) if asked else None,
                      "seeded_bytes": pool.get("seeded_bytes", 0),
-                     "staged_mib": round(pool["staged_bytes"] / 2**20, 1)},
+                     "staged_mib": round(pool["staged_bytes"] / 2**20, 1),
+                     **({"edf_io": pool["edf"]} if "edf" in pool else {}),
+                     **({"route_lookahead": pool["lookahead"]} if "lookahead" in pool else {})},
             "prefetch": {"issued": issued, "used": used, "wasted": pool["prefetch_wasted"],
                          "precision": round(used / issued, 3) if issued else None},
             "expert_gb_read": round(pool["bytes_read"] / 1e9, 2),
@@ -404,6 +528,18 @@ class NemotronBackend(Conversation):
                 return boundary if boundary >= self.prefix_cache.min_tokens else None
         return None
 
+    def _check_position_qualification(self, positions: int) -> None:
+        """LCT-05: refuse positions past the checkpoint's declared window unless explicitly qualified."""
+        declared = self.context_qualification["declared_positions"]
+        if not declared or positions <= declared or self._extended_context_allowed:
+            return
+        from models.nemotron35 import admission
+
+        raise admission.AdmissionRefused(
+            f"request would use {positions} positions but the checkpoint declares {declared} with no RoPE scaling "
+            "metadata; output past the declared window is unvalidated. Run the LCT-05 numerical qualification and set "
+            "VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT=1 to override.")
+
     def _prefix_positions(self, ids):
         anchor = self._system_boundary(ids)
         chunk = self.core.chunk_tokens
@@ -423,6 +559,9 @@ class NemotronBackend(Conversation):
         feed = (list(self.tape) + pending) if replay else pending
         cached = 0 if fresh else self.cache_tokens
         admission.check_request(self.plan, self._current_machine(), new_tokens=len(feed), cached_tokens=cached)
+        # Only real prompt positions are gated. The client's output cap is a
+        # limit, not a position; generation is bounded by context_limit below.
+        self._check_position_qualification(cached + len(feed))
         restored = 0
         restored_from_ram = False
         restore_started = time.perf_counter()
@@ -452,7 +591,8 @@ class NemotronBackend(Conversation):
         if os.environ.get("VEYSTRIX_BENCH_TOKEN_DIGEST") == "1":
             from models.flashnext import flight_recorder
 
-            flight_recorder.record("nemotron_decode_mode", native_mtp=use_mtp, mtp_depth=self.mtp_depth if use_mtp else None)
+            flight_recorder.record("nemotron_decode_mode", native_mtp=use_mtp, mtp_depth=self.mtp_depth if use_mtp else None,
+                                   mtp_adaptive=self.core.mtp_adaptive)
         snapshots = []
         start = restored if fresh else cached          # tokens the cache already holds before this prefill
         mark = [start]
@@ -472,6 +612,7 @@ class NemotronBackend(Conversation):
                     pass
                 mark[0] = at
         cancel = should_cancel or (lambda: False)
+        trace = benchmark_trace.get()
         pool0 = self.streamed.pool.stats()
         began = DecodeTimer()
         prefill_began = began.mark()
@@ -490,6 +631,9 @@ class NemotronBackend(Conversation):
         anchored_segment = (self.core.layer_major_tokens > 0 and 0 < split <= self.core.chunk_tokens
                             and 0 < len(feed) - split <= self.core.chunk_tokens)
         try:
+            if trace is not None:
+                trace.mark("prefill_start")
+                trace.prefill_tokens = len(feed)
             if anchored_segment:
                 logits = self.core.prefill(feed, cancelled=cancel, progress=progress, boundary=checkpoint,
                                           anchor=split, save_anchor=checkpoint)
@@ -501,6 +645,8 @@ class NemotronBackend(Conversation):
                     progress=lambda done, _: progress(split + done, len(feed)))
             else:
                 logits = self.core.prefill(feed, cancelled=cancel, progress=progress, boundary=checkpoint)
+            if trace is not None:
+                trace.mark("first_logits_ready")
         except Cancelled as exc:
             interrupted()
             raise GenerationCancelled() from exc
@@ -526,6 +672,7 @@ class NemotronBackend(Conversation):
             prefilled_tokens=len(feed),
             prefill_seconds=prefill_seconds, restore_seconds=restore_seconds, snapshot_seconds=time.perf_counter() - snapshot_began, outcome=outcome,
             layer_major=anchored_segment or bool(self.core.layer_major_tokens and len(feed) > self.core.chunk_tokens))
+        self._release_prefill_buffers(mx)
         if on_prefilled:
             on_prefilled()
         sampler = Sampler(self.sampling)
@@ -543,9 +690,18 @@ class NemotronBackend(Conversation):
         produced, partial, pieces = [], [], []
         finish = "length"
         timer = DecodeTimer()
+        from models.nemotron35 import decode_profile
+        from models.shared import decode_gc
+        from models.shared.logit_reference import reference_sampler
+
+        pool = self.streamed.pool
+        pool.decode_profile = profile = decode_profile.begin(pool)
+        gc_suspended = decode_gc.suspend()
+        speculative = None
         try:
-            token = sampler(logits) if horizon > 0 else None
-            speculative = None
+            if trace is not None:
+                trace.mark("decode_start")
+            token = reference_sampler(sampler)(logits) if horizon > 0 else None
             if use_mtp:
                 speculative = self.core.native_mtp_tokens(token, horizon, self.stops, cancel, self.mtp_depth)
             elif (horizon > 0 and budgets is None and self.sampling.greedy
@@ -596,21 +752,26 @@ class NemotronBackend(Conversation):
                 if speculative is not None:
                     continue
                 try:
+                    round_ns = trace.clock() if trace is not None else None
                     # Commit the last emitted token to the cache too. Only sample
                     # when another iteration can consume the result.
                     token = self.core.decode(value, sampler=sampler, emit_logits=len(produced) < horizon)
+                    if trace is not None:
+                        trace.end_round("target_round", round_ns, positions=1)
                 except Cancelled as exc:
                     raise GenerationCancelled() from exc
             if speculative is not None and len(produced) == horizon:
                 next(speculative, None)  # commit a final singleton emitted before its forward
+            if trace is not None:
+                trace.decode_commit()
         except Cancelled as exc:
-            if self.cache_tokens != len(self.tape):
+            if speculative is not None or self.cache_tokens != len(self.tape):
                 self._mark_replay_needed()
             self.turn_closed = False
             raise GenerationCancelled() from exc
         except GenerationCancelled:
             # Between tokens the cache still equals the tape; mid-forward cancellation already reset the cache.
-            if self.cache_tokens != len(self.tape):
+            if speculative is not None or self.cache_tokens != len(self.tape):
                 self._mark_replay_needed()
             self.turn_closed = False
             raise
@@ -618,6 +779,12 @@ class NemotronBackend(Conversation):
             self._mark_replay_needed()
             raise
         finally:
+            if speculative is not None:
+                speculative.close()
+            decode_gc.restore(gc_suspended)
+            pool.decode_profile = None
+            if profile is not None:
+                profile.finish(pool)
             import mlx.core as mx2
             mx2.clear_cache()
         self.turn_closed = False
@@ -631,6 +798,22 @@ class NemotronBackend(Conversation):
                       prefetch_used=pool1["prefetch_used"] - pool0["prefetch_used"],
                       prefetch_issued=pool1["prefetch_issued"] - pool0["prefetch_issued"], reused_tokens=restored)
         return "".join(pieces), stats
+
+    @staticmethod
+    def _release_prefill_buffers(mx) -> int:
+        """Return the buffers a prefill freed to the system before decode starts; returns the bytes released.
+
+        MLX keeps freed buffers for reuse, and decode reuses almost none of a prefill's: 3.4 GB sat in that cache
+        through the whole decode after an 8,192-token prefill (real checkpoint, 14 November 2026). They are
+        resident, so the file cache that serves decode's experts was 3.4 GB smaller for it. Nothing computed
+        changes. ``VEYSTRIX_NEMOTRON_KEEP_PREFILL_BUFFERS=1`` keeps them."""
+        if os.environ.get("VEYSTRIX_NEMOTRON_KEEP_PREFILL_BUFFERS") == "1":
+            return 0
+        cached = int(mx.get_cache_memory())
+        if cached < PREFILL_BUFFER_RELEASE_BYTES:
+            return 0
+        mx.clear_cache()
+        return cached
 
     def _tick(self) -> None:
         try:  # keeps the out-of-process watchdog informed when it is running
@@ -652,8 +835,31 @@ class NemotronBackend(Conversation):
         return self.cache_tokens == len(self.tape) if self.tape and not self._replay_needed else True
 
     # -- named sessions (fingerprinted, namespaced by model identity) ------------------------------------------
+    def _prefix_identity(self) -> dict:
+        sidecar = None
+        if self._mtp_path is not None:
+            config = self._mtp_path / "config.json"
+            weights = (self._mtp_path / "mtp_head.safetensors").stat()
+            sidecar = {
+                "config": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "weights": [weights.st_size, weights.st_mtime_ns, weights.st_ino],
+            }
+        return {
+            **self._session_identity(),
+            "speculative_state": {
+                "format": "target-only-v1",
+                "native_mtp": sidecar,
+                "depth": self.mtp_depth,
+                "adaptive": os.environ.get("VEYSTRIX_NEMOTRON_MTP_ADAPTIVE") == "1",
+                "prompt_lookup": os.environ.get("VEYSTRIX_NEMOTRON_PROMPT_LOOKUP") == "1",
+            },
+        }
+
     def _session_identity(self) -> dict:
         if self._identity is None:
+            from models.nemotron35 import streamed_experts
+            from models.nemotron35.mamba_scan import fingerprint
+
             root = Path(self.model_path)
             def digest(name):
                 return hashlib.sha256((root / name).read_bytes()).hexdigest()
@@ -664,7 +870,12 @@ class NemotronBackend(Conversation):
                 "template": digest("chat_template.jinja"),
                 "total_size": (index.get("metadata") or {}).get("total_size"),
                 "quantization": self.config.get("quantization"), "state_dtypes": f"{self.kv_format}-kv/fp32-ssm",
+                **fingerprint(self.streamed.model),
                 **({"metal_affine_fma": True} if os.environ.get("VEYSTRIX_NEMOTRON_METAL_FMA_DEQUANT") == "1" else {}),
+                # The routed-expert kernel changes rounding, so state written under one is not restored under another.
+                # Absent when both flags are off, which keeps every existing snapshot and session valid.
+                **({"expert_kernel": {"gather": streamed_experts.GATHER, "exact_rows": streamed_experts.EXACT_ROWS}}
+                   if streamed_experts.GATHER or streamed_experts.EXACT_ROWS else {}),
                 "weight_index": digest("model.safetensors.index.json"),
                 "weights": [(name, info.st_size, info.st_mtime_ns, info.st_ino)
                             for name in sorted(set(index["weight_map"].values()))

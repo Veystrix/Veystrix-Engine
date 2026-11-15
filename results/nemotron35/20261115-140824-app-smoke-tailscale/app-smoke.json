@@ -1,0 +1,711 @@
+{
+ "app": "/Users/vincent/Documents/Veystrix/dist/Veystrix.app",
+ "command": [
+  "/Users/vincent/Documents/Veystrix/dist/Veystrix.app/Contents/Resources/engine/python/bin/python3",
+  "-m",
+  "veystrix.model_router",
+  "--host",
+  "127.0.0.1",
+  "--port",
+  "8080",
+  "--pool-gb",
+  "2",
+  "--checkpoint",
+  "/Users/vincent/models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit-mlx-community",
+  "--model",
+  "nemotron35-lightning",
+  "--flashnext-kv-cache",
+  "tiered4",
+  "--flashnext-memory-policy",
+  "absolute-swap-only",
+  "--flashnext-speed",
+  "--overnight",
+  "--prefix-dir",
+  "/Users/vincent/Documents/Veystrix/results/nemotron35/20261115-140824-app-smoke-tailscale/prefix-cache"
+ ],
+ "environment": {
+  "HOME": "/Users/vincent",
+  "USER": "vincent",
+  "LOGNAME": "vincent",
+  "TMPDIR": "/var/folders/37/fn6fxqyd2rgfmvc4954dggbm0000gn/T/",
+  "LANG": "en_IN.UTF-8",
+  "PATH": "/Users/vincent/.kimi-code/bin:/Users/vincent/.local/bin:/Users/vincent/.slotstream/bin:/Users/vincent/.local/bin:/Users/vincent/.local/bin:/Users/vincent/.local/bin:/Users/vincent/.local/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/opt/X11/bin:/opt/homebrew/bin:/Users/vincent/.cargo/bin",
+  "SHELL": "/bin/zsh",
+  "PYTHONUNBUFFERED": "1",
+  "PYTHONDONTWRITEBYTECODE": "1",
+  "VEYSTRIX_MIN_BATTERY_PERCENT": "10",
+  "VEYSTRIX_REQUIRE_AC": "0",
+  "VEYSTRIX_ALLOW_LOW_POWER": "1",
+  "FLASHNEXT_SWAP_CEILING_MIB": "5120",
+  "VEYSTRIX_PORT": "8080",
+  "VEYSTRIX_USAGE_LOG": "/Users/vincent/Documents/Veystrix/results/nemotron35/20261115-140824-app-smoke-tailscale/usage-requests.jsonl",
+  "VEYSTRIX_CACHE_GB": "80",
+  "VEYSTRIX_NEMOTRON_CONTEXT": "1048576",
+  "VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT": "1",
+  "VEYSTRIX_NEMOTRON_KV": "int8",
+  "FLASHNEXT_AUTO_PURGE": "1",
+  "VEYSTRIX_API_KEY": "local",
+  "PYTHONPATH": "/Users/vincent/Documents/Veystrix/dist/Veystrix.app/Contents/Resources/engine/lib",
+  "FLASHNEXT_PROMPT_LOOKUP": "0",
+  "FLASHNEXT_PREFILL_SEED_DECODE": "0",
+  "FLASHNEXT_PREFIX_ASYNC_WRITE": "1",
+  "FLASHNEXT_METAL_FMA_DEQUANT": "0",
+  "FLASHNEXT_MLX_AUTO_BUFFER_CAPS": "0",
+  "VEYSTRIX_NEMOTRON_PROMPT_LOOKUP": "1",
+  "VEYSTRIX_NEMOTRON_PREFILL_SEED_DECODE": "0",
+  "VEYSTRIX_NEMOTRON_PREFIX_ASYNC_WRITE": "1",
+  "VEYSTRIX_NEMOTRON_METAL_FMA_DEQUANT": "0",
+  "VEYSTRIX_NEMOTRON_MLX_AUTO_BUFFER_CAPS": "0",
+  "VEYSTRIX_FLASHNEXT_NATIVE_MTP": "off",
+  "VEYSTRIX_FLASHNEXT_OUTPUT_TOKENS": "0",
+  "VEYSTRIX_FLASHNEXT_MTP_DEPTH": "2",
+  "VEYSTRIX_NEMOTRON_NATIVE_MTP": "0",
+  "VEYSTRIX_NEMOTRON_OUTPUT_TOKENS": "0",
+  "VEYSTRIX_NEMOTRON_MTP_DEPTH": "2",
+  "VEYSTRIX_NEMOTRON_AUTHORIZED": "1"
+ },
+ "ready": true,
+ "ready_seconds": 4.1,
+ "ready_body": {
+  "status": "ok",
+  "ready": true,
+  "worker": {
+   "stage": "idle",
+   "detail": "",
+   "request_seq": 0,
+   "in_request": false,
+   "progress_ticks": 0,
+   "seconds_since_progress": 0.8,
+   "seconds_in_stage": 0.8,
+   "busy": false,
+   "stall_seconds": 180.0,
+   "stalled": false
+  },
+  "model": "veystrix-nemotron35-lightning",
+  "busy": false,
+  "queue": {
+   "active": null,
+   "waiting": 0,
+   "max_waiting": 4,
+   "max_wait_seconds": 20.0,
+   "completed": 0,
+   "rejected": 0,
+   "dropped": 0
+  },
+  "context_limit": 1048576,
+  "max_cold_prefill": 65536,
+  "max_incremental_prefill": 65536,
+  "installed_model_id": "veystrix-nemotron35-lightning-361a7b280b076fd1c32324e4f2b80e24a1ea639a209f523e89ab6a65ddfb5c26",
+  "instance_id": "0a2f9f1161f24a928cf54a6232c36682",
+  "activity": {
+   "active": false
+  },
+  "cache": {
+   "cache_enabled": true,
+   "ram_cache_bytes": 0,
+   "ram_cache_entries": 0,
+   "ram_cache_budget_bytes": 0,
+   "ssd_cache_bytes": 0,
+   "ssd_cache_entries": 0,
+   "ssd_cache_budget_bytes": 80000000000,
+   "ssd_cache_directory": "/Users/vincent/Documents/Veystrix/results/nemotron35/20261115-140824-app-smoke-tailscale/prefix-cache/veystrix-cache-v1/nemotron35/d6537bbbc86aa2ac68333406825c1b11541a13262291e2d087ffeb42b6525890",
+   "active_model_state_bytes": 0,
+   "matched_prefix_tokens": 0,
+   "reused_tokens": 0,
+   "ram_hits": 0,
+   "ssd_hits": 0,
+   "static_prefix_hits": null,
+   "session_continuation_hits": 0,
+   "reasoning_state_restoration_hits": 0,
+   "prefix_mismatches": 0,
+   "state_invalids": 0,
+   "evicted_hits": 0,
+   "restore_failures": 0,
+   "cold_lookups": 0,
+   "evictions_ram": 0,
+   "evictions_ssd": 0,
+   "ssd_writes": 0,
+   "ssd_bytes_written": 0,
+   "ssd_bytes_read": 0,
+   "writes_skipped": 0,
+   "pressure_invalidated_snapshots": 0,
+   "pressure_invalidated_bytes": 0,
+   "restore_seconds": 0.0,
+   "snapshot_seconds": 0.0,
+   "newly_computed_prefill_tokens": 0,
+   "actual_prefill_seconds": 0.0,
+   "decode_tokens_per_second": null,
+   "current_swap_growth_mb": 0.0,
+   "swap_baseline_mb": 871.06,
+   "peak_swap_growth_mb": 0.0,
+   "corruption_recovery_errors": 0,
+   "reused": 0,
+   "rebuilt": 0,
+   "evictions": 0,
+   "refused_cold_prefill": 0,
+   "warm_tokens": 0,
+   "max_cold_prefill": 65536,
+   "max_incremental_prefill": 65536,
+   "sessions": {
+    "live": null,
+    "switches": 0,
+    "known": []
+   },
+   "last_budget": null,
+   "last_divergence": null,
+   "last_prefix": null,
+   "memory_controller": {
+    "policy_identifier": "absolute-swap-only",
+    "swap_baseline_mb": 871.06,
+    "current_swap_growth_mb": 0.0,
+    "peak_swap_growth_mb": 0.0,
+    "threshold_gib": 5.0,
+    "threshold_mb": 5120.0,
+    "stop_reason": null,
+    "stopped_at": null,
+    "can_admit": true,
+    "probe_availability": {
+     "pressure": true,
+     "swap_used_mb": true,
+     "swapout": true,
+     "swapin": true,
+     "available_mb": true,
+     "compressor_mb": true
+    },
+    "telemetry_only_checks": [
+     "startup_9gib_gate",
+     "measured_available_memory_admission",
+     "available_memory_floor_2gib",
+     "compressor_growth_stop",
+     "pressure_level_4_stop",
+     "persistent_pressure_level_2_stop",
+     "active_swap_rate_stop"
+    ],
+    "disclaimer": "The swap-growth-only policy does not guarantee protection against sudden OOM, GPU allocation failure, compressor growth, or degraded responsiveness.",
+    "state": "normal",
+    "reasons": [],
+    "recovery_events": 0,
+    "episodes": [],
+    "elevated_seconds": 0.0,
+    "throttled_seconds": 0.0,
+    "swap_at_launch_mb": 871.06,
+    "peak": {
+     "swap_increase_mib": 0.0,
+     "swapout_window_mib": 0.0,
+     "swapin_window_mib": 0.0,
+     "compressor_growth_mib": 0.0,
+     "pressure_level": 1,
+     "pressure_seconds": 0.0
+    },
+    "last": {
+     "mono_t": 910886.35,
+     "swap_increase_mib": 0.0,
+     "swap_used_mb": 871.06,
+     "pressure": 1,
+     "available_mb": 6721.3
+    },
+    "swap_growth_stop_gib": 2.5,
+    "swap_ceiling_mib": 5120.0,
+    "swap_ceiling_margin_mib": 0.0
+   },
+   "fragment_cache": null
+  },
+  "engine": {
+   "model": "nemotron35-lightning",
+   "runtime": "veystrix-nemotron35-stream-1",
+   "configured_context": 1048576,
+   "admitted_context": 1048576,
+   "kv_format": "affine-int8-g64",
+   "million_token_validation": false,
+   "context_qualification": {
+    "declared_positions": 262144,
+    "extended_position_metadata": null,
+    "million_token_qualified": false
+   },
+   "extended_context_enabled": true,
+   "planned_memory": {
+    "context_tokens": 1048576,
+    "chunk_tokens": 2048,
+    "pool_bytes": 0,
+    "dense_bytes": 1252003968,
+    "mamba_state_bytes": 49082368,
+    "kv_bytes": 3422552064,
+    "activation_bytes": 939524096,
+    "reserve_bytes": 603979776,
+    "total_bytes": 6267142272,
+    "budget_bytes": 8669429760,
+    "estimated": true
+   },
+   "metal_active_bytes": 1254529416,
+   "metal_peak_bytes": 1254532468,
+   "process_peak_rss_bytes": 1804353536,
+   "pool": {
+    "policy": "lru",
+    "expert_pack_records": 0,
+    "budget_gib": 0.0,
+    "resident_gib": 0.0,
+    "hit_rate": null,
+    "seeded_bytes": 0,
+    "staged_mib": 0.0
+   },
+   "prefetch": {
+    "issued": 0,
+    "used": 0,
+    "wasted": 0,
+    "precision": null
+   },
+   "expert_gb_read": 0.0,
+   "prefill": {
+    "layer_major_tokens": 8192,
+    "chunk_tokens": 2048
+   },
+   "last_prefix": null,
+   "readiness": null,
+   "prefix_cache": {
+    "snapshots": 0,
+    "gb": 0.0,
+    "ssd_hits": 0,
+    "ram_hits": 0,
+    "ram_bytes": 0,
+    "cold_lookups": 0,
+    "reused_tokens": 0,
+    "restore_failures": 0,
+    "evicted": 0
+   }
+  },
+  "nemotron_context": {
+   "admitted_context": 1048576,
+   "kv_format": "affine-int8-g64",
+   "million_token_validation": false
+  },
+  "memory_policy": {
+   "policy_identifier": "absolute-swap-only",
+   "swap_baseline_mb": 871.06,
+   "current_swap_growth_mb": 0.0,
+   "peak_swap_growth_mb": 0.0,
+   "threshold_gib": 5.0,
+   "threshold_mb": 5120.0,
+   "swap_ceiling_mib": 5120.0,
+   "swap_ceiling_margin_mib": 0.0,
+   "stop_reason": null,
+   "can_admit": true,
+   "probe_availability": {
+    "pressure": true,
+    "swap_used_mb": true,
+    "swapout": true,
+    "swapin": true,
+    "available_mb": true,
+    "compressor_mb": true
+   },
+   "telemetry_only_checks": [
+    "startup_9gib_gate",
+    "measured_available_memory_admission",
+    "available_memory_floor_2gib",
+    "compressor_growth_stop",
+    "pressure_level_4_stop",
+    "persistent_pressure_level_2_stop",
+    "active_swap_rate_stop"
+   ]
+  },
+  "router_state": "ready",
+  "input_reuse": {
+   "cross_model_hits": 0
+  }
+ },
+ "plain": {
+  "status": 200,
+  "seconds": 8.95,
+  "content": "Paris is the capital of France.",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 490,
+   "completion_tokens": 7,
+   "total_tokens": 497,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "prompt_cache_hit_tokens": 0,
+   "prompt_cache_miss_tokens": 490
+  }
+ },
+ "stream": {
+  "status": 200,
+  "events": 8,
+  "first_content_s": 2.78,
+  "seconds": 3.73,
+  "text": "The capital of Japan is Tokyo.",
+  "usage": null
+ },
+ "long_stream": {
+  "status": 200,
+  "events": 145,
+  "first_content_s": 3.15,
+  "seconds": 25.24,
+  "text": "Tides are rhythmic rises and falls of sea level driven by the Moon\u2019s and Sun\u2019s gravitational forces. The Moon\u2019s gravity pulls water toward it, creating a bulge on the near side of Earth; inertia produces a second bulge on the far side, while landmasses redistribute water into troughs. As Earth rotates, coastal regions pass through these bulges and troughs, experiencing high and low tide cycles roughly every 12 hours and 25 minutes. The Sun exerts a weaker pull, so when Sun and Moon align (new and full moons), their combined gravity produces spring tides with higher highs and lower lows. When they form a right angle (quarter moons), neap tides occur, reducing the tidal range. Coastal geometry, water depth, and basin resonance further modify local tide patterns.",
+  "usage": null
+ },
+ "health_after": {
+  "status": "ok",
+  "ready": true,
+  "worker": {
+   "stage": "idle",
+   "detail": "",
+   "request_seq": 3,
+   "in_request": false,
+   "progress_ticks": 186,
+   "seconds_since_progress": 0.0,
+   "seconds_in_stage": 0.0,
+   "busy": false,
+   "stall_seconds": 180.0,
+   "stalled": false
+  },
+  "model": "veystrix-nemotron35-lightning",
+  "busy": false,
+  "queue": {
+   "active": null,
+   "waiting": 0,
+   "max_waiting": 4,
+   "max_wait_seconds": 20.0,
+   "completed": 3,
+   "rejected": 0,
+   "dropped": 0
+  },
+  "context_limit": 1048576,
+  "max_cold_prefill": 65536,
+  "max_incremental_prefill": 65536,
+  "installed_model_id": "veystrix-nemotron35-lightning-361a7b280b076fd1c32324e4f2b80e24a1ea639a209f523e89ab6a65ddfb5c26",
+  "instance_id": "0a2f9f1161f24a928cf54a6232c36682",
+  "activity": {
+   "active": false,
+   "stage": "decode",
+   "prompt_tokens": 491,
+   "prefill_done": 491,
+   "prefill_total": 491,
+   "decode_tokens": 169,
+   "decode_tokens_per_second": 7.503250445266983
+  },
+  "cache": {
+   "cache_enabled": true,
+   "ram_cache_bytes": 0,
+   "ram_cache_entries": 0,
+   "ram_cache_budget_bytes": 0,
+   "ssd_cache_bytes": 50608944,
+   "ssd_cache_entries": 1,
+   "ssd_cache_budget_bytes": 80000000000,
+   "ssd_cache_directory": "/Users/vincent/Documents/Veystrix/results/nemotron35/20261115-140824-app-smoke-tailscale/prefix-cache/veystrix-cache-v1/nemotron35/d6537bbbc86aa2ac68333406825c1b11541a13262291e2d087ffeb42b6525890",
+   "active_model_state_bytes": 51236608,
+   "matched_prefix_tokens": 465,
+   "reused_tokens": 930,
+   "ram_hits": 0,
+   "ssd_hits": 2,
+   "static_prefix_hits": null,
+   "session_continuation_hits": 0,
+   "reasoning_state_restoration_hits": 0,
+   "prefix_mismatches": 0,
+   "state_invalids": 0,
+   "evicted_hits": 0,
+   "restore_failures": 0,
+   "cold_lookups": 1,
+   "evictions_ram": 0,
+   "evictions_ssd": 0,
+   "ssd_writes": 1,
+   "ssd_bytes_written": 50608944,
+   "ssd_bytes_read": 101217888,
+   "writes_skipped": 0,
+   "pressure_invalidated_snapshots": 0,
+   "pressure_invalidated_bytes": 0,
+   "restore_seconds": 0.0,
+   "snapshot_seconds": 1.750071533024311e-06,
+   "newly_computed_prefill_tokens": 26,
+   "actual_prefill_seconds": 2.64335716702044,
+   "decode_tokens_per_second": 7.509651915942795,
+   "current_swap_growth_mb": 0.0,
+   "swap_baseline_mb": 871.06,
+   "peak_swap_growth_mb": 0.0,
+   "corruption_recovery_errors": 0,
+   "reused": 0,
+   "rebuilt": 3,
+   "evictions": 2,
+   "refused_cold_prefill": 0,
+   "warm_tokens": 660,
+   "max_cold_prefill": 65536,
+   "max_incremental_prefill": 65536,
+   "sessions": {
+    "live": "auto:9b1cda8f586017f6",
+    "switches": 2,
+    "known": [
+     {
+      "id": "auto:9b1cda8f586017f6",
+      "requests": 1,
+      "rebuilds": 1,
+      "cold": false,
+      "last_prompt_tokens": 491
+     },
+     {
+      "id": "auto:5775a9ead4c70192",
+      "requests": 1,
+      "rebuilds": 1,
+      "cold": true,
+      "last_prompt_tokens": 490
+     },
+     {
+      "id": "auto:ea3cc01fee8064e6",
+      "requests": 1,
+      "rebuilds": 1,
+      "cold": true,
+      "last_prompt_tokens": 490
+     }
+    ]
+   },
+   "last_budget": {
+    "server_window": 1048576,
+    "input_tokens": 491,
+    "requested_output": 220,
+    "reserved_output": 220,
+    "remaining": 1047865,
+    "continuation_ok": true
+   },
+   "last_divergence": {
+    "tape_tokens": 497,
+    "prompt_tokens": 491,
+    "first_difference": 469,
+    "tape_window": [
+     10,
+     3263,
+     1010,
+     7493,
+     1395,
+     1278,
+     8961
+    ],
+    "prompt_window": [
+     10,
+     3263,
+     1010,
+     2763,
+     44122,
+     1294,
+     2314
+    ],
+    "tape_is_prefix_of_prompt": false
+   },
+   "last_prefix": {
+    "prompt_tokens": 491,
+    "hit_tokens": 465,
+    "reused_tokens": 465,
+    "prefilled_tokens": 26,
+    "prefill_seconds": 2.643,
+    "snapshot_seconds": 0.0,
+    "restore_seconds": 0.044,
+    "outcome": "ssd_hit",
+    "layer_major": false
+   },
+   "memory_controller": {
+    "policy_identifier": "absolute-swap-only",
+    "swap_baseline_mb": 871.06,
+    "current_swap_growth_mb": 0.0,
+    "peak_swap_growth_mb": 0.0,
+    "threshold_gib": 5.0,
+    "threshold_mb": 5120.0,
+    "stop_reason": null,
+    "stopped_at": null,
+    "can_admit": true,
+    "probe_availability": {
+     "pressure": true,
+     "swap_used_mb": true,
+     "swapout": true,
+     "swapin": true,
+     "available_mb": true,
+     "compressor_mb": true
+    },
+    "telemetry_only_checks": [
+     "startup_9gib_gate",
+     "measured_available_memory_admission",
+     "available_memory_floor_2gib",
+     "compressor_growth_stop",
+     "pressure_level_4_stop",
+     "persistent_pressure_level_2_stop",
+     "active_swap_rate_stop"
+    ],
+    "disclaimer": "The swap-growth-only policy does not guarantee protection against sudden OOM, GPU allocation failure, compressor growth, or degraded responsiveness.",
+    "state": "normal",
+    "reasons": [],
+    "recovery_events": 0,
+    "episodes": [],
+    "elevated_seconds": 0.0,
+    "throttled_seconds": 0.0,
+    "swap_at_launch_mb": 871.06,
+    "peak": {
+     "swap_increase_mib": 0.0,
+     "swapout_window_mib": 0.0,
+     "swapin_window_mib": 0.0,
+     "compressor_growth_mib": 0.0,
+     "pressure_level": 1,
+     "pressure_seconds": 0.0
+    },
+    "last": {
+     "mono_t": 910923.4,
+     "swap_increase_mib": 0.0,
+     "swap_used_mb": 871.06,
+     "pressure": 1,
+     "available_mb": 5633.9
+    },
+    "swap_growth_stop_gib": 2.5,
+    "swap_ceiling_mib": 5120.0,
+    "swap_ceiling_margin_mib": 0.0
+   },
+   "fragment_cache": null
+  },
+  "engine": {
+   "model": "nemotron35-lightning",
+   "runtime": "veystrix-nemotron35-stream-1",
+   "configured_context": 1048576,
+   "admitted_context": 1048576,
+   "kv_format": "affine-int8-g64",
+   "million_token_validation": false,
+   "context_qualification": {
+    "declared_positions": 262144,
+    "extended_position_metadata": null,
+    "million_token_qualified": false
+   },
+   "extended_context_enabled": true,
+   "planned_memory": {
+    "context_tokens": 1048576,
+    "chunk_tokens": 2048,
+    "pool_bytes": 0,
+    "dense_bytes": 1252003968,
+    "mamba_state_bytes": 49082368,
+    "kv_bytes": 3422552064,
+    "activation_bytes": 939524096,
+    "reserve_bytes": 603979776,
+    "total_bytes": 6267142272,
+    "budget_bytes": 8669429760,
+    "estimated": true
+   },
+   "metal_active_bytes": 1398610388,
+   "metal_peak_bytes": 2202607500,
+   "process_peak_rss_bytes": 2564407296,
+   "pool": {
+    "policy": "lru",
+    "expert_pack_records": 0,
+    "budget_gib": 0.0,
+    "resident_gib": 0.0,
+    "hit_rate": 0.067,
+    "seeded_bytes": 0,
+    "staged_mib": 74.9
+   },
+   "prefetch": {
+    "issued": 771,
+    "used": 756,
+    "wasted": 1,
+    "precision": 0.981
+   },
+   "expert_gb_read": 173.7,
+   "prefill": {
+    "layer_major_tokens": 8192,
+    "chunk_tokens": 2048
+   },
+   "last_prefix": {
+    "prompt_tokens": 491,
+    "hit_tokens": 465,
+    "reused_tokens": 465,
+    "prefilled_tokens": 26,
+    "prefill_seconds": 2.643,
+    "snapshot_seconds": 0.0,
+    "restore_seconds": 0.044,
+    "outcome": "ssd_hit",
+    "layer_major": false
+   },
+   "readiness": {
+    "admitted": true,
+    "required_gib": 1.88,
+    "available_gib": 5.67,
+    "pressure": 1,
+    "steps": []
+   },
+   "prefix_cache": {
+    "snapshots": 1,
+    "gb": 0.05,
+    "ssd_hits": 2,
+    "ram_hits": 0,
+    "ram_bytes": 0,
+    "cold_lookups": 1,
+    "reused_tokens": 930,
+    "restore_failures": 0,
+    "evicted": 0
+   }
+  },
+  "nemotron_context": {
+   "admitted_context": 1048576,
+   "kv_format": "affine-int8-g64",
+   "million_token_validation": false
+  },
+  "memory_policy": {
+   "policy_identifier": "absolute-swap-only",
+   "swap_baseline_mb": 871.06,
+   "current_swap_growth_mb": 0.0,
+   "peak_swap_growth_mb": 0.0,
+   "threshold_gib": 5.0,
+   "threshold_mb": 5120.0,
+   "swap_ceiling_mib": 5120.0,
+   "swap_ceiling_margin_mib": 0.0,
+   "stop_reason": null,
+   "can_admit": true,
+   "probe_availability": {
+    "pressure": true,
+    "swap_used_mb": true,
+    "swapout": true,
+    "swapin": true,
+    "available_mb": true,
+    "compressor_mb": true
+   },
+   "telemetry_only_checks": [
+    "startup_9gib_gate",
+    "measured_available_memory_admission",
+    "available_memory_floor_2gib",
+    "compressor_growth_stop",
+    "pressure_level_4_stop",
+    "persistent_pressure_level_2_stop",
+    "active_swap_rate_stop"
+   ]
+  },
+  "router_state": "ready",
+  "input_reuse": {
+   "cross_model_hits": 0
+  }
+ },
+ "remote_health": {
+  "status": 200,
+  "ready": true
+ },
+ "remote_plain": {
+  "status": 200,
+  "seconds": 4.13,
+  "content": "The capital of Italy is Rome.",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 490,
+   "completion_tokens": 7,
+   "total_tokens": 497,
+   "prompt_tokens_details": {
+    "cached_tokens": 465
+   },
+   "prompt_cache_hit_tokens": 465,
+   "prompt_cache_miss_tokens": 25
+  }
+ },
+ "remote_stream": {
+  "status": 200,
+  "events": 15,
+  "first_content_s": 2.75,
+  "seconds": 4.79,
+  "text": "Red, green, and blue are the three primary colours of light.",
+  "usage": null
+ },
+ "guard_exit": -15,
+ "leftover_processes": "",
+ "available_floor_gib": 5.02,
+ "swap_growth_mib": 0.0,
+ "thermal_max": 0,
+ "guard_last": "{\"t\": 50.4, \"available\": 5900271616, \"free\": 82919424, \"compressor\": 1348468736, \"swap_used\": 913375232, \"swapouts\": 276203765760, \"swapins\": 170579460096, \"compressions\": 33220742955008, \"thermal\": 0}"
+}

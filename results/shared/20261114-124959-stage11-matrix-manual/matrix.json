@@ -1,0 +1,176 @@
+[
+  {
+    "cell": [
+      "flashnext",
+      512,
+      128,
+      "cold-process",
+      1
+    ],
+    "returncode": 90,
+    "guard_passed": false,
+    "status": "stopped",
+    "token_sha256": [],
+    "completion_tokens": [],
+    "stream_tok_s": [],
+    "restored_tokens": [],
+    "guard": "results/flashnext/20261114-124959-stage11-512-128-cold-process-r1/guard.jsonl",
+    "evidence": "results/flashnext/20261114-124959-stage11-512-128-cold-process-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "nemotron35",
+      512,
+      128,
+      "cold-process",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "e517cedd1aa19931db2e0716f49ec395cb820624eab02b97d671edb99cba316e"
+    ],
+    "completion_tokens": [
+      128
+    ],
+    "stream_tok_s": [
+      5.32436702458305
+    ],
+    "restored_tokens": [
+      0
+    ],
+    "guard": "results/nemotron35/20261114-125002-stage11-512-128-cold-process-r1/guard.jsonl",
+    "evidence": "results/nemotron35/20261114-125002-stage11-512-128-cold-process-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "flashnext",
+      512,
+      128,
+      "warm-process-cold-prefix",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "97a7af9e5a890b333346de706e97dcccdd0f1c1f9928fd70b8bf89fd5cc5b320"
+    ],
+    "completion_tokens": [
+      128
+    ],
+    "stream_tok_s": [
+      2.2475940092363813
+    ],
+    "restored_tokens": [
+      0
+    ],
+    "guard": "results/flashnext/20261114-125041-stage11-512-128-warm-process-cold-prefix-r1/guard.jsonl",
+    "evidence": "results/flashnext/20261114-125041-stage11-512-128-warm-process-cold-prefix-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "nemotron35",
+      512,
+      128,
+      "warm-process-cold-prefix",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "e517cedd1aa19931db2e0716f49ec395cb820624eab02b97d671edb99cba316e"
+    ],
+    "completion_tokens": [
+      128
+    ],
+    "stream_tok_s": [
+      5.45029897149587
+    ],
+    "restored_tokens": [
+      0
+    ],
+    "guard": "results/nemotron35/20261114-125317-stage11-512-128-warm-process-cold-prefix-r1/guard.jsonl",
+    "evidence": "results/nemotron35/20261114-125317-stage11-512-128-warm-process-cold-prefix-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "flashnext",
+      512,
+      128,
+      "prefix-hit",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "97a7af9e5a890b333346de706e97dcccdd0f1c1f9928fd70b8bf89fd5cc5b320"
+    ],
+    "completion_tokens": [
+      128
+    ],
+    "stream_tok_s": [
+      2.450229738580624
+    ],
+    "restored_tokens": [
+      489
+    ],
+    "guard": "results/flashnext/20261114-125403-stage11-512-128-prefix-hit-r1/guard.jsonl",
+    "evidence": "results/flashnext/20261114-125403-stage11-512-128-prefix-hit-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "nemotron35",
+      512,
+      128,
+      "prefix-hit",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "e517cedd1aa19931db2e0716f49ec395cb820624eab02b97d671edb99cba316e"
+    ],
+    "completion_tokens": [
+      128
+    ],
+    "stream_tok_s": [
+      5.3966710253104
+    ],
+    "restored_tokens": [
+      487
+    ],
+    "guard": "results/nemotron35/20261114-125554-stage11-512-128-prefix-hit-r1/guard.jsonl",
+    "evidence": "results/nemotron35/20261114-125554-stage11-512-128-prefix-hit-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "flashnext",
+      512,
+      512,
+      "cold-process",
+      1
+    ],
+    "returncode": 0,
+    "guard_passed": true,
+    "status": "completed",
+    "token_sha256": [
+      "2d81b1c4bb01656e24f4731af8f49ebdf90f0293876438ab5cbea38d65485457"
+    ],
+    "completion_tokens": [
+      512
+    ],
+    "stream_tok_s": [
+      2.5627858394848237
+    ],
+    "restored_tokens": [
+      0
+    ],
+    "guard": "results/flashnext/20261114-125635-stage11-512-512-cold-process-r1/guard.jsonl",
+    "evidence": "results/flashnext/20261114-125635-stage11-512-512-cold-process-r1/qualification.json"
+  }
+]

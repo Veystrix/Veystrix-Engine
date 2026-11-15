@@ -73,6 +73,13 @@ def get_logits_hook():
 
 
 def chunk_tokens() -> int:
+    from .prefill_autotune import CURRENT
+
+    choice = CURRENT.get()
+    return choice.cap if choice is not None else configured_chunk_tokens()
+
+
+def configured_chunk_tokens() -> int:
     """Requested chunk size from the environment (0 = off). Bad values raise."""
     raw = os.environ.get(FLAG_CHUNK_TOKENS, "0") or "0"
     try:
@@ -88,6 +95,10 @@ def chunk_tokens() -> int:
 
 def chunk_policy() -> str:
     """Chunking policy from the environment ("grid" when unset). Bad values raise."""
+    from .prefill_autotune import CURRENT
+
+    if CURRENT.get() is not None:
+        return "balanced"
     value = (os.environ.get(FLAG_CHUNK_POLICY, "") or "grid").strip().lower()
     if value not in CHUNK_POLICIES:
         raise ValueError(f"{FLAG_CHUNK_POLICY} must be one of {', '.join(CHUNK_POLICIES)}")
@@ -268,14 +279,21 @@ def _prefill_target(
     logits = output.logits if full_logits else None
     hidden_states = output.hidden_states if (want_hidden or not full_logits) else None
 
+    from veystrix.bench.telemetry import current as benchmark_trace
+
+    trace = benchmark_trace.get()
     if full_logits:
         flight_recorder.record("prefill_logits_eval_begin")
         mx.eval(logits)
         flight_recorder.record("prefill_logits_eval_end")
         if hidden_states:
             mx.eval(hidden_states)
+        if trace is not None:
+            trace.mark("first_logits_ready", boundary="evaluated_logits")
         token = pick(logits[:, -1, :])
         mx.eval(token)
+        if trace is not None:
+            trace.mark("first_sample_ready")
         if _LOGITS_HOOK[0] is not None:
             _LOGITS_HOOK[0](logits[:, -1, :])
         elif os.environ.get("VEYSTRIX_LAYER_GATE_PROBE"):
@@ -303,6 +321,10 @@ def _prefill_target(
         flight_recorder.record("prefill_token_state_eval_begin")
         mx.eval(token, [entry.state for entry in cache])
         flight_recorder.record("prefill_token_state_eval_end")
+        if trace is not None:
+            # This path evaluates logits and the first sample in one existing call.
+            trace.mark("first_logits_ready", boundary="joint_sample_eval")
+            trace.mark("first_sample_ready")
         if _LOGITS_HOOK[0] is not None:
             if sampler is None:
                 raise RuntimeError("layer gate requires the actual sampler logits")
@@ -620,6 +642,9 @@ def _run_layer_major(language, ids, cache, sampler, boundaries, on_boundary, off
                 item.update(expert_gb=round(report.expert_bytes / 1e9, 2),
                             read_seconds=round(report.read_seconds, 2),
                             ring_layers=report.ring_layers, fallback_layers=report.fallback_layers)
+                if report.union_layers or report.union_refused:
+                    # Route-union order only (FLASHNEXT_PREFILL_ROUTE_UNION=1); absent otherwise.
+                    item["route_union"] = report.union_summary()
                 if report.layer_seconds:
                     # Trace only (no extra synchronisation): wall seconds per layer for this window, and which layers are attention.
                     item["layer_seconds"] = list(report.layer_seconds)
@@ -721,7 +746,7 @@ def _prefill_target_checked(
     including those before ``offset``; ``boundaries`` is the subset the caller wants reported. Not used when
     logits or hidden states are requested.
     """
-    from models.flashnext import prefill_memory, prefill_ring
+    from models.flashnext import prefill_memory, prefill_reads, prefill_ring
 
     ring_on = prefill_ring.enabled()
     cap_on = prefill_memory.enabled()
@@ -736,16 +761,26 @@ def _prefill_target_checked(
             scheduler.start_at(chunk_tokens())
 
     def body():
-        return _run_chunks(language, ids, cache, want_logits, want_hidden, sampler,
-                           tuple(boundaries), on_boundary, int(offset),
-                           None if anchors is None else tuple(anchors), trace, scheduler, tuple(required))
+        # FLASHNEXT_PREFILL_READ_STATS (default off): record this prefill's expert reads; ``begin`` is None when off.
+        reads = prefill_reads.begin(int(ids.shape[1]))
+        try:
+            result = _run_chunks(language, ids, cache, want_logits, want_hidden, sampler,
+                                 tuple(boundaries), on_boundary, int(offset),
+                                 None if anchors is None else tuple(anchors), trace, scheduler, tuple(required))
+        except BaseException:
+            prefill_reads.end(reads, ok=False)
+            raise
+        prefill_reads.end(reads, ok=True)
+        return result
 
     if not ring_on and not cap_on:
         return body()
     with prefill_memory.cache_cap():
         if not ring_on:
             return body()
-        with prefill_ring.session(language, int(ids.shape[1])) as ring:
+        # A restored prefix can leave a short suffix with a wide route
+        # union. Size the lease against the original prompt for eligibility.
+        with prefill_ring.session(language, int(ids.shape[1]) + int(offset)) as ring:
             result = body()
             if ring is not None:
                 # Nothing the caller keeps may still read ring memory lazily.

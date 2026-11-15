@@ -1,0 +1,8 @@
+experts fully resident 1549 cold 897 partial 498
+warm: advise 1.170 ms/layer  wrap 0.139 ms/layer  compute 2.076 ms/layer
+cold no-advise: wrap 0.17 ms compute(faulting) 20.9 ms for 6 experts = 1.60 GB/s; resident after [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+cold advise: call 15.80 ms for 6; resident right after [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]; all resident after 1.1 ms more -> 1.99 GB/s
+cold pread warm x8 threads: 10.1 ms for 6 experts = 3.32 GB/s; resident [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+   then compute 1.85 ms
+cold advise in threads: 16.52 ms
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 1.0, "available_floor_gib": 6.94, "swap_baseline_mib": 967, "swap_peak_mib": 967, "swap_end_mib": 967, "compressor_baseline_mib": 1106, "compressor_peak_mib": 1106, "swapout_mib": 0, "compressed_gib_total": 0.0, "thermal_seconds": {"0": 1}}

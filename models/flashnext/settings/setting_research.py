@@ -29,6 +29,13 @@ def positive_integer(raw):
     return value
 
 
+def unit_interval(raw):
+    value = float(raw)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError("value must be between 0 and 1")
+    return value
+
+
 def choice(options, name):
     def parse(raw):
         if raw not in options:
@@ -69,6 +76,7 @@ SETTINGS = (
     research("compile", "FLASHNEXT_COMPILE"),
     research("qsa-cache-pooled-keys", "FLASHNEXT_QSA_CACHE_POOLED_KEYS", "1", parser=choice(("0", "1"), "qsa-cache-pooled-keys"), unset="0"),
     research("qsa-scatter-decode", "FLASHNEXT_QSA_SCATTER_DECODE", "1", parser=choice(("0", "1"), "qsa-scatter-decode"), unset="0"),
+    research("qsa-index-reserve", "FLASHNEXT_QSA_INDEX_RESERVE", parser=choice(("0", "1"), "qsa-index-reserve")),
     research("overlap", "FLASHNEXT_OVERLAP", "0", parser=choice(("0", "1"), "overlap"), unset="1"),
     research("expert-lock-gb", "FLASHNEXT_EXPERT_LOCK_GB", "0", "startup", text),
     research("rdahead", "FLASHNEXT_RDAHEAD", "0", parser=choice(("0", "1"), "rdahead"), unset="1"),
@@ -91,6 +99,30 @@ SETTINGS = (
     research("compile-gdn", "FLASHNEXT_COMPILE_GDN", "1", parser=choice(("0", "1"), "compile-gdn"), unset="0"),
     research("expert-pool-gb", "FLASHNEXT_EXPERT_POOL_GB", "6", "startup", float, unset="0"),
     research("expert-pool-lock", "FLASHNEXT_EXPERT_POOL_LOCK"),
+    research("expert-pool-flat-slots", "FLASHNEXT_EXPERT_POOL_FLAT_SLOTS", parser=choice(("0", "1"), "expert-pool-flat-slots")),
+    research("expert-pack", "FLASHNEXT_EXPERT_PACK", ""),
+    research("expert-pack-read", "FLASHNEXT_EXPERT_PACK_READ", "record", "startup",
+             choice(("record", "coalesced", "mmap"), "expert-pack-read")),
+    research("expert-pack-native", "FLASHNEXT_EXPERT_PACK_NATIVE", parser=choice(("0", "1"), "expert-pack-native")),
+    research("expert-pool-policy", "FLASHNEXT_EXPERT_POOL_POLICY", "lru", "startup",
+             choice(("lru", "s3fifo", "least-stale", "cost-aware"), "expert-pool-policy")),
+    research("expert-pool-cost-weights", "FLASHNEXT_EXPERT_POOL_COST_WEIGHTS", "", "startup"),
+    research("expert-prefetch", "FLASHNEXT_EXPERT_PREFETCH", "0", "startup", choice(("0", "1"), "expert-prefetch")),
+    research("expert-prefetch-slots", "FLASHNEXT_EXPERT_PREFETCH_SLOTS", "16", "startup", positive_integer),
+    research("expert-prefetch-depth", "FLASHNEXT_EXPERT_PREFETCH_DEPTH", "2", "startup", positive_integer),
+    research("expert-prefetch-width", "FLASHNEXT_EXPERT_PREFETCH_WIDTH", "2", "startup", positive_integer),
+    research("expert-prefetch-min-p", "FLASHNEXT_EXPERT_PREFETCH_MIN_P", "0.5", "startup", unit_interval),
+    research("expert-prefetch-workers", "FLASHNEXT_EXPERT_PREFETCH_WORKERS", "2", "startup", positive_integer),
+    research("expert-prefetch-gate", "FLASHNEXT_EXPERT_PREFETCH_GATE", "1", "startup", choice(("0", "1"), "expert-prefetch-gate")),
+    research("decode-overlap", "FLASHNEXT_DECODE_OVERLAP", parser=choice(("0", "1"), "decode-overlap")),
+    research("mtp-adaptive", "FLASHNEXT_MTP_ADAPTIVE", parser=choice(("0", "1"), "mtp-adaptive")),
+    research("mtp-rollback", "FLASHNEXT_MTP_ROLLBACK", parser=choice(("0", "1"), "mtp-rollback")),
+    research("mtp-cache-limit-mb", "FLASHNEXT_MTP_CACHE_LIMIT_MB", "512", "startup", integer, unset="512"),
+    research("prefill-seed-decode", "FLASHNEXT_PREFILL_SEED_DECODE", parser=choice(("0", "1"), "prefill-seed-decode")),
+    research("metal-fma-dequant", "FLASHNEXT_METAL_FMA_DEQUANT", parser=choice(("0", "1"), "metal-fma-dequant")),
+    research("metal-block-moe", "FLASHNEXT_METAL_BLOCK_MOE", parser=choice(("0", "1"), "metal-block-moe")),
+    research("metal-block-moe-rows", "FLASHNEXT_METAL_BLOCK_MOE_ROWS", "2", "startup",
+             choice(("2", "4", "8"), "metal-block-moe-rows"), unset="2"),
     research("prefill-prefetch-gb", "FLASHNEXT_PREFILL_PREFETCH_GB", "0", "startup", float, unset="0"),
     research("prefill-ring-experts", "FLASHNEXT_PREFILL_RING_EXPERTS", "0", "startup", integer, unset="0"),
     research("prefill-ring-min-tokens", "FLASHNEXT_PREFILL_RING_MIN_TOKENS", "512", "startup", integer, unset="512"),
@@ -105,6 +137,11 @@ SETTINGS = (
     research("disk-reserve-gb", "FLASHNEXT_DISK_RESERVE_GB", "50", "startup", float, unset="50"),
     research("prefix-cache-min-tokens", "FLASHNEXT_PREFIX_CACHE_MIN_TOKENS", "512", "startup", integer, unset="512"),
     research("prefix-cache-boundaries", "FLASHNEXT_PREFIX_CACHE_BOUNDARIES", "system", "startup", choice(("system", "chunks", "messages", "all"), "prefix-cache-boundaries"), unset="system"),
+    research("prefill-autotune", "FLASHNEXT_PREFILL_AUTOTUNE", "0", "startup",
+             choice(("0", "1"), "prefill-autotune")),
+    research("prefill-shape-profile", "FLASHNEXT_PREFILL_SHAPE_PROFILE", "", "startup"),
+    research("qsa-prefill-tile-eval", "FLASHNEXT_QSA_PREFILL_TILE_EVAL", "0", "startup",
+             choice(("0", "1"), "qsa-prefill-tile-eval")),
     research("prefill-chunk-tokens", "FLASHNEXT_PREFILL_CHUNK_TOKENS", "0", "startup", integer, unset="0"),
     research("prefill-chunk-policy", "FLASHNEXT_PREFILL_CHUNK_POLICY", "grid", "startup", choice(("grid", "balanced"), "prefill-chunk-policy"), unset="grid"),
     research("prefill-release-decode-pool", "FLASHNEXT_PREFILL_RELEASE_DECODE_POOL", "1", "startup", choice(("0", "1"), "prefill-release-decode-pool"), unset="0"),

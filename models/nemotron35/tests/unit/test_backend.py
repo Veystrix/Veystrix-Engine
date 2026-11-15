@@ -113,6 +113,31 @@ class BackendTests(unittest.TestCase):
         finally:
             other.close()
 
+    def test_grouped_decode_matches_singleton_at_distinct_cache_offsets(self):
+        from veystrix.sampling import Sampler, Sampling
+
+        reference = [self.b.fork_for_batch(), self.b.fork_for_batch()]
+        grouped = [self.b.fork_for_batch(), self.b.fork_for_batch()]
+        prompts = [[1, 2, 3], [8, 9, 10, 11, 12]]
+        for left, right, prompt in zip(reference, grouped, prompts, strict=True):
+            left.core.prefill(prompt)
+            right.core.prefill(prompt)
+        values = [13, 14]
+        for final in (False, False, True):
+            samplers = [Sampler(Sampling.greedy_settings()) for _ in values]
+            expected = [backend.batch_decode(token, sampler, not final)
+                        for backend, token, sampler in zip(reference, values, samplers, strict=True)]
+            observed = self.b.batch_decode_group([
+                (backend, token, sampler, not final)
+                for backend, token, sampler in zip(grouped, values, samplers, strict=True)
+            ])
+            self.assertEqual(expected, observed)
+            for left, right in zip(reference, grouped, strict=True):
+                self.assertEqual(left.cache_tokens, right.cache_tokens)
+                for before, after in zip(left.core.state_arrays(), right.core.state_arrays(), strict=True):
+                    self.assertTrue(mx.array_equal(before, after).item())
+            values = expected
+
     def test_cancel_during_decode_keeps_state_usable(self):
         self.b.append_text("cancel me")
         seen = []

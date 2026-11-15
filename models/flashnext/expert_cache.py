@@ -25,9 +25,11 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from mlx_vlm.models.switch_layers import _gather_sort, _scatter_unsort
 
-from . import hostwindow
+from . import hostwindow, prefill_reads
 from .slab_pack import (
     DOWN_BIASES_OFFSET,
     DOWN_SCALES_OFFSET,
@@ -176,14 +178,18 @@ def _submit_read(*args):
     track_pool = _SCORE_SYNC_PROFILE
     if track_pool:
         _pool_submit()
+    trace = benchmark_trace.get()
     try:
         if _PROFILE:
             future = _POOL.submit(
                 _profiled_read_call,
                 time.perf_counter(),
                 track_pool,
+                trace if trace is not None and trace.capture_shapes else None,
                 *args,
             )
+        elif trace is not None and trace.capture_shapes:
+            future = _POOL.submit(_trace_read_call, trace, track_pool, *args)
         elif track_pool:
             future = _POOL.submit(_tracked_read_call, *args)
         else:
@@ -398,7 +404,7 @@ class _ProfiledRead:
         self.pread_bytes = stats["pread_bytes"]
 
 
-def _profiled_read_call(submitted, track_pool, function, *args):
+def _profiled_read_call(submitted, track_pool, trace, function, *args):
     started = time.perf_counter()
     if track_pool:
         _pool_started()
@@ -407,6 +413,8 @@ def _profiled_read_call(submitted, track_pool, function, *args):
         value = function(*args)
     finally:
         stats = finish_read_profile()
+        if trace is not None:
+            trace.record_reads(stats)
         if track_pool:
             _pool_finished()
     ended = time.perf_counter()
@@ -521,6 +529,18 @@ def set_shared_buffer(enabled) -> None:
 def stream_pack_enabled() -> bool:
     """Return whether cold experts use one expert-major destination buffer."""
     return os.environ.get("FLASHNEXT_STREAM_PACK", "0") == "1"
+
+
+def _trace_read_call(trace, track_pool, function, *args):
+    if track_pool:
+        _pool_started()
+    begin_read_profile()
+    try:
+        return function(*args)
+    finally:
+        trace.record_reads(finish_read_profile())
+        if track_pool:
+            _pool_finished()
 
 
 class _StreamedPackRead:
@@ -1373,7 +1393,11 @@ class StreamingSwitchGLU(nn.Module):
         # experts itself, so the static slab pack stays off beside it.
         from . import expert_pool as _expert_pool
 
-        self._expert_pool_on = _expert_pool.enabled() and self._metal_runtime_capable
+        from . import memory_budget
+
+        pool_requested = (_expert_pool.enabled() or
+                          (memory_budget.enabled() and memory_budget.requested_cap() > 0))
+        self._expert_pool_on = pool_requested and self._metal_runtime_capable
         if self._expert_pool_on:
             self._slab_pack_disabled_reason = "expert pool enabled"
         else:
@@ -1583,6 +1607,9 @@ class StreamingSwitchGLU(nn.Module):
             if hits:
                 return self._read_weights_with_pool(projections, wanted, pool, hits)
 
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_misses"] += len(wanted)
         pending = submit_projection_tasks(projections, wanted)
         if _PROFILE:
             timings = []
@@ -1593,6 +1620,8 @@ class StreamingSwitchGLU(nn.Module):
             _TIMERS["io_wait"] += ended - began
             _TIMERS["io_calls"] += 1
             _record_read_timing(timings, began, ended)
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((ended - began) * 1e9)
             began = time.perf_counter()
             with hostwindow.window("to_mx_host"):
                 weights = [
@@ -1601,8 +1630,11 @@ class StreamingSwitchGLU(nn.Module):
                 ]
             _TIMERS["to_mx"] += time.perf_counter() - began
             return weights
+        started = trace.clock() if trace is not None else None
         with hostwindow.window("io_await"):
             raw = _await_projection_tasks(pending)
+        if trace is not None:
+            trace.counts["expert_wait_ns"] += trace.clock() - started
         with hostwindow.window("to_mx_host"):
             weights = [
                 projection.cache.to_mx(chunks)
@@ -1626,6 +1658,10 @@ class StreamingSwitchGLU(nn.Module):
         from . import expert_io_stats, expert_pool
 
         misses = [e for e in wanted if e not in hits]
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_hits"] += len(hits)
+            trace.counts["expert_misses"] += len(misses)
         dest_indices = [wanted.index(e) for e in misses] if misses else None
         hit_indices_and_bases = [
             (i, expert_pool.HEADER + hits[expert] * pool.stride)
@@ -1672,6 +1708,8 @@ class StreamingSwitchGLU(nn.Module):
             with hostwindow.window("io_await"):
                 raw_misses = _await_projection_tasks(pending, timings)
             t_io = time.perf_counter() - began_io
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round(t_io * 1e9)
 
             for p_idx, (projection, part_buffers) in enumerate(zip(projections, proj_buffers)):
                 for part_idx, (part, buf) in enumerate(zip(("weight", "scales", "biases"), part_buffers)):
@@ -1714,6 +1752,11 @@ class StreamingSwitchGLU(nn.Module):
         flat_input = x.reshape(-1, x.shape[-1])
         window = _LAYER_WINDOW[0]
         if window is not None and scores is None and self.layer_id >= 0 and flat_input.shape[0] > 8:
+            union = getattr(window, "route_union", None)
+            if union is not None:
+                # Route-union layer-major (FLASHNEXT_PREFILL_ROUTE_UNION): the driver is probing this chunk's routes or running
+                # it on a staged subset of the layer's experts. ``window.route_union`` is None unless that flag is on.
+                return union.call(self, x, indices, allow_sort)
             observer = _PREFILL_PROGRESS
             if observer is not None:
                 observer(self.layer_id)             # cancellation point and watchdog tick, before the layer's read
@@ -1742,7 +1785,7 @@ class StreamingSwitchGLU(nn.Module):
                 began = time.perf_counter()
                 mx.eval(flat)
                 _TIMERS["router_sync"] += time.perf_counter() - began
-            else:
+            elif _PREFILL_PROGRESS is not None and os.environ.get("FLASHNEXT_PREFILL_TRACE_LAYERS") == "1":
                 mx.eval(flat)
             _prefill_trace("prefill_router_eval_end", layer=self.layer_id)
             with hostwindow.window("route_tolist"):
@@ -1779,7 +1822,12 @@ class StreamingSwitchGLU(nn.Module):
         miss = [e for e in routed if e not in expert_to_slot]
         self.hits += len(routed) - len(miss)
         self.misses += len(miss)
+        trace = benchmark_trace.get()
         wanted = list(dict.fromkeys(miss))
+        if trace is not None:
+            trace.counts["expert_hits"] += len(set(routed) & expert_to_slot.keys())
+            if stream_pack_enabled():
+                trace.counts["expert_misses"] += len(wanted)
         projections = (self.gate_proj, self.up_proj, self.down_proj)
         hidden_size = flat_input.shape[-1]
         streamed_record = None
@@ -1791,6 +1839,8 @@ class StreamingSwitchGLU(nn.Module):
             began = time.perf_counter()
             pending.wait(timings)
             ended = time.perf_counter()
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((ended - began) * 1e9)
             if _PROFILE:
                 _TIMERS["io_wait"] += ended - began
                 _TIMERS["io_wait_packed"] += ended - began
@@ -1861,6 +1911,10 @@ class StreamingSwitchGLU(nn.Module):
         slots, misses = pool.assign(self.layer_id, wanted)
         self.hits += len(routed) - len(misses)
         self.misses += len(misses)
+        trace = benchmark_trace.get()
+        if trace is not None:
+            trace.counts["expert_misses"] += len(misses)
+            trace.counts["expert_hits"] += len(wanted) - len(misses)
         resident_activation = None
         if misses:
             prefix = self.gate_proj.cache.prefix.rsplit(".", 1)[0]
@@ -1869,6 +1923,7 @@ class StreamingSwitchGLU(nn.Module):
             futures = []
             try:
                 futures = pool.fill(prefix, misses, _submit_read, chunk)
+                pool.prefetch_ahead(self.layer_id)   # after fill, so the demand gate is already shut
                 if (os.environ.get("FLASHNEXT_DECODE_OVERLAP") == "1" and len(misses) < len(wanted)
                         and flat_input.shape[0] == 1):
                     hidden_size = flat_input.shape[-1]
@@ -1904,20 +1959,39 @@ class StreamingSwitchGLU(nn.Module):
                 if resident_activation is not None:
                     mx.eval(resident_activation)  # finish using the shared buffer before unwinding
                 raise
+            if pool.wants_refill_cost:
+                pool.observe_refill(self.layer_id, (time.perf_counter() - began) / len(misses))
+            if trace is not None:
+                trace.counts["expert_wait_ns"] += round((time.perf_counter() - began) * 1e9)
             if _PROFILE:
                 ended = time.perf_counter()
                 _TIMERS["io_wait"] += ended - began
                 _TIMERS["io_calls"] += 1
                 _record_read_timing(timings, began, ended)
+        else:
+            pool.prefetch_ahead(self.layer_id)
         hidden_size = flat_input.shape[-1]
         width = indices.shape[-1]
         tokens = flat_input.shape[0]
-        local = mx.array(
-            [SLOT_BIT | slots[e] for e in routed], dtype=mx.uint32,
-        ).reshape(tokens, width)
+        pool_routes = [SLOT_BIT | slots[e] for e in routed]
+        local = mx.array(pool_routes, dtype=mx.uint32).reshape(tokens, width)
         weights = self._get_dummy_streamed_weights(hidden_size)
         executor = self._executor(("pool", hidden_size, width), width, hidden_size, width)
         options = {}
+        if (os.environ.get("FLASHNEXT_METAL_BLOCK_MOE") == "1" and tokens >= 2
+                and executor.available and resident_activation is None):
+            # Multi-row verification: experts shared between rows are read
+            # once. Two pairs per group measured fastest in every routing
+            # pattern; FLASHNEXT_METAL_BLOCK_MOE_ROWS=4 or 8 selects more.
+            from .metal_runtime import block_plan
+
+            requested = os.environ.get("FLASHNEXT_METAL_BLOCK_MOE_ROWS")
+            rows = int(requested) if requested in ("4", "8") else 2
+            group_routes, group_pairs = block_plan(pool_routes, rows)
+            options["block"] = (
+                mx.array(group_routes, dtype=mx.uint32),
+                mx.array(group_pairs, dtype=mx.uint32),
+            )
         if resident_activation is not None:
             missing_count = len(missing_positions)
             missing_executor = self._executor(("pool", hidden_size, missing_count),
@@ -1963,6 +2037,10 @@ class StreamingSwitchGLU(nn.Module):
             ).reshape(indices.shape)
         weights = None
         ring = _PREFILL_RING[0]
+        # FLASHNEXT_PREFILL_READ_STATS: a multi-row (prefill) read is counted; ``recording`` is None when the flag is off.
+        recording = prefill_reads.ACTIVE[0] if flat_input.shape[0] > 8 else None
+        stats_mark = prefill_reads.mark(ring) if recording is not None else None
+        via_ring = False
         trace_began = time.perf_counter()
         _prefill_trace("prefill_expert_fetch_begin", layer=self.layer_id, experts=len(wanted))
         try:
@@ -1973,10 +2051,13 @@ class StreamingSwitchGLU(nn.Module):
                     self.gate_proj.cache.store,
                     self.gate_proj.cache.prefix.rsplit(".", 1)[0], wanted,
                 )
+                via_ring = weights is not None
                 if weights is not None and os.environ.get("FLASHNEXT_PREFILL_SEED_DECODE") == "1":
                     ring.seed_decode(self.layer_id, order, routed)
             if weights is None:
                 weights = self._read_weights(projections, wanted)
+            if recording is not None:
+                recording.note("chunk", self, wanted, via_ring, ring, stats_mark)
         except BaseException as exc:
             _prefill_trace("prefill_expert_fetch_error", layer=self.layer_id, error=type(exc).__name__,
                            seconds=round(time.perf_counter() - trace_began, 3))

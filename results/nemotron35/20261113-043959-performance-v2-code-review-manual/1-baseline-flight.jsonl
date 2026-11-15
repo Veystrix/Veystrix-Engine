@@ -1,0 +1,11 @@
+{"t":1794525003.082,"event":"server_start","pid":16020,"host":"127.0.0.1","port":60176,"context_limit":16384,"max_cold_prefill":16384,"max_incremental_prefill":16384}
+{"t":1794525003.208,"event":"request_begin","pid":16020,"path":"/v1/chat/completions","seq":1,"user_agent":"","session_header":true,"stream":true,"messages":2,"tools":0,"reasoning_fields":{"reasoning_effort":"none"},"max_tokens":96,"waiting":0}
+{"t":1794525003.24,"event":"adopt","pid":16020,"prompt_tokens":5564,"matched_tokens":0,"needed_prefill":5564,"extends":false,"outcome":"MISS","warm_tokens":0,"session_hint":false}
+{"t":1794525003.241,"event":"generate_begin","pid":16020,"prompt_tokens":5564,"max_tokens":96,"thinking":false,"effort":null}
+{"t":1794525003.252,"event":"prefill_progress","pid":16020,"done":0,"total":5564,"elapsed":0.0}
+{"t":1794525026.954,"event":"prefill_progress","pid":16020,"done":5564,"total":5564,"elapsed":23.7}
+{"t":1794525026.955,"event":"first_token","pid":16020,"seconds_since_start":23.715}
+{"t":1794525027.4,"event":"first_model_delta_forwarded","pid":16020,"transport":"sse"}
+{"t":1794525047.639,"event":"generate_end","pid":16020,"finish":"length","prompt_tokens":5564,"completion_tokens":96,"prefill_seconds":23.7,"token_sha256":"8510c33738cc7e7141aac98912f19f62a423c77f2872c7380e069f93a0351b87","decode_tokens_per_second":4.64}
+{"t":1794525047.641,"event":"request_end","pid":16020,"path":"/v1/chat/completions"}
+{"t":1794525047.648,"event":"server_stop","pid":16020}

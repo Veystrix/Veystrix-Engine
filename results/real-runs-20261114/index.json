@@ -1,0 +1,1570 @@
+{
+ "date": "2026-11-14",
+ "record": "docs/performance/real-runs-2026-11-14.md",
+ "note": "A stage0-paired label that appears once holds the completed rerun; its first, stopped attempt is results/flashnext/20261114-060745-bench-production-manual.",
+ "runs": [
+  {
+   "label": "nemo-mtp2-large",
+   "guard_trace": "guard/nemo-mtp2-large.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-mtp2-large-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.0,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.28 GiB)",
+    "returncode": -2,
+    "seconds": 35.0,
+    "available_floor_gib": 2.28,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2224,
+    "compressor_peak_mib": 5564,
+    "swapout_mib": 0,
+    "compressed_gib_total": 19.8,
+    "thermal_seconds": {
+     "0": 34
+    }
+   },
+   "description": "Nemotron plain vs MTP depth 2, 8K code-review prompt, 2 GiB pool",
+   "results": [
+    "nemotron35/20261114-105050-performance-v2-code-review-flag-veystrix-nemotron-native-mtp-manual"
+   ]
+  },
+  {
+   "label": "nemo-mtp2-large-p0",
+   "guard_trace": "guard/nemo-mtp2-large-p0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-mtp2-large-p0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.57,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.98 GiB)",
+    "returncode": -2,
+    "seconds": 37.9,
+    "available_floor_gib": 2.85,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2264,
+    "compressor_peak_mib": 5702,
+    "swapout_mib": 0,
+    "compressed_gib_total": 16.2,
+    "thermal_seconds": {
+     "0": 37
+    }
+   },
+   "description": "Nemotron plain vs MTP depth 2, 8K code-review prompt, no pool",
+   "results": [
+    "nemotron35/20261114-105204-performance-v2-code-review-flag-veystrix-nemotron-native-mtp-manual"
+   ]
+  },
+  {
+   "label": "nemo-mtp2-short-p0",
+   "guard_trace": "guard/nemo-mtp2-short-p0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-mtp2-short-p0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.29,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 277.0,
+    "available_floor_gib": 3.62,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2302,
+    "compressor_peak_mib": 4304,
+    "swapout_mib": 0,
+    "compressed_gib_total": 13.7,
+    "thermal_seconds": {
+     "0": 275
+    }
+   },
+   "description": "Nemotron plain vs MTP depth 2, 576-token prompt, no pool, 128 tokens",
+   "results": [
+    "nemotron35/20261114-105300-performance-v2-flag-veystrix-nemotron-native-mtp-manual"
+   ]
+  },
+  {
+   "label": "nemo-mtpA4-512-p0",
+   "guard_trace": "guard/nemo-mtpA4-512-p0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-mtpA4-512-p0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.49,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 754.2,
+    "available_floor_gib": 3.53,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2184,
+    "compressor_peak_mib": 4630,
+    "swapout_mib": 0,
+    "compressed_gib_total": 64.6,
+    "thermal_seconds": {
+     "0": 749
+    }
+   },
+   "description": "Nemotron plain vs adaptive MTP ceiling 4, 576-token prompt, no pool, 512 tokens",
+   "results": [
+    "nemotron35/20261114-105810-performance-v2-flag-veystrix-nemotron-mtp-adaptive-veystrix-nemotron-native-mtp-manual"
+   ]
+  },
+  {
+   "label": "nemo-verify-d16",
+   "guard_trace": "guard/nemo-verify-d16.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-verify-d16-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 1500.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.56,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 134.2,
+    "available_floor_gib": 4.88,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2221,
+    "compressor_peak_mib": 2887,
+    "swapout_mib": 0,
+    "compressed_gib_total": 18.8,
+    "thermal_seconds": {
+     "0": 133
+    }
+   },
+   "description": "Nemotron verify_real, default expert kernel, 16 decode steps",
+   "report": "nemo-verify-d16.txt"
+  },
+  {
+   "label": "nemo-verify-gather0",
+   "guard_trace": "guard/nemo-verify-gather0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-verify-gather0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 1500.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.49,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 35.4,
+    "available_floor_gib": 5.31,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2052,
+    "compressor_peak_mib": 2401,
+    "swapout_mib": 0,
+    "compressed_gib_total": 1.2,
+    "thermal_seconds": {
+     "0": 35
+    }
+   },
+   "description": "Nemotron verify_real, default expert kernel, 3 decode steps",
+   "report": "nemo-verify-gather0.txt"
+  },
+  {
+   "label": "nemo-verify-gather1",
+   "guard_trace": "guard/nemo-verify-gather1.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/nemo-verify-gather1-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 1500.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.37,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 36.3,
+    "available_floor_gib": 5.19,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2252,
+    "compressor_peak_mib": 2495,
+    "swapout_mib": 0,
+    "compressed_gib_total": 3.0,
+    "thermal_seconds": {
+     "0": 36
+    }
+   },
+   "description": "Nemotron verify_real, stock gather_qmm kernel, 3 decode steps",
+   "report": "nemo-verify-gather1.txt"
+  },
+  {
+   "label": "q128-mtp1-r0",
+   "guard_trace": "guard/q128-mtp1-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp1-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.15,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "thermal pressure level 2 for 15 s",
+    "returncode": -2,
+    "seconds": 334.0,
+    "available_floor_gib": 2.91,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1240,
+    "compressor_baseline_mib": 2342,
+    "compressor_peak_mib": 7602,
+    "swapout_mib": 0,
+    "compressed_gib_total": 137.5,
+    "thermal_seconds": {
+     "0": 221,
+     "1": 94,
+     "2": 15
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "1",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-094849-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 4,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      2.217,
+      2.352,
+      2.358,
+      2.378
+     ],
+     "median_tok_s": 2.358,
+     "engine_decode_tok_s": 2.3575912778924994,
+     "prefill_tok_s": 8.676573052691122,
+     "mb_per_token": 910.865856,
+     "non_io_ms_per_token": 111.7579601328125,
+     "io_wait_s": 40.360664491,
+     "storage_gb_s": 2.8987208410522585,
+     "target_rounds_per_token": 0.5625,
+     "verification_rounds": 72,
+     "accepted_per_verification": 0.7777777777777778,
+     "median_target_round_ms": 659.961458,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4479.074318
+    }
+   }
+  },
+  {
+   "label": "q128-mtp1-rb",
+   "guard_trace": "guard/q128-mtp1-rb.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp1-rb-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.06,
+    "swap_mib": 1240,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 3.00 GiB)",
+    "returncode": -2,
+    "seconds": 279.9,
+    "available_floor_gib": 2.91,
+    "swap_baseline_mib": 1240,
+    "swap_peak_mib": 1240,
+    "swap_end_mib": 1240,
+    "compressor_baseline_mib": 2028,
+    "compressor_peak_mib": 6375,
+    "swapout_mib": 0,
+    "compressed_gib_total": 125.9,
+    "thermal_seconds": {
+     "0": 278
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "1",
+    "FLASHNEXT_MTP_ROLLBACK": "1",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-100942-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 4,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      2.535,
+      2.544,
+      2.552,
+      2.587
+     ],
+     "median_tok_s": 2.552,
+     "engine_decode_tok_s": 2.5522652368233056,
+     "prefill_tok_s": 8.619053834788073,
+     "mb_per_token": 886.435904,
+     "non_io_ms_per_token": 94.814964734375,
+     "io_wait_s": 38.114536238,
+     "storage_gb_s": 2.9755973201336503,
+     "target_rounds_per_token": 0.5625,
+     "verification_rounds": 72,
+     "accepted_per_verification": 0.7777777777777778,
+     "median_target_round_ms": 655.49725,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4473.167946
+    }
+   }
+  },
+  {
+   "label": "q128-mtp2-r0",
+   "guard_trace": "guard/q128-mtp2-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp2-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 7.83,
+    "swap_mib": 1240,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.95 GiB)",
+    "returncode": -2,
+    "seconds": 181.4,
+    "available_floor_gib": 2.74,
+    "swap_baseline_mib": 1240,
+    "swap_peak_mib": 1240,
+    "swap_end_mib": 1240,
+    "compressor_baseline_mib": 2342,
+    "compressor_peak_mib": 6815,
+    "swapout_mib": 0,
+    "compressed_gib_total": 137.1,
+    "thermal_seconds": {
+     "0": 180
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "2",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-095503-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 2,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      1.642,
+      2.172
+     ],
+     "median_tok_s": 2.172,
+     "engine_decode_tok_s": 2.1721752249037665,
+     "prefill_tok_s": 8.713226175867652,
+     "mb_per_token": 1278.269504,
+     "non_io_ms_per_token": 173.071588296875,
+     "io_wait_s": 55.796345698,
+     "storage_gb_s": 2.9324231625775603,
+     "target_rounds_per_token": 0.4296875,
+     "verification_rounds": 55,
+     "accepted_per_verification": 1.3272727272727274,
+     "median_target_round_ms": 1286.125792,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4478.959502
+    }
+   }
+  },
+  {
+   "label": "q128-mtp2-rb",
+   "guard_trace": "guard/q128-mtp2-rb.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp2-rb-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.15,
+    "swap_mib": 1240,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 417.2,
+    "available_floor_gib": 2.88,
+    "swap_baseline_mib": 1240,
+    "swap_peak_mib": 1240,
+    "swap_end_mib": 1240,
+    "compressor_baseline_mib": 2510,
+    "compressor_peak_mib": 6739,
+    "swapout_mib": 0,
+    "compressed_gib_total": 497.1,
+    "thermal_seconds": {
+     "0": 277,
+     "1": 138
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "2",
+    "FLASHNEXT_MTP_ROLLBACK": "1",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-101422-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 5,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      1.584,
+      1.641,
+      1.664,
+      2.075,
+      2.316
+     ],
+     "median_tok_s": 1.664,
+     "engine_decode_tok_s": 1.6644252028005397,
+     "prefill_tok_s": 8.605571893814927,
+     "mb_per_token": 1292.726592,
+     "non_io_ms_per_token": 172.29426421875,
+     "io_wait_s": 54.84975993,
+     "storage_gb_s": 3.016768058550735,
+     "target_rounds_per_token": 0.4296875,
+     "verification_rounds": 55,
+     "accepted_per_verification": 1.3272727272727274,
+     "median_target_round_ms": 1401.318083,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4473.167946
+    }
+   }
+  },
+  {
+   "label": "q128-mtp3-1",
+   "guard_trace": "guard/q128-mtp3-1.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp3-1-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 7.73,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.88 GiB)",
+    "returncode": -2,
+    "seconds": 34.6,
+    "available_floor_gib": 2.77,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1256,
+    "compressor_baseline_mib": 2376,
+    "compressor_peak_mib": 6408,
+    "swapout_mib": 0,
+    "compressed_gib_total": 50.0,
+    "thermal_seconds": {
+     "0": 34
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "3"
+   },
+   "results": [
+    "flashnext/20261114-093206-bench-production-manual"
+   ],
+   "arms": {}
+  },
+  {
+   "label": "q128-mtp3-r0",
+   "guard_trace": "guard/q128-mtp3-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp3-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 7.93,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 521.9,
+    "available_floor_gib": 2.85,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1256,
+    "compressor_baseline_mib": 2185,
+    "compressor_peak_mib": 6728,
+    "swapout_mib": 0,
+    "compressed_gib_total": 577.0,
+    "thermal_seconds": {
+     "0": 519
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "3",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-094007-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 5,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      1.328,
+      1.345,
+      1.345,
+      1.434,
+      1.549
+     ],
+     "median_tok_s": 1.345,
+     "engine_decode_tok_s": 1.3446926207452754,
+     "prefill_tok_s": 8.790755888614253,
+     "mb_per_token": 1546.498912,
+     "non_io_ms_per_token": 218.9169914921875,
+     "io_wait_s": 66.905116321,
+     "storage_gb_s": 2.9586954125639475,
+     "target_rounds_per_token": 0.359375,
+     "verification_rounds": 46,
+     "accepted_per_verification": 1.7826086956521738,
+     "median_target_round_ms": 1614.98425,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4479.05787
+    }
+   }
+  },
+  {
+   "label": "q128-mtp3-rb",
+   "guard_trace": "guard/q128-mtp3-rb.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtp3-rb-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.31,
+    "swap_mib": 1240,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "thermal pressure level 2 for 15 s",
+    "returncode": -2,
+    "seconds": 250.9,
+    "available_floor_gib": 2.85,
+    "swap_baseline_mib": 1240,
+    "swap_peak_mib": 1240,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2269,
+    "compressor_peak_mib": 7687,
+    "swapout_mib": 0,
+    "compressed_gib_total": 381.8,
+    "thermal_seconds": {
+     "0": 132,
+     "1": 102,
+     "2": 15
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "3",
+    "FLASHNEXT_MTP_ROLLBACK": "1",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-102140-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 2,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      1.452,
+      1.724
+     ],
+     "median_tok_s": 1.724,
+     "engine_decode_tok_s": 1.724068930934804,
+     "prefill_tok_s": 8.793437218758745,
+     "mb_per_token": 1483.65008,
+     "non_io_ms_per_token": 200.947185359375,
+     "io_wait_s": 62.447112982,
+     "storage_gb_s": 3.0410887096532324,
+     "target_rounds_per_token": 0.359375,
+     "verification_rounds": 46,
+     "accepted_per_verification": 1.7826086956521738,
+     "median_target_round_ms": 1778.756042,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4473.167946
+    }
+   }
+  },
+  {
+   "label": "q128-mtpA3-r0",
+   "guard_trace": "guard/q128-mtpA3-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-mtpA3-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.55,
+    "swap_mib": 1240,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "thermal pressure level 2 for 15 s",
+    "returncode": -2,
+    "seconds": 109.3,
+    "available_floor_gib": 2.79,
+    "swap_baseline_mib": 1240,
+    "swap_peak_mib": 1240,
+    "swap_end_mib": 1240,
+    "compressor_baseline_mib": 2558,
+    "compressor_peak_mib": 7769,
+    "swapout_mib": 0,
+    "compressed_gib_total": 152.7,
+    "thermal_seconds": {
+     "0": 6,
+     "1": 87,
+     "2": 15
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "on",
+    "FLASHNEXT_MTP_DEPTH": "3",
+    "FLASHNEXT_MTP_ADAPTIVE": "1",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-095805-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 1,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      1.454
+     ],
+     "median_tok_s": 1.454,
+     "engine_decode_tok_s": 1.4543768205116827,
+     "prefill_tok_s": 8.764036226859501,
+     "mb_per_token": 1414.160736,
+     "non_io_ms_per_token": 204.62516528125,
+     "io_wait_s": 61.818182386,
+     "storage_gb_s": 2.9281445558806016,
+     "target_rounds_per_token": 0.4140625,
+     "verification_rounds": 53,
+     "accepted_per_verification": 1.4150943396226414,
+     "median_target_round_ms": 1352.28975,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 4955.868734
+    }
+   }
+  },
+  {
+   "label": "q128-plain-1",
+   "guard_trace": "guard/q128-plain-1.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-plain-1-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 6.4,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.85 GiB)",
+    "returncode": -2,
+    "seconds": 21.5,
+    "available_floor_gib": 2.74,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1256,
+    "compressor_baseline_mib": 1655,
+    "compressor_peak_mib": 5726,
+    "swapout_mib": 0,
+    "compressed_gib_total": 30.4,
+    "thermal_seconds": {
+     "0": 21
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "off"
+   },
+   "results": [
+    "flashnext/20261114-093145-bench-production-manual"
+   ],
+   "arms": {}
+  },
+  {
+   "label": "q128-plain-cap512",
+   "guard_trace": "guard/q128-plain-cap512.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-plain-cap512-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.42,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.73 GiB)",
+    "returncode": -2,
+    "seconds": 20.5,
+    "available_floor_gib": 2.73,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1256,
+    "compressor_baseline_mib": 2318,
+    "compressor_peak_mib": 5105,
+    "swapout_mib": 0,
+    "compressed_gib_total": 17.0,
+    "thermal_seconds": {
+     "0": 20
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "off",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-093343-bench-production-manual"
+   ],
+   "arms": {}
+  },
+  {
+   "label": "q128-plain-r0",
+   "guard_trace": "guard/q128-plain-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q128-plain-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.52,
+    "swap_mib": 1256,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 308.7,
+    "available_floor_gib": 3.5,
+    "swap_baseline_mib": 1256,
+    "swap_peak_mib": 1256,
+    "swap_end_mib": 1256,
+    "compressor_baseline_mib": 2322,
+    "compressor_peak_mib": 5774,
+    "swapout_mib": 0,
+    "compressed_gib_total": 84.3,
+    "thermal_seconds": {
+     "0": 307
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "off",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-093443-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 5,
+     "tokens": 128,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      2.541,
+      2.56,
+      2.575,
+      2.582,
+      2.65
+     ],
+     "median_tok_s": 2.575,
+     "engine_decode_tok_s": 2.575329725338197,
+     "prefill_tok_s": 9.153092356701341,
+     "mb_per_token": 779.617088,
+     "non_io_ms_per_token": 111.2750996015625,
+     "io_wait_s": 35.389844111,
+     "storage_gb_s": 2.7941190080214535,
+     "target_rounds_per_token": 1.0,
+     "verification_rounds": 0,
+     "accepted_per_verification": null,
+     "median_target_round_ms": 381.2768545,
+     "digests": [
+      "b9155a40b3158017"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 3830.240508
+    }
+   }
+  },
+  {
+   "label": "q512-plain-r0",
+   "guard_trace": "guard/q512-plain-r0.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/q512-plain-r0-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.45,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 1023.2,
+    "available_floor_gib": 3.48,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2233,
+    "compressor_peak_mib": 5626,
+    "swapout_mib": 0,
+    "compressed_gib_total": 86.6,
+    "thermal_seconds": {
+     "0": 155,
+     "1": 863
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "off",
+    "FLASHNEXT_PREFILL_CACHE_LIMIT_MB": "512"
+   },
+   "results": [
+    "flashnext/20261114-102624-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 5,
+     "tokens": 512,
+     "prompt_tokens": 103,
+     "gen_tok_s": [
+      2.643,
+      2.65,
+      2.655,
+      2.677,
+      2.688
+     ],
+     "median_tok_s": 2.655,
+     "engine_decode_tok_s": 2.6552871500777866,
+     "prefill_tok_s": 9.107087836469594,
+     "mb_per_token": 741.50128,
+     "non_io_ms_per_token": 110.20435460742188,
+     "io_wait_s": 136.202819879,
+     "storage_gb_s": 2.7891750435530036,
+     "target_rounds_per_token": 1.0,
+     "verification_rounds": 0,
+     "accepted_per_verification": null,
+     "median_target_round_ms": 365.8255625,
+     "digests": [
+      "ad7aecafcfc3ef88"
+     ],
+     "pinned_gb": 0.0,
+     "mlx_peak_mb": 3830.273628
+    }
+   }
+  },
+  {
+   "label": "s3-policy-05gb",
+   "guard_trace": "guard/s3-policy-05gb.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/s3-policy-05gb-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.57,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.85 GiB)",
+    "returncode": -2,
+    "seconds": 98.4,
+    "available_floor_gib": 2.84,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2088,
+    "compressor_peak_mib": 4486,
+    "swapout_mib": 0,
+    "compressed_gib_total": 10.3,
+    "thermal_seconds": {
+     "0": 97
+    }
+   },
+   "description": "Stage 3 pair lru vs cost-aware, 0.5 GB pool, 128 tokens",
+   "results": [
+    "flashnext/20261114-104422-performance-v2-pool-policy-lru-cost-aware-manual"
+   ]
+  },
+  {
+   "label": "s3-policy-1gb",
+   "guard_trace": "guard/s3-policy-1gb.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/s3-policy-1gb-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 3000.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 7.86,
+    "swap_mib": 1232,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.78 GiB)",
+    "returncode": -2,
+    "seconds": 9.8,
+    "available_floor_gib": 2.66,
+    "swap_baseline_mib": 1232,
+    "swap_peak_mib": 1232,
+    "swap_end_mib": 1232,
+    "compressor_baseline_mib": 2045,
+    "compressor_peak_mib": 4755,
+    "swapout_mib": 0,
+    "compressed_gib_total": 4.0,
+    "thermal_seconds": {
+     "0": 9
+    }
+   },
+   "description": "Stage 3 pair lru vs cost-aware, 1 GB pool, 128 tokens",
+   "results": [
+    "flashnext/20261114-104355-performance-v2-pool-policy-lru-cost-aware-manual"
+   ]
+  },
+  {
+   "label": "smoke1",
+   "guard_trace": "guard/smoke1.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/smoke1-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 600.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 8.74,
+    "swap_mib": 1264,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 76.5,
+    "available_floor_gib": 3.12,
+    "swap_baseline_mib": 1264,
+    "swap_peak_mib": 1264,
+    "swap_end_mib": 1264,
+    "compressor_baseline_mib": 1030,
+    "compressor_peak_mib": 4922,
+    "swapout_mib": 0,
+    "thermal_seconds": {
+     "0": 76
+    }
+   },
+   "description": "Flash-Next smoke, legacy policy, no pool, 8 pins per layer, 32 tokens"
+  },
+  {
+   "label": "smoke2",
+   "guard_trace": "guard/smoke2.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/smoke2-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 600.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.37,
+    "swap_mib": 1264,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": "available memory under 3 GiB for 3 s (now 2.64 GiB)",
+    "returncode": -2,
+    "seconds": 11.4,
+    "available_floor_gib": 2.62,
+    "swap_baseline_mib": 1264,
+    "swap_peak_mib": 1264,
+    "swap_end_mib": 1264,
+    "compressor_baseline_mib": 2241,
+    "compressor_peak_mib": 3594,
+    "swapout_mib": 0,
+    "thermal_seconds": {
+     "0": 11
+    }
+   },
+   "description": "Flash-Next smoke, default elastic planner, 32 tokens"
+  },
+  {
+   "label": "smoke3",
+   "guard_trace": "guard/smoke3.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/smoke3-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 600.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.32,
+    "swap_mib": 1264,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 111.6,
+    "available_floor_gib": 3.11,
+    "swap_baseline_mib": 1264,
+    "swap_peak_mib": 1264,
+    "swap_end_mib": 1264,
+    "compressor_baseline_mib": 2258,
+    "compressor_peak_mib": 5903,
+    "swapout_mib": 0,
+    "thermal_seconds": {
+     "0": 111
+    }
+   },
+   "description": "Flash-Next smoke, elastic planner with a 1 GiB pool cap, 32 tokens"
+  },
+  {
+   "label": "stage0-paired",
+   "guard_trace": "guard/stage0-paired.jsonl",
+   "guard_limits": {
+    "log": "/private/tmp/claude-501/-Users-vincent-Documents-Veystrix/8e92465a-d127-4b71-9dfd-0789bf127e33/scratchpad/real/stage0-paired-guard.jsonl",
+    "floor_gib": 3.0,
+    "floor_samples": 3,
+    "swap_growth_mib": 512,
+    "compressor_growth_mib": 4096,
+    "compressor_step_mib": 128,
+    "thermal_level": 2,
+    "thermal_samples": 15,
+    "max_seconds": 2400.0,
+    "command": null
+   },
+   "launch": {
+    "available_gib": 9.33,
+    "swap_mib": 1264,
+    "power": {
+     "ac": true,
+     "battery": 79,
+     "low_power": false
+    }
+   },
+   "guard": {
+    "event": "end",
+    "stopped": null,
+    "returncode": 0,
+    "seconds": 348.9,
+    "available_floor_gib": 3.03,
+    "swap_baseline_mib": 1264,
+    "swap_peak_mib": 1264,
+    "swap_end_mib": 1264,
+    "compressor_baseline_mib": 2199,
+    "compressor_peak_mib": 5330,
+    "swapout_mib": 0,
+    "compressed_gib_total": 71.3,
+    "thermal_seconds": {
+     "0": 347
+    }
+   },
+   "settings": {
+    "VEYSTRIX_MEMORY_POLICY": "legacy",
+    "FLASHNEXT_EXPERT_POOL_GB": "0",
+    "FLASHNEXT_SLAB_GLOBAL": "0",
+    "FLASHNEXT_SLAB_PACK": "0",
+    "FLASHNEXT_NATIVE_MTP": "off"
+   },
+   "results": [
+    "flashnext/20261114-060914-bench-production-manual"
+   ],
+   "arms": {
+    "baseline": {
+     "arms": 7,
+     "tokens": 64,
+     "prompt_tokens": 23,
+     "gen_tok_s": [
+      3.16,
+      3.178,
+      3.187,
+      3.188,
+      3.214,
+      3.22,
+      3.223
+     ],
+     "median_tok_s": 3.188,
+     "engine_decode_tok_s": null,
+     "prefill_tok_s": null,
+     "mb_per_token": null,
+     "non_io_ms_per_token": null,
+     "io_wait_s": 0.0,
+     "storage_gb_s": null,
+     "target_rounds_per_token": null,
+     "verification_rounds": null,
+     "accepted_per_verification": null,
+     "median_target_round_ms": 0.0,
+     "digests": [
+      "29a0b670c00c8483"
+     ],
+     "pinned_gb": 1.236320256,
+     "mlx_peak_mb": 3299.181388
+    },
+    "telemetry": {
+     "arms": 7,
+     "tokens": 64,
+     "prompt_tokens": 23,
+     "gen_tok_s": [
+      3.157,
+      3.169,
+      3.173,
+      3.187,
+      3.23,
+      3.23,
+      3.239
+     ],
+     "median_tok_s": 3.187,
+     "engine_decode_tok_s": 3.1869325606665138,
+     "prefill_tok_s": 5.293280485914458,
+     "mb_per_token": 508.758592,
+     "non_io_ms_per_token": 116.571279640625,
+     "io_wait_s": 12.562558248,
+     "storage_gb_s": 2.6072827064864277,
+     "target_rounds_per_token": 1.0,
+     "verification_rounds": 0,
+     "accepted_per_verification": null,
+     "median_target_round_ms": 304.568125,
+     "digests": [
+      "29a0b670c00c8483"
+     ],
+     "pinned_gb": 1.236320256,
+     "mlx_peak_mb": 3299.181388
+    }
+   }
+  }
+ ]
+}

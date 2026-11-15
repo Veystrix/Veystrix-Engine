@@ -1,0 +1,2 @@
+{"ts":1794527306.731,"model":"veystrix-nemotron35-lightning","prompt":8192,"cached":0,"uncached":8192,"completion":1024,"total":9216,"wall_s":303.459,"prefill_s":40.775,"decode_s":262.6,"finish":"length","warm":false}
+{"ts":1794527527.624,"model":"veystrix-nemotron35-lightning","prompt":8192,"cached":8127,"uncached":65,"completion":1024,"total":9216,"wall_s":220.855,"prefill_s":4.338,"decode_s":216.385,"finish":"length","warm":false}

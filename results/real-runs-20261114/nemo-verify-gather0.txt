@@ -1,0 +1,55 @@
+{
+  "checkpoint": "/Users/vincent/Models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit-mlx-community",
+  "prompt_tokens": 48,
+  "reference_chunk": 16,
+  "layer_major_tokens": 0,
+  "chunk_tokens": 16,
+  "pool_gb": 0.0,
+  "steps": [
+    {
+      "max_abs_diff": 0.15625,
+      "mean_abs_diff": 0.02764744870364666,
+      "logit_range": 13.8125,
+      "greedy_agree": true,
+      "top5_overlap": 5,
+      "greedy_token": 1072,
+      "bit_identical": false,
+      "phase": "prefill"
+    },
+    {
+      "max_abs_diff": 0.40625,
+      "mean_abs_diff": 0.03967960551381111,
+      "logit_range": 13.40625,
+      "greedy_agree": true,
+      "top5_overlap": 4,
+      "greedy_token": 14748,
+      "bit_identical": false,
+      "phase": "decode1"
+    },
+    {
+      "max_abs_diff": 0.40625,
+      "mean_abs_diff": 0.0573631189763546,
+      "logit_range": 12.875,
+      "greedy_agree": true,
+      "top5_overlap": 5,
+      "greedy_token": 1046,
+      "bit_identical": false,
+      "phase": "decode2"
+    },
+    {
+      "max_abs_diff": 1.12890625,
+      "mean_abs_diff": 0.15593573451042175,
+      "logit_range": 15.03125,
+      "greedy_agree": true,
+      "top5_overlap": 4,
+      "greedy_token": 1032,
+      "bit_identical": false,
+      "phase": "decode3"
+    }
+  ],
+  "seconds": 33.6,
+  "all_greedy_agree": true,
+  "all_bit_identical": false,
+  "max_abs_diff": 1.12890625
+}
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 35.4, "available_floor_gib": 5.31, "swap_baseline_mib": 1232, "swap_peak_mib": 1232, "swap_end_mib": 1232, "compressor_baseline_mib": 2052, "compressor_peak_mib": 2401, "swapout_mib": 0, "compressed_gib_total": 1.2, "thermal_seconds": {"0": 35}}

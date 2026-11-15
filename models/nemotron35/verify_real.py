@@ -78,6 +78,23 @@ class Reference:
         if swap_mb() > self.swap_limit:
             raise RuntimeError(f'swap guard: {swap_mb():.0f} MB in use')
 
+    # Single-piece loaders for diagnostics (``trace_real``). ``forward`` below does not use them.
+    def load_block(self, index: int):
+        """One stock ``NemotronHBlock`` for layer ``index``, loaded exactly as ``forward`` loads it."""
+        kinds = {'mamba': 'M', 'attention': '*', 'moe': 'E', 'mlp': '-'}
+        block = nemotron_h.NemotronHBlock(self.args, kinds[self.types[index]])
+        self._load(block, f'backbone.layers.{index}.')
+        return block
+
+    def load_embedding(self):
+        return self._load_leaf(nn.Embedding(self.args.vocab_size, self.args.hidden_size), 'backbone.embeddings.')
+
+    def load_head(self):
+        """``(norm_f, lm_head)`` exactly as ``forward`` loads them."""
+        norm = self._load_leaf(nn.RMSNorm(self.args.hidden_size, eps=self.args.layer_norm_epsilon), 'backbone.norm_f.')
+        head = self._load_leaf(nn.Linear(self.args.hidden_size, self.args.vocab_size, bias=False), 'lm_head.')
+        return norm, head
+
     def forward(self, tokens, chunk: int = 0) -> mx.array:
         """Logits for the last token of ``tokens``, advancing the per-layer caches. ``chunk`` > 0 feeds each layer the
         tokens in chunks of that size (the engine's chunk boundaries), else all at once."""

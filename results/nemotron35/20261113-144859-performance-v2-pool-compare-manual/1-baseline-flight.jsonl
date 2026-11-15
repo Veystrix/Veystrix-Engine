@@ -1,0 +1,13 @@
+{"t":1794561543.106,"event":"server_start","pid":83365,"host":"127.0.0.1","port":51171,"context_limit":8192,"max_cold_prefill":8192,"max_incremental_prefill":8192}
+{"t":1794561543.127,"event":"request_begin","pid":83365,"path":"/v1/chat/completions","seq":1,"user_agent":"","session_header":true,"stream":true,"messages":2,"tools":0,"reasoning_fields":{"reasoning_effort":"none"},"max_tokens":24,"waiting":0}
+{"t":1794561543.152,"event":"adopt","pid":83365,"prompt_tokens":576,"matched_tokens":0,"needed_prefill":576,"extends":false,"outcome":"MISS","warm_tokens":0,"session_hint":false}
+{"t":1794561543.152,"event":"generate_begin","pid":83365,"prompt_tokens":576,"max_tokens":24,"thinking":false,"effort":null}
+{"t":1794561543.164,"event":"nemotron_decode_mode","pid":83365,"native_mtp":false,"mtp_depth":null}
+{"t":1794561543.165,"event":"prefill_progress","pid":83365,"done":0,"total":576,"elapsed":0.0}
+{"t":1794561550.365,"event":"prefill_progress","pid":83365,"done":576,"total":576,"elapsed":7.2}
+{"t":1794561550.367,"event":"prefill_logit_reference","pid":83365,"dtype":"mlx.core.bfloat16","vocab_size":131072,"sha256":"64e2e35f9a545615bf95aa33d3ecf9d03cc351750d75bea1994cfb3d768364b1"}
+{"t":1794561550.37,"event":"first_token","pid":83365,"seconds_since_start":7.218}
+{"t":1794561551.216,"event":"first_model_delta_forwarded","pid":83365,"transport":"sse"}
+{"t":1794561557.606,"event":"generate_end","pid":83365,"finish":"length","prompt_tokens":576,"completion_tokens":24,"prefill_seconds":7.2,"token_sha256":"ea615febcc58fe33947c0ad64017fa5f4ca13733836785559fa6eca2b0f1206a","decode_tokens_per_second":3.32}
+{"t":1794561557.606,"event":"request_end","pid":83365,"path":"/v1/chat/completions"}
+{"t":1794561557.615,"event":"server_stop","pid":83365}

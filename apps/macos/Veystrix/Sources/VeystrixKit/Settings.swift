@@ -71,6 +71,8 @@ public enum NemotronKVCache: String, Codable, CaseIterable, Identifiable, Sendab
 
     public var id: String { rawValue }
     public var title: String { self == .int8 ? "INT8" : "BF16" }
+    /// INT8 KV admits the 1M logical window; the checkpoint declares 262,144
+    /// positions, so anything past that is unvalidated (LCT-05).
     public var contextLimit: Int { self == .int8 ? 1_048_576 : 262_144 }
 }
 
@@ -119,6 +121,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var swapLimitGiB: Int = 5
     public var flashNextKVCache: FlashNextKVCache = .bf16
     public var flashNextSpeed: Bool = false
+    /// Experimental: 128-token prefill chunks with a reused expert scratch ring and uncached prefill reads, which keeps
+    /// more memory free on a 16 GB Mac while a prompt is read. Off by default; excludes the speed profile.
+    public var flashNextBoundedPrefill: Bool = false
     public var flashNextPerformance = PerformanceOptions()
     public var nemotronPerformance = PerformanceOptions()
     public var nemotronKVCache: NemotronKVCache = .int8
@@ -159,7 +164,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case schemaVersion, port, checkpointPath, selectedModel, nemotronCheckpointPath, decodePool, supervisedRestarts, keepMacAwake, cacheQuotaGB,
              cacheDirectory, confirmBeforeLoading, requireAPIKey, checkForUpdatesAutomatically,
              includeLogsInDiagnostics, developerRepoPath, allowBattery, minimumBatteryPercent, allowLowPowerMode,
-             flashNextKVCache, flashNextSpeed, nemotronContextTokens, swapLimitGiB,
+             flashNextKVCache, flashNextSpeed, flashNextBoundedPrefill, nemotronContextTokens, swapLimitGiB,
              flashNextPerformance, nemotronPerformance, nemotronKVCache, nemotronMTPPath
     }
 
@@ -177,6 +182,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         s.flashNextKVCache = (try? c.decodeIfPresent(FlashNextKVCache.self, forKey: .flashNextKVCache)) ?? s.flashNextKVCache
         s.flashNextSpeed = try c.decodeIfPresent(Bool.self, forKey: .flashNextSpeed) ?? s.flashNextSpeed
+        s.flashNextBoundedPrefill = try c.decodeIfPresent(Bool.self, forKey: .flashNextBoundedPrefill) ?? s.flashNextBoundedPrefill
         s.flashNextPerformance = (try? c.decode(PerformanceOptions.self, forKey: .flashNextPerformance)) ?? s.flashNextPerformance
         s.nemotronPerformance = (try? c.decode(PerformanceOptions.self, forKey: .nemotronPerformance)) ?? s.nemotronPerformance
         s.nemotronKVCache = (try? c.decode(NemotronKVCache.self, forKey: .nemotronKVCache)) ?? s.nemotronKVCache
@@ -189,6 +195,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let oldQuota = try c.decodeIfPresent(Int.self, forKey: .cacheQuotaGB)
         if let oldQuota, s.schemaVersion >= 2 || oldQuota != 50 { s.cacheQuotaGB = oldQuota }
         s.nemotronContextTokens = try c.decodeIfPresent(Int.self, forKey: .nemotronContextTokens) ?? s.nemotronContextTokens
+        s.nemotronContextTokens = min(max(1, s.nemotronContextTokens), s.nemotronKVCache.contextLimit)
         s.cacheDirectory = try c.decodeIfPresent(String.self, forKey: .cacheDirectory) ?? s.cacheDirectory
         s.confirmBeforeLoading = try c.decodeIfPresent(Bool.self, forKey: .confirmBeforeLoading) ?? s.confirmBeforeLoading
         s.requireAPIKey = try c.decodeIfPresent(Bool.self, forKey: .requireAPIKey) ?? s.requireAPIKey
@@ -212,6 +219,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         if !(1...8).contains(flashNextPerformance.draftTokens) || !(1...4).contains(nemotronPerformance.draftTokens) {
             problems.append("MTP draft depth must be 1–8 for Flash-Next and 1–4 for Nemotron.")
+        }
+        if flashNextSpeed && flashNextBoundedPrefill {
+            problems.append("Choose either the Qwen speed profile or the low-memory prefill, not both: they plan the prefill differently.")
         }
         if [flashNextPerformance, nemotronPerformance].contains(where: { !(0...1_048_576).contains($0.defaultOutputTokens) }) {
             problems.append("The default output limit must be between 0 and 1,048,576 tokens.")

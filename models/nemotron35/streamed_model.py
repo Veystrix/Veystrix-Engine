@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from pathlib import Path
 
 import mlx.core as mx
@@ -48,14 +49,19 @@ def _read_tensor(directory: Path, desc: dict):
 def _stub_switch_mlp(factory):
     """Make mlx-lm construct streamed experts instead of 128 resident ones."""
     from .attention import StreamedAttention
+    from . import mamba_scan
     original, attention = nemotron_h.SwitchMLP, nemotron_h.NemotronHAttention
+    mamba = nemotron_h.NemotronHMamba2Mixer
     nemotron_h.SwitchMLP = factory
     nemotron_h.NemotronHAttention = StreamedAttention
+    if mamba_scan.enabled():
+        nemotron_h.NemotronHMamba2Mixer = mamba_scan.ParallelMambaMixer
     try:
         yield
     finally:
         nemotron_h.SwitchMLP = original
         nemotron_h.NemotronHAttention = attention
+        nemotron_h.NemotronHMamba2Mixer = mamba
 
 
 class StreamedModel:
@@ -103,9 +109,63 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
     model.load_weights(list(dense.items()), strict=True)
     mx.eval(model.parameters())
     if prefetch:   # each MoE layer predicts the next one's experts from its own input (exactness is unaffected)
-        for here, there in zip(moe_layers, moe_layers[1:]):
+        for position, here in enumerate(moe_layers[:-1]):
+            there = moe_layers[position + 1]
             gate = model.backbone.layers[there].mixer.gate
-            model.backbone.layers[here].mixer.switch_mlp.next_gate = NextGate(
-                there, gate.weight, gate.e_score_correction_bias, config['num_experts_per_tok'])
+            switch = model.backbone.layers[here].mixer.switch_mlp
+            switch.next_gate = NextGate(there, gate.weight, gate.e_score_correction_bias,
+                                        config['num_experts_per_tok'])
+            # MOE-04/05: the layer after next is prefetched from the previous pass's routes when opted in.
+            switch.lookahead_layer = (moe_layers[position + 2]
+                                      if position + 2 < len(moe_layers) else None)
+    try:
+        _attach_pack(reader, root, index)
+    except BaseException:
+        pool.close()
+        reader.close()
+        raise
     dense_bytes = sum(v.nbytes for v in dense.values())
     return StreamedModel(model, pool, reader, config, dense_bytes)
+
+
+def _attach_pack(reader, root, index) -> None:
+    """Open the expert pack, if any, and decide how it is used.
+
+    ``VEYSTRIX_NEMOTRON_EXPERT_MAP``: ``0`` (default) never maps; ``auto`` maps the pack found at its default
+    path for this checkpoint and otherwise streams from the shards; ``1`` requires a mapped pack.
+    ``VEYSTRIX_NEMOTRON_EXPERT_PACK`` names a pack explicitly. Without ``…_MAP=1`` an explicit pack keeps its
+    earlier meaning: positioned reads from the pack."""
+    from models.shared.expert_pack import ExpertPack, default_path
+
+    from .streamed_experts import MAP_FLAG
+
+    mode = (os.environ.get(MAP_FLAG) or "0").strip().lower()
+    if mode not in ("auto", "0", "1"):
+        raise ValueError(f"{MAP_FLAG} must be auto, 0 or 1")
+    explicit = os.environ.get("VEYSTRIX_NEMOTRON_EXPERT_PACK")
+    if explicit and mode != "1":
+        reader.pack = ExpertPack(Path(explicit).expanduser(), root, index, "nemotron35")
+        return
+    if mode == "0":
+        return
+    path = Path(explicit).expanduser() if explicit else default_path(root, index, "nemotron35")
+    if not path.is_file():
+        if mode == "1":
+            raise CheckpointError(f"{MAP_FLAG}=1 but there is no expert pack at {path}; build one with "
+                                  "python -m models.shared.pack_experts nemotron35 <checkpoint>")
+        return
+    try:
+        pack = ExpertPack(path, root, index, "nemotron35", mapped=True)
+    except (OSError, ValueError) as error:
+        if mode == "1":
+            raise CheckpointError(f"expert pack {path} cannot be used: {error}") from error
+        print(f"expert pack {path} ignored ({error}); streaming experts from the checkpoint", file=sys.stderr)
+        return
+    reader.pack = pack
+    if not reader.use_mapping():
+        pack.close()
+        reader.pack = None
+        if mode == "1":
+            raise CheckpointError(f"expert pack {path} does not cover every routed layer on aligned records")
+        print(f"expert pack {path} ignored (partial or unaligned); streaming experts from the checkpoint",
+              file=sys.stderr)

@@ -6,6 +6,8 @@ so the runtime fetches and dequantizes rows individually.
 """
 from __future__ import annotations
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from bisect import bisect_right
 import os
 import time
@@ -133,12 +135,21 @@ class StreamingShardedEmbedding(nn.Module):
     def _direct(self, flat):
         from models.flashnext.expert_cache import _PROFILE, _TIMERS
 
+        trace = benchmark_trace.get()
         if _PROFILE:
             began = time.perf_counter()
             result = self._direct_rows(flat)
-            _TIMERS["ngram_wait"] += time.perf_counter() - began
+            elapsed = time.perf_counter() - began
+            _TIMERS["ngram_wait"] += elapsed
+            if trace is not None:
+                trace.counts["ngram_host_ns"] += round(elapsed * 1e9)
             return result
-        return self._direct_rows(flat)
+        if trace is None:
+            return self._direct_rows(flat)
+        started = trace.clock()
+        result = self._direct_rows(flat)
+        trace.counts["ngram_host_ns"] += trace.clock() - started
+        return result
 
     def _parallel_blocks(self, groups):
         """Read every shard's rows on the I/O pool, then dequantize in order."""

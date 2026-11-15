@@ -1,0 +1,5 @@
+{"ts":1794731917.971,"model":"veystrix-nemotron35-lightning","prompt":490,"cached":0,"uncached":490,"completion":7,"total":497,"wall_s":8.891,"prefill_s":7.517,"decode_s":1.353,"finish":"stop","warm":false}
+{"ts":1794731921.705,"model":"veystrix-nemotron35-lightning","prompt":490,"cached":465,"uncached":25,"completion":7,"total":497,"wall_s":3.706,"prefill_s":2.5,"decode_s":1.166,"finish":"stop","warm":false}
+{"ts":1794731946.944,"model":"veystrix-nemotron35-lightning","prompt":491,"cached":465,"uncached":26,"completion":169,"total":660,"wall_s":25.215,"prefill_s":2.643,"decode_s":22.504,"finish":"stop","warm":false}
+{"ts":1794731951.102,"model":"veystrix-nemotron35-lightning","prompt":490,"cached":465,"uncached":25,"completion":7,"total":497,"wall_s":4.086,"prefill_s":2.795,"decode_s":1.226,"finish":"stop","warm":false}
+{"ts":1794731955.89,"model":"veystrix-nemotron35-lightning","prompt":486,"cached":465,"uncached":21,"completion":14,"total":500,"wall_s":4.745,"prefill_s":2.392,"decode_s":2.29,"finish":"stop","warm":false}

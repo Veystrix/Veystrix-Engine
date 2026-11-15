@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Veystrix Stage 0 roofline report",
+  "type": "object",
+  "required": ["schema_version", "provenance", "conditions", "paired_overhead"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "provenance": {
+      "type": "object",
+      "required": ["stage0_provenance", "checkpoint_identity", "source_fingerprints",
+                   "prompt_sha256", "sampling", "token_limit", "protocol"]
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["arms", "resolution", "sampled_memory_floor_pass"],
+        "properties": {
+          "arms": {"type": "array", "items": {"$ref": "#/$defs/arm"}},
+          "sampled_memory_floor_pass": {"type": ["boolean", "null"]},
+          "resolution": {
+            "type": "object",
+            "additionalProperties": {"$ref": "#/$defs/band"}
+          }
+        }
+      }
+    },
+    "paired_overhead": {
+      "type": ["object", "null"],
+      "required": ["generation_time_overhead_percent", "under_one_percent"],
+      "properties": {
+        "generation_time_overhead_percent": {"$ref": "#/$defs/band"},
+        "under_one_percent": {"type": ["boolean", "null"]}
+      }
+    }
+  },
+  "$defs": {
+    "arm": {
+      "type": "object",
+      "required": ["round", "token_sha256", "ttft_ns", "computed_prefill_tok_s",
+                   "stream_decode_tok_s", "engine_decode_tok_s", "target_rounds",
+                   "physical_mb_per_token", "effective_storage_gb_s", "non_io_ms_per_token",
+                   "accepted_tokens_per_verification", "sampled_available_floor_bytes",
+                   "upper_bound_at_3gb_s_tok_s"],
+      "properties": {
+        "round": {"type": "integer", "minimum": 1},
+        "token_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_rounds": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": {"type": ["number", "null"]}
+    },
+    "band": {
+      "type": ["object", "null"],
+      "required": ["count", "p10", "median", "p90", "resolution_half_width"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 5},
+        "p10": {"type": "number"},
+        "median": {"type": "number"},
+        "p90": {"type": "number"},
+        "resolution_half_width": {"type": "number", "minimum": 0}
+      }
+    }
+  }
+}

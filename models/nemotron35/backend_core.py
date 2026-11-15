@@ -7,11 +7,18 @@ from __future__ import annotations
 
 from copy import copy
 import os
+from time import perf_counter
 
 import mlx.core as mx
 
+from models.flashnext.prefill_memory import cache_cap
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from .runtime import Cancelled
 from .attention import AttentionCache
+
+
+PREFILL_CACHE_LIMIT_MB = 512
 
 
 class EngineCore:
@@ -25,6 +32,13 @@ class EngineCore:
         self.mtp = None
         self._mtp_anchor = None
         self._capture_mtp = False
+        # Adaptive draft depth: read from the environment once per turn; the
+        # controller belongs to the live conversation and is dropped by reset().
+        self._mtp_adaptive = False
+        self._mtp_controller_state = None
+        # (accepted, verify seconds, repair seconds) of the latest completed
+        # verify_decode round.
+        self.last_round = None
         self.bind_cache(self._make_cache())
 
     def _make_cache(self):
@@ -33,9 +47,12 @@ class EngineCore:
                 for entry in self.model.make_cache()]
 
     # -- state -------------------------------------------------------------------------------
-    def reset(self) -> None:
+    def reset(self, *, clear_allocator=True) -> None:
+        self._mtp_controller_state = None
+        self.begin_mtp_turn(False)
         self.bind_cache(self._make_cache())
-        mx.clear_cache()
+        if clear_allocator:
+            mx.clear_cache()
 
     @property
     def cached_tokens(self) -> int:
@@ -63,8 +80,30 @@ class EngineCore:
     def begin_mtp_turn(self, enabled):
         self._capture_mtp = enabled and self.mtp is not None
         self._mtp_anchor = None
+        self._mtp_adaptive = (
+            self._capture_mtp and os.environ.get("VEYSTRIX_NEMOTRON_MTP_ADAPTIVE", "0") == "1"
+        )
+        if not self._mtp_adaptive:
+            self._mtp_controller_state = None
         if self.mtp is not None:
             self.mtp.reset()
+
+    @property
+    def mtp_adaptive(self) -> bool:
+        return self._mtp_adaptive
+
+    def mtp_adaptive_stats(self):
+        """Depth controller statistics for the live conversation, or None."""
+        controller = self._mtp_controller_state
+        return controller[1].stats() if controller is not None else None
+
+    def _mtp_controller(self, ceiling):
+        """Depth controller for this conversation, capped at the configured depth."""
+        from models.shared.spec_depth import DepthController
+
+        if self._mtp_controller_state is None or self._mtp_controller_state[0] != ceiling:
+            self._mtp_controller_state = (ceiling, DepthController(max_depth=ceiling))
+        return self._mtp_controller_state[1]
 
     def _forward(self, tokens):
         if not self._capture_mtp:
@@ -162,8 +201,9 @@ class EngineCore:
                 return None
             if verify:
                 # Preserve singleton head arithmetic and avoid a [width, vocab] allocation.
-                predictions = [int(mx.argmax(self.model.lm_head(backbone.norm_f(row)), axis=-1).item())
-                               for row in hidden]
+                picks = [mx.argmax(self.model.lm_head(backbone.norm_f(row)), axis=-1).reshape(-1)
+                         for row in hidden]
+                predictions = mx.concatenate(picks).tolist()
                 return (predictions, hidden) if keep_rows else predictions
             out = backbone.norm_f(hidden[-1][:, -1:, :])
             logits = self.model.lm_head(out)[:, -1, :]
@@ -171,14 +211,24 @@ class EngineCore:
             return logits
         finally:
             pool.end_layer()
+            pool.restore_staged_budget()     # prefetch_layer raised it to a full layer for this segment only
             pool.speculate = True
 
     def prefill(self, tokens, *, cancelled=lambda: False, progress=None, boundary=None, emit_logits=True, anchor=None, save_anchor=None):
-        """Feed ``tokens`` in bounded chunks and return logits for the next token.
+        """Feed tokens in bounded chunks and return next-token logits.
 
-        Any interruption leaves recurrent/KV state partially advanced and
-        unusable, so the caller must ``reset`` (this method does it itself).
-        """
+        MLX's cache of freed buffers is capped for the duration (``VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB``,
+        default 512, 0 = uncapped). Uncapped, an 8,192-token prefill of the real checkpoint held 3.4 GB of freed
+        buffers: available memory fell to 3.7 GiB and macOS compressed 17-18 GiB. With the cap the same prefill
+        kept 5.7 GiB available, compressed 1.1 GiB and ran at 178 against 164-172 tok/s, with the same tokens."""
+        limit = int(os.environ.get("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB") or PREFILL_CACHE_LIMIT_MB)
+        if limit < 0:
+            raise ValueError("VEYSTRIX_NEMOTRON_PREFILL_CACHE_LIMIT_MB must be non-negative")
+        with cache_cap(limit):
+            return self._prefill(tokens, cancelled=cancelled, progress=progress, boundary=boundary,
+                                 emit_logits=emit_logits, anchor=anchor, save_anchor=save_anchor)
+
+    def _prefill(self, tokens, *, cancelled, progress, boundary, emit_logits, anchor, save_anchor):
         if not tokens:
             raise ValueError('prefill needs tokens')
         self.streamed.pool.cancel_check = cancelled
@@ -255,10 +305,52 @@ class EngineCore:
         finally:
             self.streamed.pool.cancel_check = lambda: False
 
+    @staticmethod
+    def decode_many(steps):
+        """Co-step independent singleton rows while keeping each layer's experts resident."""
+        from mlx_lm.models.base import create_attention_mask, create_ssm_mask
+
+        cores = [core for core, _, _, _ in steps]
+        model, pool = cores[0].model, cores[0].streamed.pool
+        backbone = model.backbone
+        rows = [backbone.embeddings(mx.array([[token]], dtype=mx.int32)) for _, token, _, _ in steps]
+        cache_index = 0
+        speculate = pool.speculate
+        pool.speculate = False
+        try:
+            for index, layer in enumerate(backbone.layers):
+                block = layer.block_type
+                if block == "E":
+                    pool.begin_layer(index)
+                for slot, core in enumerate(cores):
+                    cache = core.cache[cache_index] if block in ("M", "*") else None
+                    row = rows[slot]
+                    if block == "*":
+                        mask = create_attention_mask(row, cache)
+                    elif block == "M":
+                        mask = create_ssm_mask(row, cache)
+                    else:
+                        mask = None
+                    rows[slot] = layer(row, mask=mask, cache=cache)
+                    state = [array for array in cache.state if array is not None] if cache is not None else []
+                    mx.eval(rows[slot], *state)
+                cache_index += block in ("M", "*")
+                if block == "E":
+                    pool.end_layer()
+            output = []
+            for row, (_, _, sampler, want_logits) in zip(rows, steps, strict=True):
+                token = sampler(model.lm_head(backbone.norm_f(row))[:, -1, :]) if want_logits else None
+                output.append(int(token.item()) if token is not None else None)
+            return output
+        finally:
+            pool.end_layer()
+            pool.speculate = speculate
+
     def verify_decode(self, token, drafts, *, cancelled):
         """Verify a short greedy draft with singleton operations and layer-local expert reuse."""
         from .state import clone_cache
 
+        began = perf_counter()
         snapshot = clone_cache(self.cache)
         self.streamed.pool.cancel_check = cancelled
         try:
@@ -271,7 +363,10 @@ class EngineCore:
             if predictions[:-1] == drafts:
                 if rows is not None:
                     self._advance_mtp(mx.concatenate(rows, axis=1), values)
+                self.last_round = (len(drafts), perf_counter() - began, 0.0)
                 return values, predictions[-1]
+            verify_seconds = perf_counter() - began
+            repair_began = perf_counter()
             self.bind_cache(snapshot)
             committed = [token]
             following = int(mx.argmax(self.decode(token, cancelled=cancelled), axis=-1).item())
@@ -280,6 +375,7 @@ class EngineCore:
                     break
                 committed.append(draft)
                 following = int(mx.argmax(self.decode(draft, cancelled=cancelled), axis=-1).item())
+            self.last_round = (len(committed) - 1, verify_seconds, perf_counter() - repair_began)
             return committed, following
         except BaseException:
             self.bind_cache(snapshot)
@@ -289,33 +385,61 @@ class EngineCore:
 
     def native_mtp_tokens(self, first, horizon, stops, cancelled, depth):
         produced, value = 0, int(first.item())
+        controller = self._mtp_controller(depth) if self._mtp_adaptive else None
+        trace = benchmark_trace.get()
         while produced < horizon and value not in stops:
             if cancelled():
                 raise Cancelled()
             drafts = []
             offset = self.mtp.kv.offset
             hidden, follower = self._mtp_anchor, value
+            wanted = controller.choose() if controller is not None else depth
+            draft_began = perf_counter()
+            draft_ns = trace.clock() if trace is not None else None
             try:
-                for _ in range(min(depth, horizon - produced - 1)):
+                for _ in range(min(wanted, horizon - produced - 1)):
                     follower, hidden = self.mtp.forward(hidden, mx.array([follower], dtype=mx.int32), predict=True)
                     if follower in stops:
                         break
                     drafts.append(follower)
             finally:
                 self.mtp.rewind(offset)
+            draft_seconds = perf_counter() - draft_began
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
             if drafts:
+                self.last_round = None
+                round_ns = trace.clock() if trace is not None else None
                 committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
+                if trace is not None:
+                    trace.end_round("target_round", round_ns, positions=len(drafts) + 1,
+                                    verification=True, accepted=len(committed) - 1)
                 for token in committed:
                     if cancelled():
                         raise Cancelled()
                     yield token
                 produced += len(committed)
+                if controller is not None and self.last_round is not None:
+                    accepted, verify_seconds, repair_seconds = self.last_round
+                    # The draft loop may stop early, so the depth is what was drafted.
+                    controller.observe(
+                        len(drafts), accepted, draft_seconds=draft_seconds,
+                        verify_seconds=verify_seconds, repair_seconds=repair_seconds,
+                    )
             else:
                 yield value
                 produced += 1
+                step_began = perf_counter()
+                round_ns = trace.clock() if trace is not None else None
                 logits = self.decode(value, cancelled=cancelled, emit_logits=produced < horizon)
+                if trace is not None:
+                    trace.end_round("target_round", round_ns, positions=1)
                 if logits is not None:
                     value = int(mx.argmax(logits, axis=-1).item())
+                    if controller is not None:
+                        # A round without drafts is a depth-0 sample of the plain step.
+                        controller.observe(0, 0, draft_seconds=draft_seconds,
+                                           verify_seconds=perf_counter() - step_began)
 
     def prompt_lookup_tokens(self, history, first, horizon, stops, cancelled):
         from models.shared.prompt_lookup import PromptLookup, ThroughputGate
@@ -327,7 +451,7 @@ class EngineCore:
             if cancelled():
                 raise Cancelled()
             lookup.append(value)
-            drafts = lookup.propose(min(4, horizon - produced - 1)) if gate.allow() else []
+            drafts = lookup.propose(min(gate.depth, horizon - produced - 1)) if gate.allow() else []
             for index, draft in enumerate(drafts):
                 if draft in stops:
                     drafts = drafts[:index]
@@ -343,7 +467,7 @@ class EngineCore:
                 continue
             began = perf_counter()
             committed, value = self.verify_decode(value, drafts, cancelled=cancelled)
-            gate.observe(True, len(committed), perf_counter() - began)
+            gate.observe(True, len(committed), perf_counter() - began, proposed=len(drafts))
             for output in committed:
                 if cancelled():
                     raise Cancelled()

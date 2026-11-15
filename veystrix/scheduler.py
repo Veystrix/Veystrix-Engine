@@ -35,8 +35,8 @@ class ClientGone(Exception):
 
 
 class _Ticket:
-    def __init__(self, fn, path):
-        self.fn, self.path = fn, path
+    def __init__(self, fn, path, gone, deadline):
+        self.fn, self.path, self.gone, self.deadline = fn, path, gone, deadline
         self.started = threading.Event()
         self.done = threading.Event()
         self.cancelled = False
@@ -78,10 +78,10 @@ class Scheduler:
         """Run ``fn`` once a slot is free. Queued callers may choose an integer priority from 0 to 10."""
         if not isinstance(priority, int) or not 0 <= priority <= 10:
             raise ValueError("scheduler priority must be an integer from 0 to 10")
-        ticket = _Ticket(fn, path)
         with self._lock:
             enqueued = self._clock()
             deadline = enqueued + self.max_wait
+            ticket = _Ticket(fn, path, gone, deadline)
             if self.waiting >= self.max_waiting:
                 self.rejected += 1
                 raise Busy(f"the server is handling another request and {self.waiting} are already waiting; retry shortly")
@@ -93,7 +93,7 @@ class Scheduler:
                 self._jobs.put((enqueued - priority * PRIORITY_AGING_SECONDS, self._sequence, ticket))
         if queued:
             while not ticket.started.wait(POLL_SECONDS):
-                problem = self._expired(ticket, gone, deadline)
+                problem = self._expired(ticket)
                 if problem is not None:
                     raise problem
             if wait is not None:
@@ -103,10 +103,12 @@ class Scheduler:
                 raise ticket.error
             return ticket.result
         while not self._gate.acquire(timeout=POLL_SECONDS):
-            problem = self._expired(ticket, gone, deadline)
+            problem = self._expired(ticket)
             if problem is not None:
                 raise problem
         try:
+            if (problem := self._expired(ticket)) is not None:
+                raise problem
             if not self._claim(ticket):
                 raise ClientGone("cancelled while waiting")
             try:
@@ -120,11 +122,11 @@ class Scheduler:
                 done.set()
                 wait(done)
 
-    def _expired(self, ticket, gone, deadline):
+    def _expired(self, ticket):
         """Called while waiting. Returns the exception to raise if the wait must end, else None."""
-        if gone():
+        if ticket.gone():
             reason = ClientGone("client disconnected while waiting")
-        elif self._clock() >= deadline:
+        elif self._clock() >= ticket.deadline:
             reason = Busy(f"waited {self.max_wait:g}s for the active request to finish; retry shortly")
         else:
             return None
@@ -132,6 +134,7 @@ class Scheduler:
             if ticket.started.is_set() or ticket.cancelled:
                 return None                            # claimed (or failed for shutdown) just now: the executor owns it
             ticket.cancelled = True
+            ticket.fn = None  # release the request payload while the queue entry drains
             self.waiting -= 1
             self.dropped += isinstance(reason, ClientGone)
             self.rejected += isinstance(reason, Busy)
@@ -163,22 +166,30 @@ class Scheduler:
                     _, _, ticket = self._jobs.get(timeout=POLL_SECONDS)
                 except queue.Empty:
                     continue
-                if not self._claim(ticket):
-                    continue
-                try:
-                    ticket.result = ticket.fn()
-                except KeyboardInterrupt:
-                    ticket.error = Busy("the server is stopping", retry_after=30)
-                    raise
-                except BaseException as error:         # handed to the handler thread, which owns the response
-                    ticket.error = error
-                finally:
-                    self._finish()
-                    ticket.done.set()
+                self._serve_ticket(ticket)
         finally:
             with self._lock:
                 self.loop_running = False
             self._fail_pending()
+
+    def _serve_ticket(self, ticket):
+        problem = None if ticket.cancelled else self._expired(ticket)
+        if problem is not None:
+            ticket.error = problem
+            ticket.started.set()
+            ticket.done.set()
+        if not self._claim(ticket):
+            return
+        try:
+            ticket.result = ticket.fn()
+        except KeyboardInterrupt:
+            ticket.error = Busy("the server is stopping", retry_after=30)
+            raise
+        except BaseException as error:         # handed to the handler thread, which owns the response
+            ticket.error = error
+        finally:
+            self._finish()
+            ticket.done.set()
 
     def _fail_pending(self) -> None:
         while True:

@@ -43,6 +43,14 @@ as modules from the repository root:
 .venv/bin/python -m models.flashnext.tests.bench.bench_production --compare none
 ```
 
+The [Stage 0 Flash-Next benchmark guide](performance/stage-0.md) describes
+optional telemetry, digest replay and the roofline report. The
+[Stage 1 and 2 guide](performance/stages-1-2.md) covers elastic pool sizing
+and expert-pack comparisons. The [Stage 6 guide](performance/stage-6.md)
+covers prefill tuning, cold and prefix-hit comparisons, and state parity.
+The [Stage 11 qualification guide](performance/stage-11.md) defines the
+guarded two-model matrix, result assessment and release criteria.
+
 One benchmark can serve several cases. Helpers that only benchmarks use, such
 as `gpustat` or `metal_trace`, live here too.
 

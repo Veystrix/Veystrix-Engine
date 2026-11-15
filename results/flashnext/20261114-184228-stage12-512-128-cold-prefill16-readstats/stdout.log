@@ -1,0 +1,2 @@
+/Users/vincent/Documents/Veystrix/results/flashnext/20261114-184228-stage12-512-128-cold-prefill16-readstats/qualification.json
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 94.4, "available_floor_gib": 6.06, "swap_baseline_mib": 1145, "swap_peak_mib": 1145, "swap_end_mib": 1145, "compressor_baseline_mib": 1178, "compressor_peak_mib": 1212, "swapout_mib": 0, "compressed_gib_total": 0.2, "thermal_seconds": {"0": 94}}

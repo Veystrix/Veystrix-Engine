@@ -118,16 +118,27 @@ class PrefixSession:
         self._encode = encode
         self._compatibility = compatibility
         self._store: P.PrefixCache | None = None
+        self._tuned_store: tuple[int, P.PrefixCache] | None = None
+        self._active_store: P.PrefixCache | None = None
 
     # ---- configuration ----
     def store(self) -> P.PrefixCache:
-        if self._store is None:
+        from .prefill_autotune import CURRENT, PLAN_VERSION
+
+        choice = CURRENT.get()
+        previous = self._store
+        if choice is not None:
+            tuned = self._tuned_store
+            previous = tuned[1] if tuned is not None and tuned[0] == choice.cap else None
+        if previous is None:
             policy = prefill_module.chunk_policy()
             # The balanced plan depends on where the anchors are, which depends on these settings, so they
             # are part of the key. The default "grid" policy keeps the original key unchanged.
             plan = {} if policy == "grid" else {
                 "chunk_policy": policy, "boundaries": anchor_mode(),
                 "min_tokens": int(_number(FLAG_MIN_TOKENS, "512"))}
+            if choice is not None:
+                plan["autotune_plan"] = PLAN_VERSION
             if policy == "budgeted":
                 # The plan is a function of this budget and the candidate sizes; a different budget is a different plan.
                 plan["chunk_budget_mb"] = prefill_module.chunk_budget_bytes() / 1e6
@@ -135,7 +146,12 @@ class PrefixSession:
             from . import expert_pool, layer_major, prefill_ring, quantized_kv, qsa_chunk
             # Layer-major execution is a different (versioned) execution plan until its states are proven equal on the real
             # checkpoint: its snapshots never mix with chunk-major ones. Chunk-major keeps the existing key.
-            plan = {**plan, **({"prefill_order": layer_major.identity()} if layer_major.enabled() else {})}
+            if layer_major.enabled():
+                plan["prefill_order"] = layer_major.identity()
+                if not layer_major.inner_snapshots_enabled():
+                    plan["layer_major_inner_snapshots"] = False
+                if not layer_major.tail_chunk_enabled():
+                    plan["layer_major_tail_chunk"] = False
             if prefill_ring.enabled() and prefill_ring.scratch_enabled() and not expert_pool.enabled():
                 # Older versions silently bypassed this ring when the decode
                 # pool was off. Do not mix their states with the new path.
@@ -156,14 +172,27 @@ class PrefixSession:
             directory = manager.root
             if prefix_profiles.enabled():
                 # Profile annotations and pins use the shared budget and free-space policy.
-                self._store = prefix_profiles.ProfiledPrefixCache(
+                previous = prefix_profiles.ProfiledPrefixCache(
                     fp, int(_number(FLAG_RAM_GB, "0.75") * 1e9), Path(directory),
                     config=self.execution_profile(), manager=manager, **prefix_profiles.settings_from_env())
             else:
-                self._store = P.PrefixCache(
+                previous = P.PrefixCache(
                     fp, int(_number(FLAG_RAM_GB, "0.75") * 1e9), Path(directory),
                     manager=manager)
-        return self._store
+            if choice is None:
+                self._store = previous
+            else:
+                # Keep a single tuned RAM tier. Older compatible shapes
+                # remain discoverable from their SSD namespaces.
+                self._tuned_store = (choice.cap, previous)
+        self._active_store = previous
+        return previous
+
+    def last_tuned_cap(self) -> int | None:
+        return self._tuned_store[0] if self._tuned_store is not None else None
+
+    def active_store(self):
+        return self._active_store if self._active_store is not None else self.store()
 
     @staticmethod
     def execution_profile() -> dict:
@@ -273,6 +302,11 @@ class PrefixSession:
         if system is not None and system >= int(_number(FLAG_MIN_TOKENS, "512")):
             store.observe(prompt[:system])               # an exact system prompt seen again is a recognised profile
         rejected_before = store.stats.rejected_plan
+        from veystrix.bench.telemetry import current as benchmark_trace
+
+        trace_probe = benchmark_trace.get()
+        if trace_probe is not None:
+            trace_probe.mark("prefix_lookup_start")
         lookup_began = time.perf_counter()
         if restore:
             res = store.lookup(prompt, language.make_cache, language=language,
@@ -283,6 +317,8 @@ class PrefixSession:
             hit, restored = None, None
             outcome = "COLD"
         report.lookup_seconds = time.perf_counter() - lookup_began
+        if trace_probe is not None:
+            trace_probe.mark("prefix_lookup_end")
         report.outcome = outcome
         report.plan_rejections = store.stats.rejected_plan - rejected_before
         offset = 0
@@ -377,6 +413,9 @@ class PrefixSession:
             with held:                                   # leases end however the prefill ends
                 if hit is not None:
                     held.enter_context(store.lease(hit.chain))
+                if trace_probe is not None:
+                    trace_probe.mark("prefill_start")
+                    trace_probe.prefill_tokens = report.prefilled_tokens
                 _, _, token = prefill_module.prefill_target(
                     language, suffix, cache, sampler=sampler, boundaries=boundaries,
                     on_boundary=snapshot, offset=offset, anchors=self.anchors(prompt), trace=trace,

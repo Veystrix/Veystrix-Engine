@@ -25,6 +25,7 @@ from functools import partial
 import mlx.core as mx
 
 _applied = False
+_original = None
 
 # A GPU capture of one decode token showed the compute shader launch limiter
 # pinned near 100% with occupancy and ALU utilisation low, so the GPU is
@@ -122,13 +123,27 @@ def _rms_norm(self, x: mx.array) -> mx.array:
 
 def apply() -> bool:
     """Patch Qwen4ExpRMSNorm. Returns True if this call did the patching."""
-    global _applied
+    global _applied, _original
     if _applied:
         return False
     from mlx_vlm.models.qwen4_exp import language
 
+    _original = language.Qwen4ExpRMSNorm.__call__
     language.Qwen4ExpRMSNorm.__call__ = _rms_norm
     _applied = True
+    return True
+
+
+def restore() -> bool:
+    """Undo ``apply``. For tests: the patch is process-wide, and a module that leaves it installed changes what
+    every later test module computes. The engine never calls this. Returns True if the patch was removed."""
+    global _applied, _original
+    if not _applied:
+        return False
+    from mlx_vlm.models.qwen4_exp import language
+
+    language.Qwen4ExpRMSNorm.__call__ = _original
+    _applied, _original = False, None
     return True
 
 

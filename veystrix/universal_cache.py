@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+import hashlib
 import heapq
 import json
 import math
@@ -20,9 +21,41 @@ GB = 10**9
 DEFAULT_QUOTA_GB = 80
 DEFAULT_ROOT = "~/.cache/veystrix/prefix-cache-v1"
 RESERVE_BYTES = 50 * GB
+# UCH-05: the configured ceiling is additionally clamped to a fraction of the
+# free volume so model weights, swap and the cache cannot fill the disk.
+WATERMARK_FRACTION = 0.25
 NAMESPACE_MARKER = ".namespace-v1"
 FORMATS = {"flashnext": (64, ".json"), "nemotron35": (24, ".tokens")}
 FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+ARTIFACT_DIR = "artifacts"
+
+
+def _crc32c_table():
+    table = []
+    for value in range(256):
+        crc = value
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
+        table.append(crc)
+    return tuple(table)
+
+
+_CRC32C = _crc32c_table()
+
+
+def crc32c(data: bytes, crc: int = 0) -> int:
+    """Castagnoli CRC-32C. A compatibility checksum for committed artifacts, not a hash."""
+    value = crc ^ 0xFFFFFFFF
+    for byte in data:
+        value = _CRC32C[(value ^ byte) & 0xFF] ^ (value >> 8)
+    return value ^ 0xFFFFFFFF
+
+
+def dynamic_quota_bytes(configured: int, free_bytes: int, fraction: float = WATERMARK_FRACTION) -> int:
+    """min(configured, fraction * free), so a nearly full disk shrinks the cache automatically."""
+    configured = max(0, int(configured))
+    free = max(0, int(free_bytes))
+    return min(configured, int(free * fraction))
 
 
 def _app_cache_settings():
@@ -194,6 +227,11 @@ class Transaction:
     @property
     def used(self):
         return sum(entry.size for entry in self.entries.values())
+
+    @property
+    def effective_quota(self):
+        """The quota after UCH-05's free-space clamp (never larger than the configured quota)."""
+        return dynamic_quota_bytes(self.quota, shutil.disk_usage(self.root).free)
 
     def _scan(self):
         """Read committed pairs under the global lock. Clean up interrupted writes."""
@@ -386,16 +424,43 @@ class Transaction:
     def make_room(self, size, *, protect=()):
         if self.namespace is not None:
             raise ValueError("cache quota enforcement requires a global transaction")
-        if size > self.quota:
+        quota = self.effective_quota
+        if size > quota:
             return False
         free = shutil.disk_usage(self.root).free
-        needed = max(0, self.used + size - self.quota, self.manager.reserve + size - free)
+        needed = max(0, self.used + size - quota, self.manager.reserve + size - free)
         if needed:
             # First check that the protected entries leave enough eligible bytes.
             if self.reclaim(needed, protect=protect)["shortfall_bytes"]:
                 return False
             self.reclaim(needed, apply=True, protect=protect)
-        return self.used + size <= self.quota and shutil.disk_usage(self.root).free >= self.manager.reserve + size
+        return self.used + size <= quota and shutil.disk_usage(self.root).free >= self.manager.reserve + size
+
+    def compact(self):
+        """Drop registry records that no longer name a committed entry (UCH-07 maintenance)."""
+        reuse = self.metadata.get("reuse", {})
+        stale_reuse = sorted(identity for identity in reuse if identity not in self.entries)
+        for identity in stale_reuse:
+            del reuse[identity]
+        pins = self.metadata.get("pins", [])
+        kept_pins = [identity for identity in pins if identity in self.entries]
+        dropped_pins = len(pins) - len(kept_pins)
+        self.metadata["pins"] = kept_pins
+        removed_dirs = 0
+        for family in (self.root / model for model in FORMATS):
+            if not family.is_dir() or family.is_symlink():
+                continue
+            for directory in family.iterdir():
+                if (directory.is_dir() and not directory.is_symlink()
+                        and FINGERPRINT.fullmatch(directory.name)
+                        and not any(directory.iterdir())):
+                    directory.rmdir()
+                    removed_dirs += 1
+        result = {"stale_reuse": len(stale_reuse), "stale_pins": dropped_pins,
+                  "empty_namespaces": removed_dirs}
+        self.metadata["last_compaction"] = {**result, "timestamp": time.time()}
+        self._save()
+        return result
 
     def record(self, model, directory, key=None, tokens=0):
         stats = self.metadata.setdefault("statistics", {}).setdefault(model, {"hits": 0, "misses": 0, "restored_tokens": 0})
@@ -422,10 +487,13 @@ class Transaction:
             models[model] = {"bytes": sum(entry.size for entry in entries), "snapshots": len(entries),
                              **self.metadata.get("statistics", {}).get(model, {})}
         free = shutil.disk_usage(self.root).free
+        effective = dynamic_quota_bytes(self.quota, free)
         return {"root": str(self.root), "used_bytes": self.used, "quota_bytes": self.quota,
+                "effective_quota_bytes": effective, "watermark_fraction": WATERMARK_FRACTION,
                 "free_bytes": free, "reserve_bytes": self.manager.reserve,
                 "snapshots": len(self.entries), "models": models, "last_cleanup": self.metadata.get("last_cleanup"),
-                "healthy": (self.used <= self.quota and free >= self.manager.reserve
+                "last_compaction": self.metadata.get("last_compaction"),
+                "healthy": (self.used <= effective and free >= self.manager.reserve
                             and all(entry.tokens > 0 for entry in self.entries.values()))}
 
     def set_quota(self, quota):
@@ -439,19 +507,125 @@ class Transaction:
         return result
 
 
+class ArtifactTier:
+    """Content-addressed, model-neutral files (UCH-01/UCH-02/UCH-08).
+
+    Repo files, AST slices, tool logs and tokenized text fragments are the same
+    bytes for every model, so they live under ``artifacts/`` keyed by a
+    ``blake2b-256`` of their content. The commit is atomic: temporary file,
+    fsync, hard link to the content name, then a JSON record carrying the size
+    and a CRC32C so a torn or edited artifact is rejected by ``get``.
+    """
+
+    def __init__(self, manager):
+        self.manager = manager
+        self.root = manager.root / ARTIFACT_DIR
+
+    @staticmethod
+    def digest(data: bytes) -> str:
+        return hashlib.blake2b(data, digest_size=32).hexdigest()
+
+    def _shard(self, digest: str) -> Path:
+        if not FINGERPRINT.fullmatch(digest) or len(digest) != 64:
+            raise ValueError("invalid artifact digest")
+        return self.root / digest[:2]
+
+    def _paths(self, digest: str):
+        shard = self._shard(digest)
+        return shard / f"{digest}.bin", shard / f"{digest}.json"
+
+    @staticmethod
+    def _record(digest: str, data: bytes, namespace: str, meta) -> dict:
+        return {"digest": digest, "bytes": len(data), "crc32c": f"{crc32c(data):08x}",
+                "namespace": namespace, "meta": meta or {}, "created": time.time()}
+
+    def put(self, data: bytes, *, namespace: str = "neutral", meta=None, _tx=None) -> dict:
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("artifact payload must be bytes")
+        data = bytes(data)
+        digest = self.digest(data)
+        record = self._record(digest, data, namespace, meta)
+        data_path, record_path = self._paths(digest)
+        with self.manager._locked():
+            shard = _directory(self._shard(digest))
+            if not _regular(data_path):
+                fd, temporary = tempfile.mkstemp(prefix=".artifact-", dir=shard)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(data)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    try:
+                        os.link(temporary, data_path)
+                    except FileExistsError:      # another writer published the same bytes first
+                        pass
+                    _sync_directory(shard)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+            stored = _read_json(record_path, {})
+            if stored.get("crc32c") != record["crc32c"] or stored.get("bytes") != record["bytes"]:
+                _write_json(record_path, record)
+                stored = record
+        return stored
+
+    def get(self, digest: str) -> bytes | None:
+        data_path, record_path = self._paths(digest)
+        record = _read_json(record_path, {})
+        info = _regular(data_path)
+        if not record or info is None or record.get("bytes") != info.st_size:
+            return None
+        data = data_path.read_bytes()
+        if f"{crc32c(data):08x}" != record.get("crc32c"):
+            return None
+        return data
+
+    def verify(self, digest: str) -> dict:
+        data_path, record_path = self._paths(digest)
+        record = _read_json(record_path, {})
+        data = self.get(digest)
+        return {"digest": digest, "present": data is not None, "bytes": len(data) if data is not None else 0,
+                "namespace": record.get("namespace") if record else None, "path": str(data_path)}
+
+    def remove(self, digest: str) -> bool:
+        data_path, record_path = self._paths(digest)
+        with self.manager._locked():
+            if not _regular(data_path) and not _regular(record_path):
+                return False
+            data_path.unlink(missing_ok=True)
+            record_path.unlink(missing_ok=True)
+        return True
+
+    def status(self) -> dict:
+        entries, total = 0, 0
+        if self.root.is_dir() and not self.root.is_symlink():
+            for shard in self.root.iterdir():
+                if not shard.is_dir() or shard.is_symlink():
+                    continue
+                for path in shard.glob("*.bin"):
+                    info = _regular(path)
+                    if info is not None:
+                        entries += 1
+                        total += info.st_size
+        return {"root": str(self.root), "artifacts": entries, "bytes": total}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory")
-    parser.add_argument("action", choices=("status", "preview", "reclaim", "clear", "quota"))
+    parser.add_argument("action", choices=("status", "preview", "reclaim", "clear", "quota", "compact", "artifacts"))
     parser.add_argument("gb", nargs="?", type=float)
     args = parser.parse_args()
     if args.action in ("preview", "reclaim", "quota") and not (args.gb and 0 < args.gb <= 2000):
         parser.error("amount must be greater than 0 and at most 2000 GB")
     with CacheManager(args.directory).transaction() as tx:
         if args.action == "status":
-            result = tx.status()
+            result = {**tx.status(), "artifacts": ArtifactTier(tx.manager).status()}
         elif args.action == "quota":
             result = tx.set_quota(int(args.gb * GB))
+        elif args.action == "compact":
+            result = tx.compact()
+        elif args.action == "artifacts":
+            result = ArtifactTier(tx.manager).status()
         else:
             clear = args.action == "clear"
             result = tx.reclaim(tx.used if clear else int(args.gb * GB),

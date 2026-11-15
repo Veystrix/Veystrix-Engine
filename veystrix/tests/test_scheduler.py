@@ -209,6 +209,22 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(h.threads["a"].startswith("Thread-"))        # the thread running serve_jobs, not a handler
         self.assertEqual(h.threads["a"], h.executor.name)
 
+    def test_request_expired_at_handoff_never_runs(self):
+        now = [0.0]
+        harness = Harness(True, max_wait=10, clock=lambda: now[0])
+        release = threading.Event()
+        self.addCleanup(harness.close)
+        self.addCleanup(release.set)
+        harness.submit("active", lambda: release.wait(5))
+        self.assertTrue(wait_until(lambda: harness.scheduler.busy))
+        harness.submit("expired")
+        self.assertTrue(wait_until(lambda: harness.scheduler.snapshot()["waiting"] == 1))
+        now[0] = 11
+        release.set()
+        self.assertTrue(wait_until(lambda: "expired" in harness.outcomes))
+        self.assertEqual(harness.outcomes["expired"][0], "Busy")
+        self.assertEqual(harness.order, ["active"])
+
     def test_an_exception_in_a_job_reaches_its_caller_and_frees_the_slot(self):
         def check(h):
             def boom():

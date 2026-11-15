@@ -126,6 +126,24 @@ class ReferenceMathTests(unittest.TestCase):
         np.testing.assert_allclose(np.asarray(y).ravel(), expected, atol=1e-6, rtol=1e-6)
         self.assertAlmostEqual(float(np.asarray(state).ravel()[0]), current, places=6)
 
+    def test_parallel_mamba_carries_fp32_state_across_groups_and_tail(self):
+        from mlx_lm.models.ssm import ssm_attn
+        from models.nemotron35.mamba_scan import parallel_ssm
+
+        mx.random.seed(81)
+        length = 331
+        x = mx.random.normal((1, length, 4, 8))
+        b, c = (mx.random.normal((1, length, 2, 8)) for _ in range(2))
+        dt = mx.random.normal((1, length, 4))
+        a, d, bias = mx.zeros((4,)), mx.ones((4,)), mx.zeros((4,))
+        state = mx.random.normal((1, 4, 8, 8))
+        args = (x, a, b, c, d, dt, bias, state, (0.001, 100))
+        expected, expected_state = ssm_attn(*args)
+        output, final = parallel_ssm(*args)
+        self.assertEqual(final.dtype, mx.float32)
+        np.testing.assert_allclose(np.asarray(output), np.asarray(expected), atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(np.asarray(final), np.asarray(expected_state), atol=2e-5, rtol=2e-5)
+
 class SyntheticRuntimeTests(unittest.TestCase):
     def test_generate_and_cancel_clear_hybrid_state(self):
         from models.nemotron35.runtime import SyntheticRuntime, Cancelled

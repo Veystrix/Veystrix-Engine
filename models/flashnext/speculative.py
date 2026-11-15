@@ -4,8 +4,11 @@ from __future__ import annotations
 import gc
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
+
+from veystrix.bench.telemetry import current as benchmark_trace
+from models.shared.spec_depth import DepthController
 
 import mlx.core as mx
 
@@ -56,12 +59,79 @@ def trim_cache(cache, offset: int) -> None:
             entry.trim(current - offset)
 
 
+def rollback_verified(
+    language,
+    target_cache,
+    snapshot,
+    verify_out,
+    block_size,
+    keep_count,
+    materialize=False,
+):
+    """Keep an exact prefix of a verified block without replaying it.
+
+    ``verify_out`` is the output of a ``speculative_verify=True`` forward
+    over ``block_size`` tokens, whose ``gdn_states`` hold the intermediate
+    recurrent states. ``keep_count`` leading tokens stay committed; zero
+    restores ``snapshot``. The recurrent states left in the cache are slices
+    of the verifier's intermediate buffers and stay lazy unless
+    ``materialize`` is true, which evaluates them so the caller may drop the
+    verifier output.
+    """
+    if keep_count <= 0:
+        restore_cache(target_cache, snapshot)
+        return
+    language.rollback_speculative_cache(
+        target_cache,
+        verify_out.gdn_states,
+        keep_count - 1,
+        block_size,
+    )
+    ssm_caches = [
+        entry
+        for entry in target_cache
+        if entry is not None
+        and not entry.is_trimmable()
+        and not hasattr(entry, "zero_row_tail")
+    ]
+    restored = []
+    for entry, state in zip(ssm_caches, verify_out.gdn_states):
+        if len(state) <= 12 or state[12] is None:
+            continue
+        token_history, context_len, conv_input, conv_state_len = state[12]
+        entry[3] = mx.contiguous(
+            token_history[:, keep_count : keep_count + context_len]
+        )
+        entry[2] = mx.contiguous(
+            conv_input[:, keep_count : keep_count + conv_state_len]
+        )
+        restored.extend((entry[2], entry[3]))
+    if materialize:
+        for entry in ssm_caches:
+            restored.extend(
+                value for value in entry.state if isinstance(value, mx.array)
+            )
+    if restored:
+        mx.eval(*restored)
+
+
 @dataclass
 class MTPStats:
     cycles: int = 0
     drafted: int = 0
     accepted: int = 0
     replayed: int = 0
+    # Tokens kept by the exact rollback instead of a replay (FLASHNEXT_MTP_ROLLBACK).
+    rolled_back: int = 0
+    draft_seconds: float = 0.0
+    verify_seconds: float = 0.0
+    repair_seconds: float = 0.0
+    rollback_seconds: float = 0.0
+    fold_seconds: float = 0.0
+    # Cycles run at each draft depth.
+    depth_counts: dict = field(default_factory=dict)
+    # DepthController.stats() when adaptive depth is on, else None.
+    adaptive: dict | None = None
 
     @property
     def acceptance(self) -> float:
@@ -269,36 +339,14 @@ class FastDraftGreedy:
 
     def _rollback_verified(self, snapshot, verify_out, block_size, keep_count):
         """Keep an exact prefix of a verified block without replaying it."""
-        if keep_count <= 0:
-            restore_cache(self.target_cache, snapshot)
-            return
-        self.language.rollback_speculative_cache(
+        rollback_verified(
+            self.language,
             self.target_cache,
-            verify_out.gdn_states,
-            keep_count - 1,
+            snapshot,
+            verify_out,
             block_size,
+            keep_count,
         )
-        ssm_caches = [
-            entry
-            for entry in self.target_cache
-            if entry is not None
-            and not entry.is_trimmable()
-            and not hasattr(entry, "zero_row_tail")
-        ]
-        restored = []
-        for entry, state in zip(ssm_caches, verify_out.gdn_states):
-            if len(state) <= 12 or state[12] is None:
-                continue
-            token_history, context_len, conv_input, conv_state_len = state[12]
-            entry[3] = mx.contiguous(
-                token_history[:, keep_count : keep_count + context_len]
-            )
-            entry[2] = mx.contiguous(
-                conv_input[:, keep_count : keep_count + conv_state_len]
-            )
-            restored.extend((entry[2], entry[3]))
-        if restored:
-            mx.eval(*restored)
 
     def _external_replay(self, snapshot, next_snapshot, values):
         restore_cache(self.draft_cache, snapshot)
@@ -326,18 +374,22 @@ class FastDraftGreedy:
         stops: set[int],
         produced: int,
     ):
+        trace = benchmark_trace.get()
         while produced < max_tokens and self.next_main is not None:
             value = int(self.next_main.item())
             if value in stops:
                 self.next_main = None
                 return
             yield value
+            started = trace.clock() if trace is not None else None
             token = mx.array([[value]], dtype=mx.uint32)
             output = self.language(token, cache=self.target_cache)
             self.next_main = mx.argmax(
                 output.logits[:, -1, :], axis=-1
             ).astype(mx.uint32)
             mx.eval(self.next_main)
+            if trace is not None:
+                trace.end_round("target_round", started, positions=1)
             produced += 1
 
     def _generate_external(self, max_tokens: int, stops: set[int]):
@@ -363,6 +415,8 @@ class FastDraftGreedy:
             draft_cache_has_last = False
             token = self.next_main
             room = min(self.depth, max_tokens - produced)
+            trace = benchmark_trace.get()
+            draft_ns = trace.clock() if trace is not None else None
             draft_started = time.perf_counter()
             trace_draft = os.environ.get("FLASHNEXT_SPEC_TRACE") == "1"
             draft_token_arrays = []
@@ -424,6 +478,8 @@ class FastDraftGreedy:
                     int(value.item()) for value in draft_token_arrays
                 )
             self.stats.draft_seconds += time.perf_counter() - draft_started
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(candidates) - 1)
 
             if self.release_draft_before_verify:
                 out = None
@@ -457,6 +513,7 @@ class FastDraftGreedy:
                 return
             block_ids = mx.array(candidates, dtype=mx.uint32).reshape(1, -1)
             self._exact_profile()
+            verify_ns = trace.clock() if trace is not None else None
             verify_started = time.perf_counter()
             out = self.language(
                 block_ids,
@@ -478,6 +535,9 @@ class FastDraftGreedy:
                     break
                 accepted += 1
             self.stats.accepted += accepted
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(candidates),
+                                verification=True, accepted=accepted)
             all_accepted = accepted == len(candidates) - 1
             if all_accepted:
                 committed = candidates
@@ -594,6 +654,7 @@ class FastDraftGreedy:
                 self.route_observer = None
             return
         produced = 0
+        trace = benchmark_trace.get()
         try:
             while produced < max_tokens and self.next_main is not None:
                 first = int(self.next_main.item())
@@ -602,13 +663,17 @@ class FastDraftGreedy:
                     return
 
                 snapshot = snapshot_cache(self.target_cache)
+                draft_ns = trace.clock() if trace is not None else None
                 drafts = self._draft(snapshot)
+                if trace is not None:
+                    trace.end_round("draft_round", draft_ns, proposed=len(drafts))
                 self.stats.cycles += 1
                 self.stats.drafted += len(drafts)
 
                 block = [first, *drafts]
                 block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
                 self._exact_profile()
+                verify_ns = trace.clock() if trace is not None else None
                 out = self.language(
                     block_ids,
                     cache=self.target_cache,
@@ -628,6 +693,9 @@ class FastDraftGreedy:
                         break
                     accepted += 1
                 self.stats.accepted += accepted
+                if trace is not None:
+                    trace.end_round("target_round", verify_ns, positions=len(block),
+                                    verification=True, accepted=accepted)
                 exact = block[: accepted + 1]
 
                 stop_at = next(
@@ -688,6 +756,11 @@ class MTPGreedy:
         self.draft_hidden = None
         self.hist_offset = 0
         self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
+        self._depth_controller = None
+        self._depth_controller_max = None
         # Same exact verifier FastDraftGreedy installs. MTPGreedy must
         # not assume another decoder already installed it.
         self.verifier = Qwen4ExactSpeculativeVerifier()
@@ -709,7 +782,37 @@ class MTPGreedy:
         self.draft_hidden = None
         self.hist_offset = 0
         self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
+        self._depth_controller = None
+        self._depth_controller_max = None
         self.route_observer = None
+
+    @staticmethod
+    def _adaptive_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ADAPTIVE", "0") == "1"
+
+    @staticmethod
+    def _rollback_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ROLLBACK", "0") == "1"
+
+    @staticmethod
+    def _cache_limit_mb() -> int:
+        """Allocator cache cap for decode, in MB; 0 means no cap."""
+        raw = os.environ.get("FLASHNEXT_MTP_CACHE_LIMIT_MB", "512").strip()
+        return int(raw) if raw else 512
+
+    def _controller(self) -> DepthController:
+        """Depth controller for this conversation, capped at the configured depth.
+
+        The cap is the width the memory planner reserved verifier workspace
+        for, so a changed ``depth`` builds a fresh controller.
+        """
+        if self._depth_controller is None or self._depth_controller_max != self.depth:
+            self._depth_controller = DepthController(max_depth=self.depth)
+            self._depth_controller_max = self.depth
+        return self._depth_controller
 
     def _target_capture(self, ids):
         logits, hidden_states, _token = prefill_target(
@@ -758,6 +861,9 @@ class MTPGreedy:
             final_hidden
         )[0].astype(mx.uint32)
         mx.eval(target_ids, hc_hidden)
+        # Only the rollback path needs the intermediate states; _generate
+        # takes and clears this within the same cycle.
+        self._verify_out = out if self._rollback else None
         return target_ids, hc_hidden
 
     def _target_replay(self, snapshot, ids) -> None:
@@ -853,15 +959,19 @@ class MTPGreedy:
         self.draft_logits, self.draft_hidden = self._fold(self.anchor, self.next_main.reshape(1, 1))
         mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
 
-    def _draft_chain(self):
+    def _draft_chain(self, depth=None):
+        """Draft ``depth`` tokens (the configured depth by default)."""
+        depth = self.depth if depth is None else depth
         drafts = []
+        if depth <= 0:
+            return drafts
         logits = self.draft_logits
         hidden = self.draft_hidden[:, -1:]
-        for index in range(self.depth):
+        for index in range(depth):
             token = mx.argmax(logits[:, -1, :], axis=-1).astype(mx.uint32)
             value = int(token.item())
             drafts.append(value)
-            if index + 1 < self.depth:
+            if index + 1 < depth:
                 logits, hidden = mtp.forward(
                     self.language,
                     hidden,
@@ -871,9 +981,33 @@ class MTPGreedy:
                 )
         return drafts
 
-    def _finish_prefix(self, snapshot, verify_hidden, keep_ids, base_hist) -> None:
-        ids = mx.array(keep_ids, dtype=mx.uint32).reshape(1, -1)
-        self._target_replay(snapshot, ids)
+    def _rollback_target(self, snapshot, verify_out, block_size, keep_count) -> float:
+        """Keep ``keep_count`` verified tokens by rollback; return the seconds taken."""
+        started = time.perf_counter()
+        rollback_verified(
+            self.language,
+            self.target_cache,
+            snapshot,
+            verify_out,
+            block_size,
+            keep_count,
+            materialize=True,
+        )
+        seconds = time.perf_counter() - started
+        self.stats.rollback_seconds += seconds
+        self.stats.rolled_back += keep_count
+        return seconds
+
+    def _finish_prefix(
+        self, snapshot, verify_hidden, keep_ids, base_hist,
+        verify_out=None, block_size=0,
+    ) -> None:
+        if verify_out is None:
+            ids = mx.array(keep_ids, dtype=mx.uint32).reshape(1, -1)
+            self._target_replay(snapshot, ids)
+        elif len(keep_ids) < block_size:
+            self._rollback_target(snapshot, verify_out, block_size, len(keep_ids))
+        # else: the verifier state already covers exactly these tokens.
         trim_cache(self.mtp_cache, base_hist)
 
         # next_main already occupies the last committed MTP history slot.
@@ -892,13 +1026,14 @@ class MTPGreedy:
 
         # Verification and rollback allocate temporary Metal buffers on every cycle.
         # Bound their reuse cache while leaving live model state and the expert pool alone.
-        with cache_cap(512):
+        with cache_cap(self._cache_limit_mb()):
             yield from self._generate(max_tokens, stops)
 
     def _generate(self, max_tokens: int, stops: Iterable[int]):
         max_tokens = _normalize_max_tokens(max_tokens)
         stops = set(stops)
         produced = 0
+        trace = benchmark_trace.get()
         while produced < max_tokens and self.next_main is not None:
             if int(self.next_main.item()) in stops:
                 trim_cache(self.mtp_cache, self.hist_offset - 1)
@@ -908,14 +1043,30 @@ class MTPGreedy:
 
             target_snapshot = snapshot_cache(self.target_cache)
             base_hist = self.hist_offset
-            drafts = self._draft_chain()
+            controller = self._controller() if self._adaptive else None
+            depth = controller.choose() if controller is not None else self.depth
+            draft_ns = trace.clock() if trace is not None else None
+            draft_start = time.perf_counter()
+            drafts = self._draft_chain(depth)
+            draft_seconds = time.perf_counter() - draft_start
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
             self.stats.cycles += 1
             self.stats.drafted += len(drafts)
+            self.stats.draft_seconds += draft_seconds
+            self.stats.depth_counts[depth] = (
+                self.stats.depth_counts.get(depth, 0) + 1
+            )
 
             block = [int(self.next_main.item()), *drafts]
             block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
+            verify_ns = trace.clock() if trace is not None else None
+            verify_start = time.perf_counter()
             target_ids, hidden = self._target_verify(block_ids)
+            verify_out, self._verify_out = self._verify_out, None
             host_targets = target_ids.tolist()
+            verify_seconds = time.perf_counter() - verify_start
+            self.stats.verify_seconds += verify_seconds
 
             accepted = 0
             for expected, proposed in zip(host_targets, drafts):
@@ -924,6 +1075,9 @@ class MTPGreedy:
                 accepted += 1
             self.stats.accepted += accepted
 
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(block),
+                                verification=True, accepted=accepted)
             processed = block[: accepted + 1]
             stop_at = next(
                 (i for i, token in enumerate(processed) if token in stops),
@@ -941,7 +1095,10 @@ class MTPGreedy:
                         hidden,
                         processed[:keep],
                         base_hist,
+                        verify_out=verify_out,
+                        block_size=len(block),
                     )
+                    verify_out = None
                     for token in processed[:keep]:
                         produced += 1
                         yield token
@@ -950,12 +1107,32 @@ class MTPGreedy:
                     trim_cache(self.mtp_cache, base_hist - 1)
                     self.hist_offset = base_hist - 1
                     self.next_main = None
+                if controller is not None:
+                    # The prefix replay here is not the partial-rejection
+                    # repair the model prices, so report none.
+                    controller.observe(
+                        depth, accepted,
+                        draft_seconds=draft_seconds,
+                        verify_seconds=verify_seconds,
+                    )
+                    self.stats.adaptive = controller.stats()
                 return
 
+            repair_seconds = 0.0
             if accepted < len(drafts):
-                self._target_replay(
-                    target_snapshot, block_ids[:, : accepted + 1]
-                )
+                if verify_out is not None:
+                    repair_seconds = self._rollback_target(
+                        target_snapshot, verify_out, len(block), accepted + 1
+                    )
+                else:
+                    repair_start = time.perf_counter()
+                    self._target_replay(
+                        target_snapshot, block_ids[:, : accepted + 1]
+                    )
+                    repair_seconds = time.perf_counter() - repair_start
+                    self.stats.repair_seconds += repair_seconds
+            verify_out = None
+            fold_start = time.perf_counter()
             trim_cache(self.mtp_cache, base_hist)
 
             correction = int(host_targets[accepted])
@@ -969,6 +1146,18 @@ class MTPGreedy:
             self.anchor = hidden[:, accepted : accepted + 1]
             self.next_main = mx.array([correction], dtype=mx.uint32)
             mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
+            fold_seconds = time.perf_counter() - fold_start
+            self.stats.fold_seconds += fold_seconds
+            if controller is not None:
+                # The MTP fold is paid every cycle at any depth, so the model
+                # sees it as part of the fixed per-cycle verify cost.
+                controller.observe(
+                    depth, accepted,
+                    draft_seconds=draft_seconds,
+                    verify_seconds=verify_seconds + fold_seconds,
+                    repair_seconds=repair_seconds,
+                )
+                self.stats.adaptive = controller.stats()
 
             for token in processed:
                 produced += 1
@@ -988,20 +1177,28 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
     produced = 0
     value = int(first.item())
 
+    trace = benchmark_trace.get()
+
     def singleton(current, want_logits=True):
+        started = trace.clock() if trace is not None else None
         ids = mx.array([[current]], dtype=mx.uint32)
         out = language(ids, cache=cache, skip_logits=not want_logits)
         if not want_logits:
             mx.eval([entry.state for entry in cache])
-            return None
-        return int(mx.argmax(out.logits[0, -1]).item())
+            result = None
+        else:
+            result = int(mx.argmax(out.logits[0, -1]).item())
+        if trace is not None:
+            trace.end_round("target_round", started, positions=1, cache_commit_only=not want_logits)
+        return result
 
     while produced < horizon and value not in stops:
         check_cancel()
         began = time.perf_counter()
+        draft_ns = trace.clock() if trace is not None else None
         lookup.append(value)
         drafts = (
-            lookup.propose(min(4, horizon - produced - 1))
+            lookup.propose(min(gate.depth, horizon - produced - 1))
             if gate.allow() and not memory_controller.forbid_optional() else []
         )
         # Stop delimiters never enter the cache or the emitted token tape.
@@ -1009,6 +1206,8 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
             if draft in stops:
                 drafts = drafts[:index]
                 break
+        if trace is not None:
+            trace.end_round("draft_round", draft_ns, proposed=len(drafts))
         if not drafts:
             yield value
             produced += 1
@@ -1019,10 +1218,20 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
 
         snapshot = snapshot_cache(cache)
         ids = mx.array([[value, *drafts]], dtype=mx.uint32)
+        verify_ns = trace.clock() if trace is not None else None
         out = language(ids, cache=cache, speculative_verify=True, return_hidden=True, skip_logits=True)
         predictions = language.speculative_argmax_from_hidden(out.hidden_states[-1])[0].tolist()
         committed = [value]
-        if predictions[:len(drafts)] == drafts:
+        matched = predictions[:len(drafts)] == drafts
+        if trace is not None:
+            accepted = 0
+            for predicted, draft in zip(predictions, drafts):
+                if predicted != draft:
+                    break
+                accepted += 1
+            trace.end_round("target_round", verify_ns, positions=len(drafts) + 1,
+                            verification=True, accepted=accepted)
+        if matched:
             committed.extend(drafts)
             value = predictions[-1]
         else:
@@ -1033,7 +1242,7 @@ def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_
                     break
                 committed.append(draft)
                 value = singleton(draft, want_logits=produced + len(committed) < horizon)
-        gate.observe(True, len(committed), time.perf_counter() - began)
+        gate.observe(True, len(committed), time.perf_counter() - began, proposed=len(drafts))
         for current in committed:
             check_cancel()
             produced += 1

@@ -15,12 +15,18 @@ struct SettingsView: View {
                     .onSubmit(applyPort).onChange(of: port.value) { _, _ in applyPort() }
                     .help("The engine always binds to 127.0.0.1. Default 8080.")
                     .accessibilityLabel("Local API port")
-                Picker("Decode memory pool", selection: $model.settings.decodePool) {
+                Picker("Qwen decode memory pool", selection: $model.settings.decodePool) {
                     ForEach(DecodePool.allCases) { Text($0.title).tag($0) }
                 }
                 Text(model.settings.decodePool.explanation).font(.callout).foregroundStyle(.secondary)
+                Text("Nemotron sizes its own pool: none on a Mac whose memory cannot hold all of its experts, where a pool measured slower than the system file cache.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Qwen faster prefill and decode (experimental)", isOn: $model.settings.flashNextSpeed)
                 Text("Uses 4K prefill windows and buffered reads when the decode pool is available. Restart to apply.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Toggle("Qwen low-memory prefill for 16 GB Macs (experimental)", isOn: $model.settings.flashNextBoundedPrefill)
+                    .disabled(model.settings.flashNextSpeed)
+                Text("Reads prompts in 128-token steps with a reused expert buffer, which keeps more memory free while a prompt is read. Use it with no decode pool. Restart to apply.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Restart automatically after a crash or guard stop (bounded, logged)", isOn: $model.settings.supervisedRestarts)
                 Toggle("Keep the Mac awake while the engine runs", isOn: $model.settings.keepMacAwake)
@@ -152,7 +158,7 @@ private struct NemotronContextSettings: View {
                 LabeledContent("Attention KV format", value: status.kvFormat)
                 LabeledContent("1M context validation", value: status.millionTokenValidation ? "Passed" : "Pending")
             }
-            Text("\(model.settings.nemotronKVCache.title) supports a configured window up to \(model.settings.nemotronKVCache.contextLimit.formatted()) tokens and up to 65,536 uncached prefill tokens per request. Restart to apply changes.")
+            Text("\(model.settings.nemotronKVCache.title) supports a configured window up to \(model.settings.nemotronKVCache.contextLimit.formatted()) tokens and up to 65,536 uncached prefill tokens per request. Positions past 262,144 are unvalidated: the checkpoint declares 262,144 and carries no RoPE scaling metadata. Restart to apply changes.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

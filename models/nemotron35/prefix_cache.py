@@ -29,8 +29,10 @@ from contextlib import nullcontext
 import numpy as np
 
 from . import state
+from models.shared.prefix_radix import PrefixRadix
 
 MAX_TOKENS = 1_048_576
+RADIX_TOKEN_BYTES = 8 * 2**20
 # A coding harness with one tool can have a useful system prefix below 512
 # tokens. Keep that boundary so canonicalized tool history can reuse it.
 MIN_TOKENS = 256
@@ -98,6 +100,9 @@ class PrefixCache:
         self._write_epoch = 0
         self._recovery_lease = None
         self._disk: dict[str, dict] = {}
+        self._radix = PrefixRadix()
+        self._radix_tokens = {}
+        self._radix_bytes = 0
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if manager is None:
             self._scan()
@@ -135,6 +140,20 @@ class PrefixCache:
             if self._ram:
                 for key in self._ram.keys() - self._disk.keys():
                     self._drop_ram(key)
+            for key in self._radix_tokens.keys() - self._disk.keys():
+                self._forget_tokens(key)
+
+    def _remember_tokens(self, key, packed):
+        if key not in self._radix_tokens and self._radix_bytes + len(packed) <= RADIX_TOKEN_BYTES:
+            self._radix_tokens[key] = packed
+            self._radix_bytes += len(packed)
+            self._radix.put(packed, key)
+
+    def _forget_tokens(self, key):
+        packed = self._radix_tokens.pop(key, None)
+        if packed is not None:
+            self._radix_bytes -= len(packed)
+            self._radix.remove(packed)
 
     def _drop_ram(self, key):
         entry = self._ram.pop(key, None)
@@ -174,23 +193,30 @@ class PrefixCache:
     # -- lookup ------------------------------------------------------------------------------------------------
     def _best_key(self, ids: np.ndarray, excluded=()):
         accepts = self.compatible_positions(ids) if self.compatible_positions else lambda n: True
-        lengths = sorted({entry["tokens"] for entry in self._disk.values()
-                          if self.min_tokens <= entry["tokens"] < len(ids)})
-        if not lengths:
+        limit = len(ids) - 1
+        if limit < self.min_tokens or not self._disk:
             return None, 0
+        cap = max((entry["tokens"] for entry in self._disk.values() if entry["tokens"] <= limit), default=0)
+        if cap < self.min_tokens:
+            return None, 0
+        tape = ids[:cap].tobytes()
+        matches = {size // 4: key for size, key in self._radix.matches(tape)}
+        lengths = sorted({entry["tokens"] for key, entry in self._disk.items()
+                          if key not in self._radix_tokens and self.min_tokens <= entry["tokens"] <= limit})
         digest = hashlib.sha256()
-        packed = memoryview(np.ascontiguousarray(ids[:lengths[-1]])).cast("B")
-        candidates, previous = [], 0
+        packed = memoryview(tape)
+        previous = 0
         for n in lengths:
             digest.update(packed[4 * previous:4 * n])
             previous = n
             key = digest.hexdigest()[:24]
-            if key in self._disk and key not in excluded:
-                candidates.append((key, n))
-        for key, n in reversed(candidates):
-            if accepts(n):
+            if key in self._disk:
+                matches[n] = key
+        for n, key in sorted(matches.items(), reverse=True):
+            if n >= self.min_tokens and key not in excluded and accepts(n):
                 tokens = self._read_tokens(self._paths(key)[1])
                 if tokens is not None and np.array_equal(tokens, ids[:n]):
+                    self._remember_tokens(key, tape[:4 * n])
                     return key, n
         return None, 0
 
@@ -257,6 +283,7 @@ class PrefixCache:
                         entry = tx.entries.get(f"nemotron35/{self.directory.name}/{key}")
                         if entry is not None and tx.remove(entry):
                             self._disk.pop(key, None)
+                            self._forget_tokens(key)
             finally:
                 if lease is not None:
                     os.close(lease)
@@ -339,7 +366,7 @@ class PrefixCache:
                 handle.flush()
                 os.fsync(handle.fileno())
             size = state_path.stat().st_size + tmp.stat().st_size
-            if _tx is not None and (_tx.used + size > _tx.quota or
+            if _tx is not None and (_tx.used + size > _tx.effective_quota or
                                     shutil.disk_usage(self.directory).free < _tx.manager.reserve):
                 state_path.unlink()
                 return False
@@ -349,6 +376,7 @@ class PrefixCache:
         finally:
             tmp.unlink(missing_ok=True)
         self._disk[key] = {'bytes': size, 'tokens': len(tokens), 'mtime': time.time()}
+        self._remember_tokens(key, tokens.tobytes())
         if hold and _tx is not None:
             self._hold(_tx, key)
         self.stats.ssd_writes += 1
@@ -384,6 +412,7 @@ class PrefixCache:
         with self._lock:
             self._drop_ram(key)
             self._disk.pop(key, None)
+            self._forget_tokens(key)
         for path in self._paths(key):
             path.unlink(missing_ok=True)
 
@@ -410,3 +439,4 @@ class PrefixCache:
                 if entry.directory == self.directory and _tx.remove(entry):
                     self._disk.pop(entry.key, None)
                     self._drop_ram(entry.key)
+                    self._forget_tokens(entry.key)

@@ -20,6 +20,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from veystrix.bench.telemetry import current as benchmark_trace
+
 from .boundary_profiler import BoundaryProfiler
 
 
@@ -34,6 +36,10 @@ SUPPORTED_GROUP_SIZES = (32, 64)
 # identical digests, so FLASHNEXT_METAL_G64 defaults to on.
 G64_RUNTIME_READY = True
 BITS = 4
+# Block (row-batched) kernels: pairs routed to one expert share one walk of
+# its weights. Unused pair slots of a group hold BLOCK_EMPTY.
+BLOCK_EMPTY = 0xFFFFFFFF
+BLOCK_ROWS = (2, 4, 8)
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,36 @@ def _validate_projection(
         # MLX prints ``mlx.core.uint32``; NumPy prints ``uint32``.
         if np.dtype(dtype) != np.dtype(np.uint32):
             raise TypeError("Q4 weights must use uint32 packed values")
+
+
+def block_plan(routes: Any, rows: int) -> tuple[np.ndarray, np.ndarray]:
+    """Group (token, slot) pairs by route for the block kernels.
+
+    ``routes`` holds the raw route values in pair order (``token * slots +
+    slot``). Groups follow first appearance, the pairs of a group keep
+    increasing order, a group longer than ``rows`` splits into consecutive
+    chunks, and a short group is padded with ``BLOCK_EMPTY``. Returns
+    ``(group_routes[G], group_pairs[G, rows])`` as uint32 arrays.
+    """
+    if rows not in BLOCK_ROWS:
+        raise ValueError(f"rows must be one of {BLOCK_ROWS}")
+    values = np.asarray(routes).reshape(-1).tolist()
+    if not values:
+        raise ValueError("routes must not be empty")
+    pairs_of: dict[int, list[int]] = {}
+    for pair, value in enumerate(values):
+        pairs_of.setdefault(int(value), []).append(pair)
+    group_routes: list[int] = []
+    group_pairs: list[list[int]] = []
+    for value, pairs in pairs_of.items():
+        for start in range(0, len(pairs), rows):
+            chunk = pairs[start:start + rows]
+            group_routes.append(value)
+            group_pairs.append(chunk + [BLOCK_EMPTY] * (rows - len(chunk)))
+    return (
+        np.array(group_routes, dtype=np.uint32),
+        np.array(group_pairs, dtype=np.uint32).reshape(len(group_routes), rows),
+    )
 
 
 def weighted_combine(expert_outputs: Any, routes: Any, scores: Any) -> Any:
@@ -335,6 +371,162 @@ if (simd_lid == 0) {
 }
 """
 
+# Row-batched variants of the gate/up projection and the up+SwiGLU kind. One
+# threadgroup serves one expert (``group_routes[group]``) and up to
+# BLOCK_ROWS_N pairs routed to it (``group_pairs``). Each k-block of weights is
+# read once and applied to every live pair in turn. Per pair and output row the
+# arithmetic is that of qmv_fast_impl (``packs_per_thread`` 2) or qmv_impl
+# (``packs_per_thread`` 1, with the ``remaining`` tail and the moved-back last
+# tile): ``result += qdot(...)`` over increasing k, then ``simd_sum``, then
+# one cast, so every pair equals the per-pair kernels' output bit for bit.
+_BLOCK_BODY = r"""
+uint group = threadgroup_position_in_grid.z;
+uint simd_gid = simdgroup_index_in_threadgroup;
+uint simd_lid = thread_index_in_simdgroup;
+uint raw_expert = group_routes[group];
+""" + _POINTERS + r"""
+constexpr int num_simdgroups = 2;
+constexpr int results_per_simdgroup = 4;
+#if BLOCK_FAST
+constexpr int packs_per_thread = 2;
+#else
+constexpr int packs_per_thread = 1;
+#endif
+constexpr int pack_factor = get_pack_factor<4, 32>();
+constexpr int bytes_per_pack = get_bytes_per_pack<4, 32>();
+constexpr int values_per_thread = pack_factor * packs_per_thread;
+constexpr int block_size = values_per_thread * SIMD_SIZE;
+constexpr int scale_step_per_thread = GROUP_SIZE / values_per_thread;
+constexpr int in_vec_size_w = IN_WIDTH * bytes_per_pack / pack_factor;
+constexpr int in_vec_size_g = IN_WIDTH / GROUP_SIZE;
+const int out_row = threadgroup_position_in_grid.y *
+    (num_simdgroups * results_per_simdgroup) +
+    simd_gid * results_per_simdgroup;
+#if BLOCK_FAST
+const int row_base = out_row;
+const int live_rows = results_per_simdgroup;
+#else
+if (out_row >= OUT_WIDTH) {
+    return;
+}
+#if OUT_WIDTH < 8
+// Fewer outputs than one tile: guard every row.
+const int row_base = out_row;
+const int live_rows = min(results_per_simdgroup, OUT_WIDTH - out_row);
+#else
+// The last tile moves back and redoes some output rows.
+const int row_base = min(OUT_WIDTH - results_per_simdgroup, out_row);
+const int live_rows = results_per_simdgroup;
+#endif
+#endif
+
+const device uint8_t* ws = (const device uint8_t*)w_ptr;
+decltype(scales) sc = s_ptr;
+decltype(biases) bs = b_ptr;
+ws += row_base * in_vec_size_w + simd_lid * packs_per_thread * bytes_per_pack;
+sc += row_base * in_vec_size_g + simd_lid / scale_step_per_thread;
+bs += row_base * in_vec_size_g + simd_lid / scale_step_per_thread;
+
+uint pairs[BLOCK_ROWS_N];
+const device T* xs[BLOCK_ROWS_N];
+thread float x_thread[values_per_thread];
+thread float result[BLOCK_ROWS_N][results_per_simdgroup];
+#pragma unroll
+for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+    pairs[j] = group_pairs[group * BLOCK_ROWS_N + j];
+    xs[j] = x;
+    if (pairs[j] != BLOCK_EMPTY) {
+        xs[j] = x + ((SLOT_INPUT != 0) ? pairs[j] : pairs[j] / SLOTS) * IN_WIDTH +
+            simd_lid * values_per_thread;
+    }
+#pragma unroll
+    for (int row = 0; row < results_per_simdgroup; ++row) {
+        result[j][row] = 0;
+    }
+}
+
+#if BLOCK_FAST
+const int main_end = IN_WIDTH;
+#else
+const int main_end = IN_WIDTH - block_size;
+#endif
+int k = 0;
+for (; k < main_end; k += block_size) {
+#pragma unroll
+    for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+        if (pairs[j] == BLOCK_EMPTY) {
+            continue;
+        }
+        float sum = load_vector<T, float, values_per_thread, 4>(xs[j], x_thread);
+        for (int row = 0; row < live_rows; ++row) {
+            auto wl = (const device uint8_t*)(ws + row * in_vec_size_w);
+            decltype(sc) sl = sc + row * in_vec_size_g;
+            decltype(bs) bl = bs + row * in_vec_size_g;
+            float s = sl[0];
+            float b = bl[0];
+            result[j][row] += qdot<float, values_per_thread, 4>(wl, x_thread, s, b, sum);
+        }
+        xs[j] += block_size;
+    }
+    ws += block_size * bytes_per_pack / pack_factor;
+    sc += block_size / GROUP_SIZE;
+    bs += block_size / GROUP_SIZE;
+}
+#if !BLOCK_FAST
+const int remaining = clamp(
+    static_cast<int>(IN_WIDTH - k - simd_lid * values_per_thread),
+    0,
+    values_per_thread);
+if (remaining > 0) {
+#pragma unroll
+    for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+        if (pairs[j] == BLOCK_EMPTY) {
+            continue;
+        }
+        float sum = load_vector_safe<T, float, values_per_thread, 4>(
+            xs[j], x_thread, remaining);
+        for (int row = 0; row < live_rows; ++row) {
+            auto wl = (const device uint8_t*)(ws + row * in_vec_size_w);
+            decltype(sc) sl = sc + row * in_vec_size_g;
+            decltype(bs) bl = bs + row * in_vec_size_g;
+            float s = sl[0];
+            float b = bl[0];
+            result[j][row] += qdot_safe<float, values_per_thread, 4>(
+                wl, x_thread, s, b, sum, remaining);
+        }
+    }
+}
+#endif
+
+#pragma unroll
+for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+    if (pairs[j] == BLOCK_EMPTY) {
+        continue;
+    }
+    for (int row = 0; row < live_rows; ++row) {
+        float value = simd_sum(result[j][row]);
+        uint col = row_base + row;
+        if (simd_lid == 0 && col < OUT_WIDTH) {
+            uint index = pairs[j] * OUT_WIDTH + col;
+#if BLOCK_SWIGLU
+            // Same rounded sigmoid sequence as the per-pair up+SwiGLU kernel.
+            T up_value = static_cast<T>(value);
+            T gate_value = gate_out[index];
+            T magnitude = metal::abs(gate_value);
+            T exponent = metal::exp(magnitude);
+            T denominator = T(1) + exponent;
+            T small_sigmoid = T(1) / denominator;
+            T sigmoid = (gate_value < T(0)) ? small_sigmoid :
+                T(1) - small_sigmoid;
+            out[index] = (gate_value * sigmoid) * up_value;
+#else
+            out[index] = static_cast<T>(value);
+#endif
+        }
+    }
+}
+"""
+
 _BODIES = {
     "projection": _PROJECTION_BODY,
     "up_swiglu": _FUSED_UP_SWIGLU_BODY,
@@ -349,6 +541,115 @@ def _render(source: str, values: Mapping[str, str]) -> str:
     return _KERNEL_TOKEN.sub(lambda match: values.get(match.group(0), match.group(0)), source)
 
 
+def _template_head(name: str) -> "re.Pattern[str]":
+    """A template line of an MLX QMV helper, with any extra template parameters."""
+    return re.compile(
+        r"template <typename T, int group_size, int bits(?P<extra>(?:,[^>\n]*)?)>\n"
+        r"METAL_FUNC void " + name + r"\("
+    )
+
+
+_QMV_FAST_HEAD = _template_head("qmv_fast_impl")
+_QMV_IMPL_HEAD = _template_head("qmv_impl")
+_QOUTER_ANCHOR = "template <typename U, int values_per_thread, int bits>\ninline void\nqouter"
+_QMV_END_ANCHOR = "// Affine analog of fp_qmv_wide"
+_METADATA_TYPE_SWAPS = (
+    ("const device T* scales", "const device M* scales"),
+    ("const device T* biases", "const device M* biases"),
+    ("const device T* sl", "const device M* sl"),
+    ("const device T* bl", "const device M* bl"),
+)
+_ACCUMULATE_SWAPS = (
+    ("device T* y,", "thread float* combined, float score,"),
+)
+_Y_OFFSETS = (
+    "y += tid.x * out_vec_size + out_row;",
+    "y += tid.x * out_vec_size + used_out_row;",
+)
+_Y_STORE = "y[row] = static_cast<T>(result[row]);"
+
+
+def _require(source: str, pattern: str, what: str, version: str) -> None:
+    if pattern not in source:
+        raise RuntimeError(
+            f"MLX {version} quantized.h changed: {what} has no {pattern!r}"
+        )
+
+
+def _slice_qmv_header(text: str, fma_dequant: bool, version: str) -> str:
+    """Build the kernel header from the text of MLX's ``quantized.h``.
+
+    Every substitution must apply: a pattern that is absent raises instead of
+    producing a kernel that reads or writes somewhere else.
+    """
+    helper_end = text.find(_QOUTER_ANCHOR)
+    if helper_end < 0:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qouter helper anchor")
+    fast_head = _QMV_FAST_HEAD.search(text)
+    if fast_head is None:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qmv_fast_impl template")
+    qmv_start = fast_head.start()
+    impl_head = _QMV_IMPL_HEAD.search(text, qmv_start)
+    if impl_head is None:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qmv_impl template")
+    qmv_end = text.find(_QMV_END_ANCHOR, qmv_start)
+    if qmv_end < 0:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no end of qmv_impl anchor")
+    header = text[:helper_end] + text[qmv_start:qmv_end]
+    # The stock MLX helpers use one type for activations and affine metadata.
+    # FlashNext stores float32 activations with bfloat16 scales and biases.
+    # Keep the MLX reduction body, but use a separate metadata type so MLX
+    # does not insert per-projection metadata conversion kernels.
+    fast = text[qmv_start:impl_head.start()]
+    impl = text[impl_head.start():qmv_end]
+
+    def _mixed(src: str, head: "re.Match[str]", old_name: str, new_name: str, what: str) -> str:
+        # Insert the metadata type right after ``int bits``; any template
+        # parameters MLX adds after it keep their position and defaults.
+        extra = head.group("extra")
+        old = "template <typename T, int group_size, int bits" + extra + ">"
+        new = "template <typename T, int group_size, int bits, typename M" + extra + ">"
+        mixed = src.replace(old, new, 1).replace(old_name, new_name, 1)
+        for old_type, new_type in _METADATA_TYPE_SWAPS:
+            _require(mixed, old_type, what, version)
+            mixed = mixed.replace(old_type, new_type)
+        return mixed
+
+    fast = _mixed(fast, fast_head, "qmv_fast_impl", "qmv_fast_mixed_impl", "qmv_fast_impl")
+    impl = _mixed(impl, impl_head, "qmv_impl", "qmv_mixed_impl", "qmv_impl")
+    header += fast + impl
+
+    def _make_accumulate(src: str, old_name: str, new_name: str, offsets) -> str:
+        acc = src.replace(old_name, new_name, 1)
+        for old, new in _ACCUMULATE_SWAPS:
+            _require(acc, old, old_name, version)
+            acc = acc.replace(old, new, 1)
+        for old in offsets:
+            _require(acc, old, old_name, version)
+            acc = acc.replace(old, "// y unused", 1)
+        _require(acc, _Y_STORE, old_name, version)
+        return acc.replace(
+            _Y_STORE, "combined[row] += float(static_cast<T>(result[row])) * score;",
+        )
+
+    # qmv_fast_impl has one output pointer offset, qmv_impl one per branch.
+    fast_acc = _make_accumulate(fast, "qmv_fast_mixed_impl", "qmv_fast_accumulate_impl", _Y_OFFSETS[:1])
+    impl_acc = _make_accumulate(impl, "qmv_mixed_impl", "qmv_accumulate_impl", _Y_OFFSETS)
+    header += fast_acc + impl_acc
+    # Custom-kernel helpers receive small local dimensions, not buffer
+    # address-space constants. Pass them by value so older Metal compilers do
+    # not reject references without an explicit address space.
+    if fma_dequant:
+        old = "return scale * accum + sum * bias;"
+        if header.count(old) != 2:
+            raise RuntimeError(
+                f"MLX {version} affine dot helpers changed; cannot enable explicit FMA"
+            )
+        header = header.replace(old, "return metal::fma(scale, accum, sum * bias);")
+    _require(header, "const constant int&", "the helper dimensions", version)
+    return header.replace("const constant int&", "const int")
+
+
 @lru_cache(maxsize=2)
 def _mlx_qmv_header(fma_dequant: bool = False) -> str:
     """Load the exact Q4 vector helpers shipped with the active MLX wheel."""
@@ -358,70 +659,7 @@ def _mlx_qmv_header(fma_dequant: bool = False) -> str:
         Path(mx.__file__).resolve().parent
         / "include/mlx/backend/metal/kernels/quantized.h"
     )
-    text = path.read_text()
-    helper_end = text.index(
-        "template <typename U, int values_per_thread, int bits>\ninline void\nqouter"
-    )
-    qmv_start = text.index(
-        "template <typename T, int group_size, int bits>\n"
-        "METAL_FUNC void qmv_fast_impl"
-    )
-    qmv_end = text.index("// Affine analog of fp_qmv_wide", qmv_start)
-    header = text[:helper_end] + text[qmv_start:qmv_end]
-    # The stock MLX helpers use one type for activations and affine metadata.
-    # FlashNext stores float32 activations with bfloat16 scales and biases.
-    # Keep the MLX reduction body, but use a separate metadata type so MLX
-    # does not insert per-projection metadata conversion kernels.
-    impl_start = text.index(
-        "template <typename T, int group_size, int bits>\n"
-        "METAL_FUNC void qmv_impl",
-        qmv_start,
-    )
-    fast = text[qmv_start:impl_start]
-    impl = text[impl_start:qmv_end]
-    fast = fast.replace(
-        "template <typename T, int group_size, int bits>",
-        "template <typename T, int group_size, int bits, typename M>",
-        1,
-    ).replace("qmv_fast_impl", "qmv_fast_mixed_impl", 1)
-    impl = impl.replace(
-        "template <typename T, int group_size, int bits>",
-        "template <typename T, int group_size, int bits, typename M>",
-        1,
-    ).replace("qmv_impl", "qmv_mixed_impl", 1)
-    for old, new in (
-        ("const device T* scales", "const device M* scales"),
-        ("const device T* biases", "const device M* biases"),
-        ("const device T* sl", "const device M* sl"),
-        ("const device T* bl", "const device M* bl"),
-    ):
-        fast = fast.replace(old, new)
-        impl = impl.replace(old, new)
-    header += fast + impl
-
-    def _make_accumulate(src: str, old_name: str, new_name: str) -> str:
-        acc = src.replace(old_name, new_name, 1)
-        acc = acc.replace("device T* y,", "thread float* combined, float score,", 1)
-        acc = acc.replace("y += tid.x * out_vec_size + out_row;", "// y unused", 1)
-        acc = acc.replace("y += tid.x * out_vec_size + used_out_row;", "// y unused", 1)
-        acc = acc.replace(
-            "y[row] = static_cast<T>(result[row]);",
-            "combined[row] += float(static_cast<T>(result[row])) * score;",
-        )
-        return acc
-
-    fast_acc = _make_accumulate(fast, "qmv_fast_mixed_impl", "qmv_fast_accumulate_impl")
-    impl_acc = _make_accumulate(impl, "qmv_mixed_impl", "qmv_accumulate_impl")
-    header += fast_acc + impl_acc
-    # Custom-kernel helpers receive small local dimensions, not buffer
-    # address-space constants. Pass them by value so older Metal compilers do
-    # not reject references without an explicit address space.
-    if fma_dequant:
-        old = "return scale * accum + sum * bias;"
-        if header.count(old) != 2:
-            raise RuntimeError("MLX affine dot helpers changed; cannot enable explicit FMA")
-        header = header.replace(old, "return metal::fma(scale, accum, sum * bias);")
-    return header.replace("const constant int&", "const int")
+    return _slice_qmv_header(path.read_text(), fma_dequant, mx.__version__)
 
 
 class MetalMoEExecutor:
@@ -517,13 +755,23 @@ class MetalMoEExecutor:
         has_stream_pack: bool = False,
         has_shared_y: bool = False,
         has_shared_parts: bool = False,
+        block_rows: int = 0,
     ) -> Any:
-        """Build, or reuse, one specialised Metal kernel."""
+        """Build, or reuse, one specialised Metal kernel.
+
+        ``block_rows`` selects the row-batched variant of a projection or
+        up+SwiGLU kind. It is specialised on rows per group only: neither the
+        token count nor the group count enters the source or the key.
+        """
+        if block_rows:
+            tokens = 0
         key = (
             kind, self.group_size, str(getattr(x, "dtype", None)), tokens, slots,
             input_width, output_width, proj_name, slot_input, has_slab_pack,
             has_stream_pack, has_shared_y, has_shared_parts, self.header_size,
         )
+        if block_rows:
+            key += (block_rows,)
         kernel = self._kernels.get(key)
         if kernel is not None:
             return kernel
@@ -544,6 +792,13 @@ class MetalMoEExecutor:
                 "qmv_fast_accumulate_impl" if fast else "qmv_accumulate_impl"
             ),
         }
+        if block_rows:
+            values.update({
+                "BLOCK_ROWS_N": str(block_rows),
+                "BLOCK_FAST": "1" if fast else "0",
+                "BLOCK_SWIGLU": "1" if kind == "up_swiglu" else "0",
+                "BLOCK_EMPTY": f"{BLOCK_EMPTY:#x}u",
+            })
         if has_slab_pack:
             from .slab_pack import get_slab_layout
 
@@ -559,6 +814,8 @@ class MetalMoEExecutor:
                 "B_OFFSET": f"{layout.offset(proj_name, 'biases')}u",
             })
         input_names = ["x", "weight", "scales", "biases", "routes"]
+        if block_rows:
+            input_names[4:] = ["group_routes", "group_pairs"]
         if kind == "down_combine":
             input_names.append("scores")
         if has_slab_pack:
@@ -590,6 +847,8 @@ class MetalMoEExecutor:
             elif has_shared_parts:
                 name += "_shared_parts"
             label = "fused_down"
+        if block_rows:
+            name += f"_block{block_rows}"
         if (
             label is not None
             and self._boundary_profiler.enabled
@@ -607,7 +866,7 @@ class MetalMoEExecutor:
             name=name,
             input_names=input_names,
             output_names=["out"],
-            source=_render(_BODIES[kind], values),
+            source=_render(_BLOCK_BODY if block_rows else _BODIES[kind], values),
             header=_mlx_qmv_header(self.fma_dequant),
             ensure_row_contiguous=True,
             compile_options={"math_mode": "safe"},
@@ -617,6 +876,12 @@ class MetalMoEExecutor:
 
     def _launch(self, label, kernel, inputs, x, grid, threadgroup, output_shape):
         """Dispatch one kernel, timing it only when its boundary is profiled."""
+        trace = benchmark_trace.get()
+        if trace is not None and trace.capture_shapes:
+            trace.counts["custom_metal_dispatches"] += 1
+            trace.shape("metal." + (label or "projection"), inputs[:5],
+                        bits=BITS, group_size=self.group_size, output_shape=output_shape,
+                        grid=grid, threadgroup=threadgroup)
         profiler = self._boundary_profiler
         if label is None or not profiler.enabled or not profiler.selected_for(label):
             result = kernel(
@@ -672,6 +937,47 @@ class MetalMoEExecutor:
         return self._launch(
             _QMV_LABELS.get(proj_name), kernel, inputs, x,
             (32, ((output_width + 7) // 8) * 2, tokens * slots), (32, 2, 1),
+            (tokens, slots, output_width),
+        )
+
+    def _metal_block(
+        self,
+        x: Any,
+        block: Any,
+        projection: Q4G32Projection,
+        output_width: int,
+        slot_input: bool,
+        slots: int,
+        slab_pack: Any = None,
+        stream_pack: Any = None,
+        proj_name: str = "",
+        gate_out: Any = None,
+    ) -> Any:
+        """Run one projection per distinct route, each applied to all its pairs.
+
+        With ``gate_out`` the up projection also applies SwiGLU, like
+        ``_metal_fused_up_swiglu``. The output has the per-pair layout.
+        """
+        group_routes, group_pairs = block
+        tokens, input_width = _shape(x)[0], _shape(x)[-1]
+        groups, rows = _shape(group_pairs)
+        inputs = self._pack_inputs(
+            [x, projection.weight, projection.scales, projection.biases,
+             group_routes, group_pairs],
+            slab_pack, stream_pack,
+        )
+        if gate_out is not None:
+            inputs.append(gate_out)
+        kernel = self._kernel(
+            "projection" if gate_out is None else "up_swiglu", x, tokens, slots,
+            input_width, output_width, proj_name=proj_name, slot_input=slot_input,
+            has_slab_pack=slab_pack is not None,
+            has_stream_pack=stream_pack is not None, block_rows=rows,
+        )
+        label = _QMV_LABELS.get(proj_name) if gate_out is None else "swiglu"
+        return self._launch(
+            label, kernel, inputs, x,
+            (32, ((output_width + 7) // 8) * 2, groups), (32, 2, 1),
             (tokens, slots, output_width),
         )
 
@@ -810,12 +1116,17 @@ class MetalMoEExecutor:
         shared: Any = None,
         shared_gate: Any = None,
         pool_activation: Any = None,
+        block: Any = None,
     ) -> Any:
         """Run gate, up, activation, and down for bounded flattened inputs.
 
         ``x`` has shape ``(tokens, hidden_size)`` and ``routes`` has shape
         ``(tokens, top_k)``.  Projections are a mapping with ``gate_proj``,
         ``up_proj``, and ``down_proj`` keys, or a three-item sequence.
+        ``block`` is a ``block_plan`` of the flattened routes
+        (``group_routes``, ``group_pairs``); gate, up and, outside the fused
+        down+combine kernel, down then read each distinct route's weights once
+        for all rows that use them, with unchanged per-pair results.
         """
         # Level-1 combine-only probes pass already projected values as the
         # first argument and scores as the third.  Keep this small API useful
@@ -855,6 +1166,10 @@ class MetalMoEExecutor:
             raise ValueError("x and routes must have the same token count")
         if not 1 <= tokens <= self.max_tokens:
             raise ValueError(f"tokens must be in 1..{self.max_tokens}")
+        if block is not None:
+            if pool_activation is not None:
+                raise ValueError("block kernels cannot use a precomputed pool activation")
+            _validate_block(block, tokens * route_shape[1])
         # Reading MLX route values with ``np.asarray`` forces a host sync.
         # The production route tensor is already bounded by the router.  Do
         # value validation only for NumPy callers, which are synchronous.
@@ -920,20 +1235,39 @@ class MetalMoEExecutor:
                 raise ValueError("invalid precomputed pool activation")
             activation = pool_activation
         else:
-            gate_out = self._metal_projection(
-                x, routes, gate, gate_width, False, slab_pack=slab_pack,
-                stream_pack=stream_pack, proj_name="gate_proj",
-            )
+            if block is not None:
+                gate_out = self._metal_block(
+                    x, block, gate, gate_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack, proj_name="gate_proj",
+                )
+            else:
+                gate_out = self._metal_projection(
+                    x, routes, gate, gate_width, False, slab_pack=slab_pack,
+                    stream_pack=stream_pack, proj_name="gate_proj",
+                )
         if pool_activation is None and self.fused_up_swiglu and not return_all:
-            activation = self._metal_fused_up_swiglu(
-                x, routes, gate_out, up, inter_width,
-                slab_pack=slab_pack, stream_pack=stream_pack,
-            )
+            if block is not None:
+                activation = self._metal_block(
+                    x, block, up, inter_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="up_proj", gate_out=gate_out,
+                )
+            else:
+                activation = self._metal_fused_up_swiglu(
+                    x, routes, gate_out, up, inter_width,
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                )
         elif pool_activation is None:
-            up_out = self._metal_projection(
-                x, routes, up, inter_width, False, slab_pack=slab_pack,
-                stream_pack=stream_pack, proj_name="up_proj",
-            )
+            if block is not None:
+                up_out = self._metal_block(
+                    x, block, up, inter_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack, proj_name="up_proj",
+                )
+            else:
+                up_out = self._metal_projection(
+                    x, routes, up, inter_width, False, slab_pack=slab_pack,
+                    stream_pack=stream_pack, proj_name="up_proj",
+                )
             from mlx_vlm.models.activations import swiglu
 
             if (
@@ -954,11 +1288,18 @@ class MetalMoEExecutor:
                 shared_y=shared_y, shared=shared, shared_gate=shared_gate,
             )
         else:
-            down_out = self._metal_projection(
-                activation, routes, down, self.hidden_size, True,
-                slab_pack=slab_pack, stream_pack=stream_pack,
-                proj_name="down_proj",
-            )
+            if block is not None:
+                down_out = self._metal_block(
+                    activation, block, down, self.hidden_size, True, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="down_proj",
+                )
+            else:
+                down_out = self._metal_projection(
+                    activation, routes, down, self.hidden_size, True,
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="down_proj",
+                )
             if scores is not None and not return_all:
                 # Keep the G64 reduction in MLX. The generic path uses the
                 # score dtype for the product and sum, while the fused kernel
@@ -981,6 +1322,25 @@ class MetalMoEExecutor:
             activation, routes, down, self.hidden_size, True
         )
         return gate_out, up_out, down_out
+
+
+def _validate_block(block: Any, pairs: int) -> None:
+    """Check a ``block_plan`` result against the number of (token, slot) pairs."""
+    if not isinstance(block, (tuple, list)) or len(block) != 2:
+        raise ValueError("block must be (group_routes, group_pairs)")
+    group_routes, group_pairs = block
+    route_shape, pair_shape = _shape(group_routes), _shape(group_pairs)
+    if len(route_shape) != 1 or len(pair_shape) != 2 or pair_shape[0] != route_shape[0]:
+        raise ValueError("block must be shaped (groups,) and (groups, rows)")
+    if pair_shape[1] not in BLOCK_ROWS:
+        raise ValueError(f"block rows must be one of {BLOCK_ROWS}")
+    if not 1 <= route_shape[0] <= pairs:
+        raise ValueError(f"block groups must be in 1..{pairs}")
+    for value in (group_routes, group_pairs):
+        if str(getattr(value, "dtype", None)) not in (
+            "mlx.core.uint32", "uint32", "<class 'numpy.uint32'>",
+        ):
+            raise TypeError("block arrays must be uint32")
 
 
 def _exp(value: Any) -> Any:
@@ -1031,6 +1391,8 @@ def _numpy_projection(
 
 __all__ = [
     "BITS",
+    "BLOCK_EMPTY",
+    "BLOCK_ROWS",
     "GROUP_SIZE",
     "MAX_EXPERTS",
     "MAX_TOKENS",
@@ -1041,6 +1403,7 @@ __all__ = [
     "MetalMoEExecutor",
     "Q4G32Projection",
     "SUPPORTED_GROUP_SIZES",
+    "block_plan",
     "probe_capabilities",
     "weighted_combine",
 ]

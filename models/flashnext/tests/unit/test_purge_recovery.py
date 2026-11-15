@@ -385,7 +385,8 @@ class BackendWiringTests(unittest.TestCase):
         backend = FlashNextBackendTests().backend()
         shrunk = []
         backend._prefix = object()
-        backend._prefix_session = lambda: SimpleNamespace(store=lambda: SimpleNamespace(shrink_ram=lambda n: shrunk.append(n) or 5))
+        backend._prefix_session = lambda: SimpleNamespace(
+            active_store=lambda: SimpleNamespace(shrink_ram=lambda n: shrunk.append(n) or 5))
         calm = P.Reading(page=1, free=int(10e9), pressure=1)
         backend.reclaim_owned_memory(calm)
         self.assertEqual(shrunk, [])                           # valuable RAM snapshots are kept

@@ -1,0 +1,34 @@
+[
+  {
+    "cell": [
+      "flashnext",
+      2048,
+      128,
+      "cold-process",
+      1
+    ],
+    "returncode": 90,
+    "guard_passed": false,
+    "status": "stopped",
+    "completion_tokens": [],
+    "stream_tok_s": [],
+    "guard": "results/flashnext/20261114-124642-stage11-2048-128-cold-process-r1/guard.jsonl",
+    "evidence": "results/flashnext/20261114-124642-stage11-2048-128-cold-process-r1/qualification.json"
+  },
+  {
+    "cell": [
+      "nemotron35",
+      2048,
+      128,
+      "cold-process",
+      1
+    ],
+    "returncode": 1,
+    "guard_passed": false,
+    "status": "stopped",
+    "completion_tokens": [],
+    "stream_tok_s": [],
+    "guard": "results/nemotron35/20261114-124952-stage11-2048-128-cold-process-r1/guard.jsonl",
+    "evidence": "results/nemotron35/20261114-124952-stage11-2048-128-cold-process-r1/qualification.json"
+  }
+]

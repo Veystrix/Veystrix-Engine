@@ -20,7 +20,10 @@ from models.flashnext.overnight import server_command
 class ProcessDriver:
     """Start one guarded CLI engine and prove its process group has exited on unload."""
     def __init__(self, *, pool_gb="0", prefix_dir=None, startup_timeout=1800, stop_timeout=60,
-                 command_factory=None, flashnext_kv_cache="bf16", flashnext_memory_policy=None, flashnext_speed=False):
+                 command_factory=None, flashnext_kv_cache="bf16", flashnext_memory_policy=None, flashnext_speed=False,
+                 flashnext_bounded_prefill=False):
+        if flashnext_speed and flashnext_bounded_prefill:
+            raise ValueError("the Flash-Next speed profile and the bounded prefill plan the prefill differently; choose one")
         self.pool_gb = pool_gb
         self.prefix_dir = prefix_dir
         self.startup_timeout = startup_timeout
@@ -28,6 +31,7 @@ class ProcessDriver:
         self.flashnext_kv_cache = flashnext_kv_cache
         self.flashnext_memory_policy = flashnext_memory_policy
         self.flashnext_speed = flashnext_speed
+        self.flashnext_bounded_prefill = flashnext_bounded_prefill
         self.command_factory = command_factory or self._command
         self.process = None
         self.port = None
@@ -42,8 +46,14 @@ class ProcessDriver:
         features = ["kv-tiered4"] if tiered else []
         if is_flashnext and self.flashnext_speed:
             features.append("short-throughput")
+        if is_flashnext and self.flashnext_bounded_prefill:
+            features.append("prefill-16gb")
+        # The pool setting is Flash-Next's. Nemotron sizes its own pool from the machine (none on a Mac that
+        # cannot hold its experts in memory, where a pool measured slower: models/nemotron35/admission.py).
+        # VEYSTRIX_NEMOTRON_POOL_GB in the router's environment still fixes a size.
+        nemotron_pool = os.environ.get("VEYSTRIX_NEMOTRON_POOL_GB") or "auto"
         args = Namespace(model=model.family, checkpoint=model.checkpoint, host="127.0.0.1", port=port,
-                         pool_gb=("auto" if model.family == "nemotron35-lightning" and self.pool_gb == "0" else self.pool_gb),
+                         pool_gb=(nemotron_pool if model.family == "nemotron35-lightning" else self.pool_gb),
                          enable=features, prefix_dir=self.prefix_dir,
                          preferences_file=None, no_auto_purge=is_flashnext and self.flashnext_memory_policy == "absolute-swap-only",
                          threshold=1.0 if tiered else None)

@@ -94,6 +94,9 @@ class G64IntegrationTests(unittest.TestCase):
                 "FLASHNEXT_SLAB_PACK": "1",
                 "FLASHNEXT_SLAB_GLOBAL": "60",
                 "FLASHNEXT_PIN_CACHE": "/nonexistent/g64-pins.json",
+                # A requested expert pool keeps the slab pack off for its own reason
+                # (and the planner requests one by default on hosts up to 16 GiB).
+                "FLASHNEXT_EXPERT_POOL_GB": "0",
             }, clear=False,
         ), mock.patch.object(expert_cache, "get_skew_slab_allocation", return_value={}), mock.patch(
             "models.flashnext.slab_pack.get_or_create_slab_pack"
@@ -120,6 +123,7 @@ class G64IntegrationTests(unittest.TestCase):
                     "FLASHNEXT_SLAB_PACK": "1",
                     "FLASHNEXT_SLAB_GLOBAL": "60",
                     "FLASHNEXT_PIN_CACHE": handle.name,
+                    "FLASHNEXT_EXPERT_POOL_GB": "0",   # no pool, so the slab path decides
                 }, clear=False,
             ):
                 switch = self._make()

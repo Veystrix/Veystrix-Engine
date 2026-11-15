@@ -38,6 +38,46 @@ class Int8AttentionTests(unittest.TestCase):
                 restored.append(k[..., :3, :], v[..., :3, :])
                 self.assertEqual([block.offset for block in restored.blocks], [8, 8, 1])
 
+    def test_one_token_decode_skips_the_per_block_evaluation_and_is_bit_identical(self):
+        import os
+
+        mx.random.seed(17)
+        scale = 64 ** -0.5
+        keys = mx.random.normal((1, 2, 30, 64)).astype(mx.bfloat16)
+        values = mx.random.normal((1, 2, 30, 64)).astype(mx.bfloat16)
+        steps = [(mx.random.normal((1, 4, 1, 64)).astype(mx.bfloat16),
+                  mx.random.normal((1, 2, 1, 64)).astype(mx.bfloat16)) for _ in range(5)]
+        chunk = mx.random.normal((1, 4, 3, 64)).astype(mx.bfloat16)
+        chunk_keys = mx.random.normal((1, 2, 3, 64)).astype(mx.bfloat16)
+
+        def run(flag):
+            environment = {attention.BLOCK_EVAL_FLAG: flag} if flag else {}
+            with patch.object(attention, "BLOCK_TOKENS", 8), patch.dict(os.environ, environment):
+                if not flag:
+                    os.environ.pop(attention.BLOCK_EVAL_FLAG, None)
+                cache = attention.AttentionCache()
+                cache.append(keys, values)
+                outputs = []
+                with patch.object(attention.mx, "eval", wraps=mx.eval) as evaluate:
+                    for query, key in steps:
+                        cache.append(key, key)
+                        outputs.append(attention.attend(query, cache, scale))
+                    decode_evaluations = evaluate.call_count
+                    cache.append(chunk_keys, chunk_keys)
+                    outputs.append(attention.attend(chunk, cache, scale))      # a prefill chunk stays bounded
+                    chunk_evaluations = evaluate.call_count - decode_evaluations
+                mx.eval(*outputs)
+                return outputs, decode_evaluations, chunk_evaluations
+
+        lazy, lazy_decode, lazy_chunk = run(None)
+        eager, eager_decode, eager_chunk = run("1")
+        self.assertEqual(lazy_decode, 0)
+        self.assertGreaterEqual(eager_decode, 5 * 4)         # at least four 8-token blocks per decoded token
+        self.assertGreater(lazy_chunk, 0)
+        self.assertEqual(lazy_chunk, eager_chunk)
+        for a, b in zip(lazy, eager, strict=True):
+            self.assertTrue(mx.array_equal(a, b).item())
+
     def test_admission_estimates_payload_and_keeps_swap_stop(self):
         gib = 2**30
         config = dict(EXPECTED, layers_block_type=LAYER_ORDER, max_position_embeddings=262144)

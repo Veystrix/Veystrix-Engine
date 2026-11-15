@@ -1,0 +1,291 @@
+{
+  "trace": "/Users/vincent/Documents/Veystrix/results/flashnext/20260922-221213-route-trace-manual/route-trace.json.gz",
+  "trace_sha256": "2228e7012b90f2b1a0c963e3708d10b94bd1879a5c2b6b86ade88438f08c84a7",
+  "record_bytes": 3211264,
+  "turns": null,
+  "decode_rows": 36864,
+  "decode_tokens": 768,
+  "weights": {
+    "version": 1,
+    "recent": 0.1,
+    "frequency": 0.2,
+    "reuse": 1.0,
+    "refill": 0.0,
+    "size": 0.0,
+    "alpha": 0.3
+  },
+  "weights_path": null,
+  "policies": [
+    "lru",
+    "cost-aware",
+    "belady"
+  ],
+  "prefetch_model": null,
+  "predictor": null,
+  "sizes": [
+    {
+      "gb": 1.0,
+      "slots": 311,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.0,
+          "prefill_resident_rate": 0.011268017853223093,
+          "decode_hits": 0,
+          "decode_total": 292103,
+          "misses": 292103,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 1221.3800106666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.3753573225882651,
+          "prefill_resident_rate": 0.00929245628155411,
+          "decode_hits": 109643,
+          "decode_total": 292103,
+          "misses": 182460,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 762.92608
+        },
+        "belady": {
+          "decode_hit_rate": 0.5385463346833138,
+          "prefill_resident_rate": 0.01982878466378869,
+          "decode_hits": 157311,
+          "decode_total": 292103,
+          "misses": 134792,
+          "decode_capacity": 311,
+          "demand_mb_per_token": 563.6102826666666
+        }
+      }
+    },
+    {
+      "gb": 2.0,
+      "slots": 622,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.4663491987415398,
+          "prefill_resident_rate": 0.020706812028974904,
+          "decode_hits": 136222,
+          "decode_total": 292103,
+          "misses": 155881,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 651.7904213333334
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.53075113915297,
+          "prefill_resident_rate": 0.02063364308187605,
+          "decode_hits": 155034,
+          "decode_total": 292103,
+          "misses": 137069,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 573.1311786666666
+        },
+        "belady": {
+          "decode_hit_rate": 0.6785962485835476,
+          "prefill_resident_rate": 0.03702348723201873,
+          "decode_hits": 198220,
+          "decode_total": 292103,
+          "misses": 93883,
+          "decode_capacity": 622,
+          "demand_mb_per_token": 392.5561173333333
+        }
+      }
+    },
+    {
+      "gb": 3.0,
+      "slots": 934,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.5794873726048688,
+          "prefill_resident_rate": 0.029048071998243944,
+          "decode_hits": 169270,
+          "decode_total": 292103,
+          "misses": 122833,
+          "decode_capacity": 934,
+          "demand_mb_per_token": 513.6057173333334
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.6034720629367039,
+          "prefill_resident_rate": 0.028535889368551986,
+          "decode_hits": 176276,
+          "decode_total": 292103,
+          "misses": 115827,
+          "decode_capacity": 934,
+          "demand_mb_per_token": 484.311296
+        },
+        "belady": {
+          "decode_hit_rate": 0.742779088198341,
+          "prefill_resident_rate": 0.04741347772005561,
+          "decode_hits": 216968,
+          "decode_total": 292103,
+          "misses": 75135,
+          "decode_capacity": 934,
+          "demand_mb_per_token": 314.16448
+        }
+      }
+    },
+    {
+      "gb": 4.0,
+      "slots": 1245,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.635909251188793,
+          "prefill_resident_rate": 0.03753566986171069,
+          "decode_hits": 185751,
+          "decode_total": 292103,
+          "misses": 106352,
+          "decode_capacity": 1245,
+          "demand_mb_per_token": 444.6931626666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.6517495540956444,
+          "prefill_resident_rate": 0.03716982512621644,
+          "decode_hits": 190378,
+          "decode_total": 292103,
+          "misses": 101725,
+          "decode_capacity": 1245,
+          "demand_mb_per_token": 425.34613333333334
+        },
+        "belady": {
+          "decode_hit_rate": 0.7828882277826658,
+          "prefill_resident_rate": 0.06358381502890173,
+          "decode_hits": 228684,
+          "decode_total": 292103,
+          "misses": 63419,
+          "decode_capacity": 1245,
+          "demand_mb_per_token": 265.17597866666665
+        }
+      }
+    },
+    {
+      "gb": 6.0,
+      "slots": 1868,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.7121837160179799,
+          "prefill_resident_rate": 0.05721811663130168,
+          "decode_hits": 208031,
+          "decode_total": 292103,
+          "misses": 84072,
+          "decode_capacity": 1868,
+          "demand_mb_per_token": 351.533056
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.7177365518327439,
+          "prefill_resident_rate": 0.056559596107412013,
+          "decode_hits": 209653,
+          "decode_total": 292103,
+          "misses": 82450,
+          "decode_capacity": 1868,
+          "demand_mb_per_token": 344.7509333333333
+        },
+        "belady": {
+          "decode_hit_rate": 0.8342536707942062,
+          "prefill_resident_rate": 0.08392478232238237,
+          "decode_hits": 243688,
+          "decode_total": 292103,
+          "misses": 48415,
+          "decode_capacity": 1868,
+          "demand_mb_per_token": 202.43925333333334
+        }
+      }
+    },
+    {
+      "gb": 8.0,
+      "slots": 2491,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.7581880364118136,
+          "prefill_resident_rate": 0.0823882344333065,
+          "decode_hits": 221469,
+          "decode_total": 292103,
+          "misses": 70634,
+          "decode_capacity": 2491,
+          "demand_mb_per_token": 295.3442986666667
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.7615395939103672,
+          "prefill_resident_rate": 0.08297358601009731,
+          "decode_hits": 222448,
+          "decode_total": 292103,
+          "misses": 69655,
+          "decode_capacity": 2491,
+          "demand_mb_per_token": 291.2507733333333
+        },
+        "belady": {
+          "decode_hit_rate": 0.8680499686754329,
+          "prefill_resident_rate": 0.11304602326772517,
+          "decode_hits": 253560,
+          "decode_total": 292103,
+          "misses": 38543,
+          "decode_capacity": 2491,
+          "demand_mb_per_token": 161.16113066666665
+        }
+      }
+    },
+    {
+      "gb": 12.0,
+      "slots": 3736,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.8261092833692225,
+          "prefill_resident_rate": 0.1292163605765713,
+          "decode_hits": 241309,
+          "decode_total": 292103,
+          "misses": 50794,
+          "decode_capacity": 3736,
+          "demand_mb_per_token": 212.38664533333335
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.8279784870405302,
+          "prefill_resident_rate": 0.12943586741786786,
+          "decode_hits": 241855,
+          "decode_total": 292103,
+          "misses": 50248,
+          "decode_capacity": 3736,
+          "demand_mb_per_token": 210.10363733333335
+        },
+        "belady": {
+          "decode_hit_rate": 0.9041399780214513,
+          "prefill_resident_rate": 0.16016682519938538,
+          "decode_hits": 264102,
+          "decode_total": 292103,
+          "misses": 28001,
+          "decode_capacity": 3736,
+          "demand_mb_per_token": 117.08151466666668
+        }
+      }
+    },
+    {
+      "gb": 16.0,
+      "slots": 4982,
+      "policies": {
+        "lru": {
+          "decode_hit_rate": 0.8694467362539926,
+          "prefill_resident_rate": 0.17033730884612572,
+          "decode_hits": 253968,
+          "decode_total": 292103,
+          "misses": 38135,
+          "decode_capacity": 4982,
+          "demand_mb_per_token": 159.45514666666665
+        },
+        "cost-aware": {
+          "decode_hit_rate": 0.870035569644954,
+          "prefill_resident_rate": 0.17041047779322455,
+          "decode_hits": 254140,
+          "decode_total": 292103,
+          "misses": 37963,
+          "decode_capacity": 4982,
+          "demand_mb_per_token": 158.73595733333335
+        },
+        "belady": {
+          "decode_hit_rate": 0.9242630168125627,
+          "prefill_resident_rate": 0.22718958074193313,
+          "decode_hits": 269980,
+          "decode_total": 292103,
+          "misses": 22123,
+          "decode_capacity": 4982,
+          "demand_mb_per_token": 92.50363733333333
+        }
+      }
+    }
+  ]
+}

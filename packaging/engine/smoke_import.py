@@ -18,7 +18,13 @@ import importlib, os, sys
 lib = os.environ["PYTHONPATH"]
 for std in ("sqlite3", "ssl", "zlib", "json", "plistlib", "ctypes", "hashlib", "http.server"):
     importlib.import_module(std)      # stdlib pieces the engine needs must survive the size trimming
-for name in ("veystrix", "veystrix.api_keys", "models.flashnext.settings.registry", "models.flashnext.memory_policy", "models.flashnext.chat_guard", "models.flashnext.tests.bench.layer_gate_probe", "models.flashnext.overnight", "models.shared.prompt_lookup", "veystrix.cli", "veystrix.session"):
+for name in ("veystrix", "veystrix.api_keys", "models.flashnext.settings.registry", "models.flashnext.memory_policy", "models.flashnext.chat_guard", "models.flashnext.tests.bench.layer_gate_probe", "models.flashnext.overnight", "models.shared.prompt_lookup", "veystrix.cli", "veystrix.session",
+             # What a model launch imports: both runtimes, the server and its schedulers, and the telemetry
+             # hooks the engine modules import at load. A bundle that prunes one of these cannot start a model.
+             "veystrix.bench.telemetry", "veystrix.bench.memory", "veystrix.server", "veystrix.batch_scheduler",
+             "veystrix.backends.cooperative", "veystrix.backends.flashnext", "veystrix.backends.nemotron35",
+             "models.flashnext.expert_cache", "models.flashnext.speculative", "models.flashnext.prefill",
+             "models.flashnext.prefill_16gb", "models.nemotron35.backend_core", "models.nemotron35.streamed_model"):
     m = importlib.import_module(name)
     f = getattr(m, "__file__", None) or ""
     assert f.startswith(lib), f"{name} came from {f!r}, not the bundle"
@@ -42,7 +48,7 @@ except ImportError:
 import mlx_vlm  # noqa: F401  (imports the package only; no model, no Metal session)
 print("imports ok")
 """
-for required in (python, lib / "models/flashnext/overnight.pyc", lib / "veystrix/cli.pyc", lib / "veystrix/session.pyc", lib / "models/flashnext/tests/bench/prefill_memory_harness.pyc", lib / "models/flashnext/tests/bench/bench_prefill_memory.pyc", lib / "models/flashnext/tests/bench/layer_gate_probe.pyc", lib / "models/nemotron35/inventory.pyc", lib / "veystrix/backends/nemotron35.pyc"):
+for required in (python, lib / "models/flashnext/overnight.pyc", lib / "veystrix/cli.pyc", lib / "veystrix/session.pyc", lib / "models/flashnext/tests/bench/prefill_memory_harness.pyc", lib / "models/flashnext/tests/bench/bench_prefill_memory.pyc", lib / "models/flashnext/tests/bench/layer_gate_probe.pyc", lib / "models/nemotron35/inventory.pyc", lib / "veystrix/backends/nemotron35.pyc", lib / "veystrix/bench/telemetry.pyc", lib / "veystrix/bench/memory.pyc"):
     if not required.is_file():
         sys.exit(f"mandatory bundle resource missing: {required}")
 if not os.access(python, os.X_OK):

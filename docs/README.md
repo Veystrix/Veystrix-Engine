@@ -36,6 +36,7 @@ collect runtime-specific correctness and experiment constraints.
 | Path | Purpose |
 |---|---|
 | [`measurement-standard.md`](measurement-standard.md) | Shared live-test and JSONL evidence rules |
+| [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) | Using the engine from other devices over Tailscale |
 | [`results/flashnext/`](../results/flashnext/) | Retained Flash-Next records |
 | [`flashnext/graphics/`](flashnext/graphics/) | Flash-Next trace graphics and plots |
 | [`MLX/`](MLX/) | MLX Metal backend source notes; reference material, not workflow instructions |

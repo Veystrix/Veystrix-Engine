@@ -70,14 +70,14 @@ def enabled() -> bool:
 
 
 @contextlib.contextmanager
-def exclusive_request():
+def exclusive_request(*, elastic=False):
     """Serialize requests while an opt-in policy can change shared GPU ownership.
 
     Keep the lock through cleanup so another request cannot start between the
     idle check and resource release. Nested generation would deadlock and is
     rejected before touching inference state.
     """
-    active = (enabled() or os.environ.get("FLASHNEXT_MEMORY_MANAGER", "0") == "1"
+    active = (elastic or enabled() or os.environ.get("FLASHNEXT_MEMORY_MANAGER", "0") == "1"
               or os.environ.get("FLASHNEXT_AUTO_MEMORY_RECLAIM", "0") == "1")
     if not active:
         yield

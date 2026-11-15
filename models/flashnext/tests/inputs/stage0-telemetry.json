@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "checkpoint-free fixture",
+  "computed_prefill_tokens": 16,
+  "physical_read_bytes": 120000000,
+  "io_wait_ns": 60000000,
+  "events": [
+    {"event": "admission", "ns": 0},
+    {"event": "tokenization_start", "ns": 1000000},
+    {"event": "tokenization_end", "ns": 2000000},
+    {"event": "prefix_lookup_start", "ns": 3000000},
+    {"event": "prefix_lookup_end", "ns": 6000000},
+    {"event": "prefill_start", "ns": 10000000},
+    {"event": "first_logits_ready", "ns": 50000000},
+    {"event": "decode_start", "ns": 60000000},
+    {"event": "token_emitted", "ns": 60000000},
+    {"event": "draft_round", "ns": 70000000, "duration_ns": 5000000, "proposed": 2},
+    {"event": "target_round", "ns": 120000000, "duration_ns": 50000000, "positions": 3, "verification": true, "accepted": 2},
+    {"event": "token_emitted", "ns": 130000000},
+    {"event": "token_emitted", "ns": 150000000},
+    {"event": "decode_commit", "ns": 160000000}
+  ],
+  "ids": [11, 12, 13],
+  "repeated_stream_rates": [20, 21, 22, 23, 24]
+}

@@ -258,26 +258,12 @@ def _model_fingerprint(model_dir: Path) -> str:
 
 
 def _tokenizer_fingerprint(model_dir: Path) -> str:
-    digest = hashlib.sha256(b"flashnext-tokenizer-v1")
-    found = False
-    for name in (
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "special_tokens_map.json",
-        "added_tokens.json",
-        "chat_template.jinja",
-        "vocab.json",
-        "merges.txt",
-        "tokenizer.model",
-        "spiece.model",
-    ):
-        path = model_dir / name
-        if path.is_file():
-            _hash_file(digest, path, name)
-            found = True
-    if not found:
+    from veystrix.checkpoints import tokenizer_fingerprint
+
+    digest = tokenizer_fingerprint(model_dir)
+    if digest is None:
         raise SessionError(f"tokenizer not found: {model_dir}")
-    return digest.hexdigest()
+    return digest
 
 
 def _engine_fingerprint(language: Any) -> str:

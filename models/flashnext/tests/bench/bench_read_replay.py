@@ -162,7 +162,7 @@ def main() -> int:
                 projection.to_mx(chunks)
         return len(wanted)
 
-    from models.flashnext.tests.bench import native_read
+    from models.flashnext import native_read
 
     def native_layer(layer, experts):
         """Production destinations, one native call per layer."""

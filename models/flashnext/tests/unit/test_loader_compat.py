@@ -12,13 +12,14 @@ from mlx_vlm.models.qwen4_exp.language import Qwen4ExpRMSNorm
 
 from models.flashnext import loader
 from models.flashnext.loader import _ngram_shard_prefix, _norm_one_centered
-from models.flashnext.patch_rmsnorm import apply, configure
+from models.flashnext.patch_rmsnorm import apply, configure, restore
 
 
 class LoaderCompatibilityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        apply()
+        if apply():                    # process-wide: undo it when this class installed it
+            cls.addClassCleanup(restore)
 
     def setUp(self):
         self._clean_norm_env = patch.dict(os.environ, {"FLASHNEXT_NORM_CONVENTION": ""})

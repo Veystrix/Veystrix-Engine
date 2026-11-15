@@ -71,7 +71,8 @@ public struct LaunchPlan: Equatable, Sendable {
             }
         }
 
-        // Nemotron's expert pool is sized from free memory when the setting is left at "none" (0 would disable it).
+        // The pool setting applies to Qwen only. The engine sizes Nemotron's pool itself (model_process.py):
+        // VEYSTRIX_NEMOTRON_POOL_GB when set, otherwise automatic, which is no pool on a 16 GB Mac.
         let poolArgument = String(settings.decodePool.rawValue)
         var args = ["-m", "veystrix.model_router",
                     "--host", "127.0.0.1",                       // loopback only, always
@@ -82,6 +83,7 @@ public struct LaunchPlan: Equatable, Sendable {
         args += ["--flashnext-kv-cache", settings.flashNextKVCache.rawValue,
                  "--flashnext-memory-policy", "absolute-swap-only"]
         if settings.flashNextSpeed { args.append("--flashnext-speed") }
+        if settings.flashNextBoundedPrefill { args.append("--flashnext-bounded-prefill") }
         if settings.supervisedRestarts { args.append("--overnight") }
         // The router forwards the shared cache location when either model starts.
         if !settings.cacheDirectory.isEmpty { args += ["--prefix-dir", settings.cacheDirectory] }
@@ -99,6 +101,9 @@ public struct LaunchPlan: Equatable, Sendable {
         env["VEYSTRIX_USAGE_LOG"] = UsageStore(paths: paths).requestsFile.path
         env["VEYSTRIX_CACHE_GB"] = String(settings.cacheQuotaGB)
         env["VEYSTRIX_NEMOTRON_CONTEXT"] = String(settings.nemotronContextTokens)
+        // 1M is the default; past the declared 262,144 positions the output is
+        // unvalidated, so the engine's strict LCT-05 gate stays off by default.
+        env["VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT"] = settings.nemotronContextTokens > 262_144 ? "1" : "0"
         env["VEYSTRIX_NEMOTRON_KV"] = settings.nemotronKVCache.rawValue
         for (prefix, options) in [("FLASHNEXT", settings.flashNextPerformance), ("VEYSTRIX_NEMOTRON", settings.nemotronPerformance)] {
             env["\(prefix)_PROMPT_LOOKUP"] = options.decoder == .promptLookup ? "1" : "0"
@@ -116,6 +121,8 @@ public struct LaunchPlan: Equatable, Sendable {
         if !settings.nemotronMTPPath.isEmpty { env["VEYSTRIX_NEMOTRON_MTP_PATH"] = settings.nemotronMTPPath }
         // When memory is short the engine purges the macOS file cache by itself (conditional, never during a request;
         // needs the narrow `sudo -n /usr/sbin/purge` permission, otherwise it records that and backs off).
+        // This reaches Nemotron only: with the absolute-swap-only policy passed above, the router starts Qwen
+        // with --no-auto-purge (model_process.py), which is why Qwen's engine log says "auto purge off".
         env["FLASHNEXT_AUTO_PURGE"] = "1"
         // Choosing Nemotron and pressing Start (after the load confirmation) is the approval for real inference.
         if settings.selectedModel == .nemotron35 { env["VEYSTRIX_NEMOTRON_AUTHORIZED"] = "1" }

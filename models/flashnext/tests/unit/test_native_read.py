@@ -9,7 +9,7 @@ import unittest
 import mlx.core as mx
 import numpy as np
 
-from models.flashnext.tests.bench import native_read
+from models.flashnext import native_read
 from models.flashnext.store import SafeTensorStore
 
 

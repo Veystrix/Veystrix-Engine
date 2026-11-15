@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "status": "stopped",
+  "model": "flashnext",
+  "checkpoint": "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+  "prompt_tokens": 512,
+  "output_tokens": 128,
+  "mode": "cold-process",
+  "concurrency": 1,
+  "warmup_excluded_tokens": 0,
+  "expected_token_sha256": null,
+  "reference_host": {
+    "code": {
+      "commit": "c720225446de3a8959b2c975051285c81dffc7cd",
+      "tracked_diff_sha256": "c7c6c2595a99a9061ffaece2e2676435c98f6ef6a9f81e2c116aa58fc52110f8"
+    },
+    "dependencies": {
+      "python": "3.12.16",
+      "mlx": "0.32.2",
+      "mlx-lm": "0.31.3",
+      "mlx-vlm": "0.6.17"
+    },
+    "host": {
+      "platform": "macOS-27.2-arm64-arm-64bit",
+      "macos": "27.2",
+      "model": "Mac16,12",
+      "soc": "Apple M4",
+      "ram_bytes": 17179869184,
+      "storage": {
+        "device": null,
+        "media": null,
+        "solid_state": null,
+        "device_bytes": null,
+        "filesystem_bytes": 494384795648,
+        "filesystem_free_bytes": 156652232704
+      },
+      "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35586147)\t79%; AC attached; not charging present: true",
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+    }
+  },
+  "checkpoint_metadata": {
+    "config.json": "4efd5f41c47e8de9f55c678df4a237cbbc78e4d517dad42a906889f7d94f79a2",
+    "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+    "model.safetensors.index.json": "8848503860c7da8619fdc8d5e65201868f8f1d21d69d2e21166c95522379ff77",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+    "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+  },
+  "checkpoint_shards": {
+    "model-00001-of-00022.safetensors": {
+      "bytes": 5283195887,
+      "mtime_ns": 1794028757585619374,
+      "inode": 18871185
+    },
+    "model-00002-of-00022.safetensors": {
+      "bytes": 5250035137,
+      "mtime_ns": 1794028507855989047,
+      "inode": 18871197
+    },
+    "model-00003-of-00022.safetensors": {
+      "bytes": 5250035154,
+      "mtime_ns": 1794028392616535658,
+      "inode": 18871202
+    },
+    "model-00004-of-00022.safetensors": {
+      "bytes": 5250035160,
+      "mtime_ns": 1794028434582596464,
+      "inode": 18871207
+    },
+    "model-00005-of-00022.safetensors": {
+      "bytes": 5250035164,
+      "mtime_ns": 1794028537784968397,
+      "inode": 18871214
+    },
+    "model-00006-of-00022.safetensors": {
+      "bytes": 5250035184,
+      "mtime_ns": 1794028473960828078,
+      "inode": 18871218
+    },
+    "model-00007-of-00022.safetensors": {
+      "bytes": 5067850140,
+      "mtime_ns": 1794028571729454869,
+      "inode": 18871222
+    },
+    "model-00008-of-00022.safetensors": {
+      "bytes": 5337131618,
+      "mtime_ns": 1794028682138434097,
+      "inode": 18871226
+    },
+    "model-00009-of-00022.safetensors": {
+      "bytes": 5337131558,
+      "mtime_ns": 1794029049520326241,
+      "inode": 18871798
+    },
+    "model-00010-of-00022.safetensors": {
+      "bytes": 4970130103,
+      "mtime_ns": 1794029148671804825,
+      "inode": 18871815
+    },
+    "model-00011-of-00022.safetensors": {
+      "bytes": 5341257482,
+      "mtime_ns": 1794029275665555937,
+      "inode": 18871821
+    },
+    "model-00012-of-00022.safetensors": {
+      "bytes": 4967968541,
+      "mtime_ns": 1794029281593312006,
+      "inode": 18872828
+    },
+    "model-00013-of-00022.safetensors": {
+      "bytes": 5337131651,
+      "mtime_ns": 1794029202635885397,
+      "inode": 18873834
+    },
+    "model-00014-of-00022.safetensors": {
+      "bytes": 5337131799,
+      "mtime_ns": 1794029385226886102,
+      "inode": 18876619
+    },
+    "model-00015-of-00022.safetensors": {
+      "bytes": 4970130195,
+      "mtime_ns": 1794029673928663686,
+      "inode": 18884936
+    },
+    "model-00016-of-00022.safetensors": {
+      "bytes": 5341257440,
+      "mtime_ns": 1794029673540097610,
+      "inode": 18885079
+    },
+    "model-00017-of-00022.safetensors": {
+      "bytes": 4967968481,
+      "mtime_ns": 1794029997527229050,
+      "inode": 18887149
+    },
+    "model-00018-of-00022.safetensors": {
+      "bytes": 5337131695,
+      "mtime_ns": 1794029944272166553,
+      "inode": 18887169
+    },
+    "model-00019-of-00022.safetensors": {
+      "bytes": 5337131801,
+      "mtime_ns": 1794029916709353045,
+      "inode": 18887260
+    },
+    "model-00020-of-00022.safetensors": {
+      "bytes": 4970130135,
+      "mtime_ns": 1794030003223747662,
+      "inode": 18887292
+    },
+    "model-00021-of-00022.safetensors": {
+      "bytes": 5341257436,
+      "mtime_ns": 1794029995459677664,
+      "inode": 18887301
+    },
+    "model-00022-of-00022.safetensors": {
+      "bytes": 3715570974,
+      "mtime_ns": 1794030003911309807,
+      "inode": 18887328
+    }
+  },
+  "harness_sha256": "9706b61a6a2759e17a6de176d1ff756c4b5585db3b35980786c306f8c8b0aaf3",
+  "checkpoint_content_sha256": null,
+  "rows": [],
+  "error": "KeyboardInterrupt: ",
+  "gate": {
+    "passed": false,
+    "reason": "Assess after the external guard has written its terminal record"
+  }
+}

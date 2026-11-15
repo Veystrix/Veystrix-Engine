@@ -229,6 +229,7 @@ class EngineCore:
             mx.eval(logits)
             return logits
         finally:
+            pool._ahead_layer = None         # a cancelled segment must not start more read-ahead from end_layer
             pool.end_layer()
             pool.restore_staged_budget()     # prefetch_layer raised it to a full layer for this segment only
             pool.speculate = True

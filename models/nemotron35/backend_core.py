@@ -19,6 +19,13 @@ from .attention import AttentionCache
 
 
 PREFILL_CACHE_LIMIT_MB = 512
+# Layer-major prefill read-ahead order. The staging area holds one layer. The old order asked for the next layer's
+# experts when a MoE layer began, while the area still held that layer's own unread experts, so the request issued one
+# read and every second MoE layer was then read on demand (night profile of 16 November 2026, 8,192 tokens: 12 of 23
+# layers read 92-110 experts on demand, 4.6 s of waiting). The default now asks right after the layer's first chunk has
+# taken its experts out of the staging area, and asks for the first MoE layer before layer 0 runs. Which experts are read
+# and what is computed are unchanged. "legacy" restores the old order.
+PREFETCH_ORDER_FLAG = "VEYSTRIX_NEMOTRON_PREFETCH_ORDER"
 
 
 class EngineCore:
@@ -161,8 +168,11 @@ class EngineCore:
         following = dict(zip(moe, moe[1:]))
         counter = 0
         seed = not verify and os.environ.get("VEYSTRIX_NEMOTRON_PREFILL_SEED_DECODE") == "1"
+        legacy_order = os.environ.get(PREFETCH_ORDER_FLAG, "") == "legacy"
         pool.speculate = False
         try:
+            if not legacy_order and moe and not verify and anchor_cache is None:
+                pool.prefetch_layer(moe[0])           # reads overlap the embeddings and the layers before the first MoE
             for index, layer in enumerate(backbone.layers):
                 if cancelled():
                     raise Cancelled()
@@ -172,8 +182,9 @@ class EngineCore:
                     counter += 1
                 if layer.block_type == 'E':
                     pool.begin_layer(index, seed=seed)
-                    if not verify and anchor_cache is None and index in following:
-                        pool.prefetch_layer(following[index])     # overlap the next layer's reads with this compute
+                ahead = layer.block_type == 'E' and not verify and anchor_cache is None and index in following
+                if ahead and legacy_order:
+                    pool.prefetch_layer(following[index])     # overlap the next layer's reads with this compute
                 for j, h in enumerate(hidden):
                     if layer.block_type == '*':
                         mask = create_attention_mask(h, cache)
@@ -182,6 +193,8 @@ class EngineCore:
                     else:
                         mask = None
                     hidden[j] = layer(h, mask=mask, cache=cache)
+                    if ahead and j == 0 and not legacy_order:
+                        pool.prefetch_layer(following[index])  # this layer's experts have left the staging area
                     if cache is not None and j == len(hidden) - 1:
                         mx.eval(hidden[j], *[a for a in cache.state if a is not None])
                     else:

@@ -379,6 +379,7 @@ class ExpertPool:
         self.view_hits = self.resident_hits = 0       # mapped experts: served by a pooled view / by the file cache
         self.gather_calls = self.gather_over_cap = 0  # VEYSTRIX_NEMOTRON_GATHER: calls taken / refused by the cap
         self.evict_staged = os.environ.get(STAGED_EVICT_FLAG) == '1'
+        self._ahead_layer = None                      # layer-major prefill: the layer prefetch_layer asked for last
         self.decode_read_ahead = os.environ.get(DECODE_READ_AHEAD_FLAG, '0') == '1'
 
     # -- layer scope (layer-major prefill) ---------------------------------------------------------------------
@@ -403,6 +404,19 @@ class ExpertPool:
                     self.resident_bytes += size
                     self.seeded_bytes += size
                 break
+        if self._ahead_layer is not None and os.environ.get('VEYSTRIX_NEMOTRON_PREFETCH_ORDER', '') != 'legacy':
+            # The layer is done: its unread staged experts will not be asked for again. Free that budget for the
+            # next layer's read-ahead, which stopped early while they were still counted.
+            if self._held_layer is not None and self._ahead_layer != self._held_layer:
+                with self._lock:
+                    for key in [key for key in self._staged if key[0] == self._held_layer]:
+                        _, size = self._staged.pop(key)
+                        self._staged_total -= size
+                        self.prefetch_wasted += 1
+                        self._history_keys.discard(key)
+                self.prefetch(self._ahead_layer, range(self.reader.expert_count))
+            else:
+                self._ahead_layer = None          # nothing left to read ahead for (the last MoE layer of the segment)
         self._held, self._held_layer = None, None
         self._held_routes = None
 
@@ -415,6 +429,18 @@ class ExpertPool:
         The staging area is raised to one full layer for the duration of the call's reads."""
         need = self.reader.expert_count * self.reader.expert_bytes + self.reader.expert_bytes
         self.staged_budget = max(self.staged_budget, need)
+        if os.environ.get('VEYSTRIX_NEMOTRON_PREFETCH_ORDER', '') != 'legacy':
+            # Layer-major prefill never reuses another layer's staged experts, but the ones the router did not pick
+            # stay in the area and use up its budget: the profile of 16 November 2026 showed 30, 43, ... 78 stale
+            # experts piling up, so each later layer got fewer reads ahead of time (86, 80, 71, ... 31 of 128).
+            self._ahead_layer = layer
+            with self._lock:
+                # The layer in flight keeps its staged experts: its later chunks may still need them.
+                for key in [key for key in self._staged if key[0] != layer and key[0] != self._held_layer]:
+                    _, size = self._staged.pop(key)
+                    self._staged_total -= size
+                    self.prefetch_wasted += 1
+                    self._history_keys.discard(key)
         return self.prefetch(layer, range(self.reader.expert_count))
 
     def restore_staged_budget(self) -> None:

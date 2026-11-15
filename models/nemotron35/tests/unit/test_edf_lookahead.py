@@ -318,6 +318,34 @@ class PoolIntegrationTest(unittest.TestCase):
                 finally:
                     pool.close()
 
+    def test_layer_prefetch_drops_staged_experts_of_other_layers(self):
+        class Reader(FakeReader):
+            expert_bytes = 16
+
+        def settle(pool, count):
+            deadline = time.monotonic() + 2
+            while len(pool._staged) < count and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        for order, left_over in (("", 0), ("legacy", 3)):
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_PREFETCH_ORDER": order,
+                                                       "VEYSTRIX_NEMOTRON_EDF_IO": "0",
+                                                       "VEYSTRIX_NEMOTRON_LOOKAHEAD_LAYERS": "0"}):
+                pool = ExpertPool(Reader(), 0, workers=1, prefetch_workers=2, staged_bytes=32)
+                try:
+                    self.assertEqual(pool.prefetch_layer(4), 16)
+                    settle(pool, 16)
+                    self.assertEqual(set(pool.fetch(4, [0, 1, 2])), {0, 1, 2})   # the router used three of sixteen
+                    self.assertEqual(len([key for key in pool._staged if key[0] == 4]), 13)
+                    pool.prefetch_layer(7)
+                    settle(pool, 16)
+                    stale = [key for key in pool._staged if key[0] == 4]
+                    self.assertEqual(len(stale), 13 if order == "legacy" else 0)
+                    self.assertEqual(pool.stats()["prefetch_wasted"] >= (0 if order == "legacy" else 13), True)
+                    self.assertEqual(set(pool.fetch(7, [3, 9])), {3, 9})        # the next layer is served either way
+                finally:
+                    pool.close()
+
     def test_deadline_executor_receives_layer_deadlines(self):
         reader = FakeReader()
         with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EDF_IO": "1",

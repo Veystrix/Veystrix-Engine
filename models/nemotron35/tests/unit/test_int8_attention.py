@@ -52,6 +52,7 @@ class Int8AttentionTests(unittest.TestCase):
 
         def run(flag):
             environment = {attention.BLOCK_EVAL_FLAG: flag} if flag else {}
+            environment[attention.PREFILL_SDPA_FLAG] = "0"          # this test is about the block loop
             with patch.object(attention, "BLOCK_TOKENS", 8), patch.dict(os.environ, environment):
                 if not flag:
                     os.environ.pop(attention.BLOCK_EVAL_FLAG, None)
@@ -77,6 +78,36 @@ class Int8AttentionTests(unittest.TestCase):
         self.assertEqual(lazy_chunk, eager_chunk)
         for a, b in zip(lazy, eager, strict=True):
             self.assertTrue(mx.array_equal(a, b).item())
+
+    def test_prefill_sdpa_matches_the_block_loop_within_bfloat16_and_leaves_decode_alone(self):
+        import os
+
+        mx.random.seed(23)
+        scale = 64 ** -0.5
+        keys = mx.random.normal((1, 2, 30, 64)).astype(mx.bfloat16)
+        values = mx.random.normal((1, 2, 30, 64)).astype(mx.bfloat16)
+        chunk_q = mx.random.normal((1, 4, 7, 64)).astype(mx.bfloat16)
+        step_q = mx.random.normal((1, 4, 1, 64)).astype(mx.bfloat16)
+
+        def run(flag):
+            with patch.object(attention, "BLOCK_TOKENS", 8), patch.object(attention, "QUERY_TOKENS", 4), \
+                    patch.dict(os.environ, {attention.PREFILL_SDPA_FLAG: flag}):
+                cache = attention.AttentionCache()
+                cache.append(keys[..., :23, :], values[..., :23, :])
+                cache.append(keys[..., 23:, :], values[..., 23:, :])        # the chunk being attended is the last 7
+                chunk = attention.attend(chunk_q, cache, scale)
+                cache.append(keys[..., :1, :], values[..., :1, :])
+                step = attention.attend(step_q, cache, scale)
+                return chunk, step, cache
+
+        loop_chunk, loop_step, _ = run("0")
+        sdpa_chunk, sdpa_step, cache = run("1")
+        self.assertGreater(len(cache.blocks), 1)
+        self.assertLess(float(mx.max(mx.abs(loop_chunk.astype(mx.float32) - sdpa_chunk.astype(mx.float32))).item()), 0.03)
+        self.assertTrue(mx.array_equal(loop_step, sdpa_step).item())          # one-token decode never takes the new path
+        self.assertTrue(attention.prefill_sdpa_enabled())                       # on by default
+        with patch.dict(os.environ, {attention.PREFILL_SDPA_FLAG: "0"}):
+            self.assertFalse(attention.prefill_sdpa_enabled())
 
     def test_admission_estimates_payload_and_keeps_swap_stop(self):
         gib = 2**30

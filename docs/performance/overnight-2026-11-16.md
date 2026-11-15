@@ -44,3 +44,11 @@ Same experts are read, same arithmetic: token digest identical (`3abc72800267a32
 | final: purge other layers only, free the finished layer's leftovers at `end_layer` and top the next layer up | 287.4 / 287.0 (legacy 249.6 in between) | 15.4 | 0.95-0.98 |
 
 +15% prefill, exact. SSD bytes read in the 8,192-token prefill rise from 21.2 to 22.7 GB (whole layers are read ahead, the router uses about 100 of 128 experts); the SSD is not the limit there. Evidence: `results/nemotron35/*night-prefetch-*`, `*night-prefill-profile-base*`.
+
+## Result 2: fused attention for prefill over long histories (adopted, default on)
+
+`models/nemotron35/attention.py`: when a prefill chunk sees more than one 4,096-token block, dequantize the INT8 history and run `mx.fast.scaled_dot_product_attention` instead of the Python block loop (which evaluated after every block and ran in fp32 `quantized_matmul`). The single-block path always did this. Decode keeps the block loop. Rollback `VEYSTRIX_NEMOTRON_ATTENTION_PREFILL_SDPA=0`. Part of the session identity when on, so existing prefix snapshots will not be restored once after the upgrade.
+
+Per layer, one 2,048-token chunk (real attention shape, random K/V): history 8K 284 -> 83 ms, 16K 544 -> 178 ms, 30K 979 -> 347 ms. Real 12,288-token natural-text prefill: 260.5 -> 294.5 tok/s.
+
+Quality, not just speed. Against an fp32 reference (8K history, 256 queries) the RMS error is 3.1e-5 for the fused path (the rounding of the bf16 output itself) and 5.2e-5 for the block loop, so the fused path is the more accurate one. It is not bit-identical to the loop (about half the bf16 outputs differ by one step). On the real checkpoint the last-position logits (12,288 tokens) differ from the loop by KL 0.0136, mean |d| 0.145, same top-20 tokens, same top-1; halving the prefill chunk size alone gives KL 0.0070, mean |d| 0.070. Evidence: `results/nemotron35/*night-attn-*`.

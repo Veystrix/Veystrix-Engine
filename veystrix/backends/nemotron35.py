@@ -864,7 +864,7 @@ class NemotronBackend(Conversation):
 
     def _session_identity(self) -> dict:
         if self._identity is None:
-            from models.nemotron35 import streamed_experts
+            from models.nemotron35 import attention, streamed_experts
             from models.nemotron35.mamba_scan import fingerprint
 
             root = Path(self.model_path)
@@ -883,6 +883,8 @@ class NemotronBackend(Conversation):
                 # Absent when both flags are off, which keeps every existing snapshot and session valid.
                 **({"expert_kernel": {"gather": streamed_experts.GATHER, "exact_rows": streamed_experts.EXACT_ROWS}}
                    if streamed_experts.GATHER or streamed_experts.EXACT_ROWS else {}),
+                # Prefill attention over long histories rounds differently under this flag, so the same rule applies.
+                **({"attention_prefill": "sdpa"} if attention.prefill_sdpa_enabled() else {}),
                 "weight_index": digest("model.safetensors.index.json"),
                 "weights": [(name, info.st_size, info.st_mtime_ns, info.st_ino)
                             for name in sorted(set(index["weight_map"].values()))

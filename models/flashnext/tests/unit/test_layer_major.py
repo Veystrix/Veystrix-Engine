@@ -419,6 +419,11 @@ class PrefillIntegrationTests(unittest.TestCase):
         self.assertEqual(token_single, want_token)
         self.assertEqual(cache_bits(cache_single), cache_bits(want_cache))
         self.assertEqual(token, want_token)
+        with mock.patch.dict(os.environ, {"FLASHNEXT_LAYER_MAJOR_SINGLE": "1"}):       # hybrid does not undo it
+            token_h, cache_h, _, trace_h = self.run_prefill("layer", window=128, prompt=prompt, hybrid=True)
+        self.assertEqual([row["execution"] for row in trace_h.layers], ["layer"])
+        self.assertEqual(token_h, want_token)
+        self.assertEqual(cache_bits(cache_h), cache_bits(want_cache))
 
     def test_trailing_tiny_chunk_runs_chunk_major_after_the_window_and_stays_exact(self):
         prompt = self.ids[:456]                                          # seven 64-token chunks and a tail of 8 tokens

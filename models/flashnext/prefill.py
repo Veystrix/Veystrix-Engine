@@ -615,7 +615,8 @@ def _run_layer_major(language, ids, cache, sampler, boundaries, on_boundary, off
         # route each chunk through the reference path instead of eagerly
         # staging the full layer. The small-window threshold is a heuristic,
         # not a claim of measured I/O savings.
-        use_chunk = layer_major.hybrid_enabled() and end - start <= layer_major.HYBRID_SMALL_WINDOW_TOKENS
+        use_chunk = (layer_major.hybrid_enabled() and end - start <= layer_major.HYBRID_SMALL_WINDOW_TOKENS
+                     and not (len(spans) == 1 and _single_span_layer_major(total, False, False)))
         report = None
         if use_chunk:
             for group_index, (a, b) in enumerate(group):

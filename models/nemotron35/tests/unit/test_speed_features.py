@@ -814,6 +814,26 @@ class LayerMajorTests(unittest.TestCase):
             reference_model.close()
             candidate_model.close()
 
+    def test_computing_experts_as_they_arrive_is_bit_identical_to_the_loop(self):
+        from unittest.mock import patch
+        from models.nemotron35 import streamed_experts
+
+        results = []
+        for pipelined in (False, True):
+            for segment in (0, 100):
+                with patch.object(streamed_experts, "PIPELINE", pipelined):
+                    s, core = self.core(segment, pool_bytes=0)
+                    try:
+                        logits = core.prefill(self.TOKENS)
+                        results.append((pipelined, segment, f32(logits), [f32(x) for x in core.state_arrays()]))
+                    finally:
+                        s.close()
+        base = results[0]
+        for pipelined, segment, logits, state in results[1:]:
+            self.assertTrue(bool(mx.all(base[2] == logits)), (pipelined, segment))
+            for x, y in zip(base[3], state):
+                self.assertTrue(bool(mx.all(x == y)), (pipelined, segment))
+
     def test_each_layers_experts_are_read_once_per_segment(self):
         a_s, a = self.core(0, pool_bytes=0)
         b_s, b = self.core(len(self.TOKENS) + 4, pool_bytes=0)

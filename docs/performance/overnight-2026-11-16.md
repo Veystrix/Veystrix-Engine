@@ -52,3 +52,23 @@ Same experts are read, same arithmetic: token digest identical (`3abc72800267a32
 Per layer, one 2,048-token chunk (real attention shape, random K/V): history 8K 284 -> 83 ms, 16K 544 -> 178 ms, 30K 979 -> 347 ms. Real 12,288-token natural-text prefill: 260.5 -> 294.5 tok/s.
 
 Quality, not just speed. Against an fp32 reference (8K history, 256 queries) the RMS error is 3.1e-5 for the fused path (the rounding of the bf16 output itself) and 5.2e-5 for the block loop, so the fused path is the more accurate one. It is not bit-identical to the loop (about half the bf16 outputs differ by one step). On the real checkpoint the last-position logits (12,288 tokens) differ from the loop by KL 0.0136, mean |d| 0.145, same top-20 tokens, same top-1; halving the prefill chunk size alone gives KL 0.0070, mean |d| 0.070. Evidence: `results/nemotron35/*night-attn-*`.
+
+## Result 3: compute each expert as its read finishes (adopted, default on, bit-identical)
+
+`StreamedSwitchMLP` (several-row calls, i.e. prefill) used to wait for every expert of the layer and then compute. `ExpertPool.fetch(..., on_ready=)` now hands each expert over as its read completes and the layer starts computing it while the remaining reads run (`_pipelined`). Same per-expert operations on the same rows; the output is reassembled by position, so results are bit-identical (unit test compares logits and all state, pipelined vs not, chunk-major and layer-major). Rollback `VEYSTRIX_NEMOTRON_PIPELINE_EXPERTS=0`.
+
+Real checkpoint, same digests in both arms:
+
+| Prefill tokens | loop tok/s | pipelined tok/s |
+|---|---|---|
+| 512 | 87.9 / 86.7 | 99.8 / 99.4 (+14%) |
+| 1,536 | 163.9 | 214.4 (+31%) |
+| 8,192 | 314.7 | 325.7 (+3.5%) |
+
+Short prefills are SSD-bound by nature: at 512 tokens the router uses 107 of 128 experts per layer, 15.5 GB is read in 5.15 s (3.0 GB/s, the SSD's rate). Below about 1,500 tokens a prefill costs about 5 s whatever its length unless the file cache holds more of the experts, which needs more RAM. Above that it is GPU-bound (about 3 TFLOPS in the 4-bit GEMMs, 78% of dense bf16 peak).
+
+## Tried and not adopted tonight
+
+- Submitting layers with `mx.async_eval` instead of `mx.eval` in layer-major prefill: 311 against 314 tok/s, no CPU bubbles to remove.
+- `mx.compile` on the Mamba SSD scan: bit-identical but 41.2 against 41.3 ms. Step 128 instead of 256 is 15% faster for the scan but changes rounding and is worth only about 2% of prefill.
+- Dequantize + dense bf16 matmul instead of `quantized_matmul` for the large projections: bit-identical for M >= 384 and about 10% faster per GEMM (about 3% of prefill); not done, and not bit-equal at M = 96 so unusable for per-expert calls.

@@ -52,6 +52,9 @@ GATHER_MAX_EXPERTS = 24      # beyond this (large prefill chunks) the per-expert
 # from stock mlx-lm on the real checkpoint (trace_real, 14 November 2026). With this set every chunk size gives the
 # stock result bit for bit.
 EXACT_ROWS = os.environ.get('VEYSTRIX_NEMOTRON_EXACT_ROWS', '0') == '1'
+# Several-row calls (prefill) compute each expert as its read finishes instead of after the last read of the layer.
+# Bit-identical to the loop (same operations, reassembled by position); "0" restores the loop.
+PIPELINE = os.environ.get('VEYSTRIX_NEMOTRON_PIPELINE_EXPERTS', '1') != '0'
 PREFILL_PREDICT_CAP = 40     # experts staged per layer during prefill (nearly all are needed there anyway)
 # Opt-in: a staged prediction that the router did not pick is dropped, oldest first, when the staging area is full.
 # Without it such an expert stays staged until some later token asks for it, the area fills with them, and read-ahead
@@ -524,8 +527,12 @@ class ExpertPool:
                 self.prefetch_wasted += 1
 
     # -- demand ------------------------------------------------------------------------------------------------
-    def fetch(self, layer: int, experts, *, after_submit=None, compute_resident=None) -> dict:
-        """Arrays for every requested expert; missing ones are read in parallel. Returns {expert: arrays}."""
+    def fetch(self, layer: int, experts, *, after_submit=None, compute_resident=None, on_ready=None) -> dict:
+        """Arrays for every requested expert; missing ones are read in parallel. Returns {expert: arrays}.
+
+        ``on_ready(expert, arrays)``, when given, is called once per expert on this thread: first for the experts
+        that are already here, then for the others in the order their reads finish, so the caller can start
+        computing while later reads are still running."""
         if self.cancel_check():
             raise Cancelled()
         if self.reader.mapped:
@@ -580,6 +587,8 @@ class ExpertPool:
             after_submit()
         if compute_resident is not None and out and (waiting or direct):
             compute_resident(out)
+        if on_ready is not None:
+            return self._fetch_pipelined(layer, out, waiting, direct, protected, on_ready)
         began = time.perf_counter()
         for expert, future in waiting.items():
             self.prefetch_used += 1
@@ -593,6 +602,35 @@ class ExpertPool:
             self.misses += 1
             out[expert] = self._admit((layer, expert), self._result(future), protected)
         self.wait_seconds += time.perf_counter() - began
+        return out
+
+    def _fetch_pipelined(self, layer, out, waiting, direct, protected, on_ready) -> dict:
+        """The tail of ``fetch`` when the caller computes as experts arrive. Same bookkeeping, completion order."""
+        for expert, arrays in list(out.items()):
+            on_ready(expert, arrays)
+        pending = {future: (expert, True) for expert, future in waiting.items()}
+        pending.update({future: (expert, False) for expert, future in direct.items()})
+        while pending:
+            began = time.perf_counter()
+            done, _ = cf.wait(list(pending), timeout=0.05, return_when=cf.FIRST_COMPLETED)
+            self.wait_seconds += time.perf_counter() - began
+            if not done:
+                if self.cancel_check():
+                    raise Cancelled()
+                continue
+            for future in done:
+                expert, was_staged = pending.pop(future)
+                key = (layer, expert)
+                if was_staged:
+                    self.prefetch_used += 1
+                    self.hits += 1
+                    if key in self._history_keys:
+                        self._history_keys.discard(key)
+                        self.history_used += 1
+                else:
+                    self.misses += 1
+                out[expert] = self._admit(key, future.result(), protected)
+                on_ready(expert, out[expert])
         return out
 
     def _prefetch_mapped(self, layer: int, experts, history: bool = False) -> int:
@@ -854,6 +892,33 @@ class StreamedSwitchMLP(nn.Module):
         return mx.quantized_matmul(nn.relu2(h), weights['fc2.weight'], weights['fc2.scales'], weights['fc2.biases'],
                                    group_size=self.group_size, bits=4)
 
+    def _pipelined(self, flat, ids, unique, lead, dtype, profile, started, routed_at):
+        """Several rows (prefill): each expert is computed as soon as its weights are here, while the remaining reads
+        run, instead of after the last one. The same operations on the same rows as the loop below, so the result is
+        bit-identical; only the order in which experts are computed differs, and the output is reassembled by position."""
+        rows_n, k = ids.shape
+        ys, positions, batch = {}, {}, []
+
+        def compute(expert, weights):
+            expert = int(expert)
+            rows, slots = np.nonzero(ids == expert)
+            sub = flat if len(rows) == rows_n else flat[mx.array(rows)]
+            y = self._expert(sub, weights)
+            ys[expert], positions[expert] = y, rows * k + slots
+            batch.append(y)
+            if len(batch) >= self.eval_every:          # bound live expert weights during large prefill chunks
+                mx.async_eval(*batch)
+                batch.clear()
+
+        self.pool.fetch(self.layer, unique.tolist(), on_ready=compute)
+        if profile is not None:
+            profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())
+        order_of_experts = [int(e) for e in unique]
+        stacked = ys[order_of_experts[0]] if len(order_of_experts) == 1 else mx.concatenate(
+            [ys[e] for e in order_of_experts], axis=0)
+        order = np.argsort(np.concatenate([positions[e] for e in order_of_experts]))
+        return stacked[mx.array(order)].reshape(*lead, k, flat.shape[-1]).astype(dtype)
+
     def __call__(self, x, indices):
         lead = x.shape[:-1]
         hidden = x.shape[-1]
@@ -891,6 +956,10 @@ class StreamedSwitchMLP(nn.Module):
                        for expert in map(int, ids[0])]
             return mx.stack(outputs, axis=-2).reshape(*lead, k, hidden).astype(x.dtype)
         self._prefetch_next(flat, rows_n)
+        if PIPELINE and not self.pool.reader.mapped and not (GATHER and len(unique) <= GATHER_MAX_EXPERTS):
+            if GATHER:
+                self.pool.gather_over_cap += 1      # same count as the loop below keeps
+            return self._pipelined(flat, ids, unique, lead, x.dtype, profile, started, routed_at)
         arrays = self.pool.fetch(self.layer, unique.tolist())
         if profile is not None:
             profile.record(self.layer, ids.flat, started, routed_at, time.perf_counter())

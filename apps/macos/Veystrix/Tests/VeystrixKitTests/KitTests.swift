@@ -157,6 +157,7 @@ private func tempDir() -> URL {
         s.minimumBatteryPercent = 40; s.allowLowPowerMode = true
         let plan = try LaunchPlan.make(settings: s, checkpoint: c, source: .developer(repoRoot: URL(fileURLWithPath: "/repo")), apiKey: nil, fileExists: exists, isExecutable: exists)
         #expect(plan.environment["VEYSTRIX_REQUIRE_AC"] == nil)   // no plug-in requirement is passed to the engine
+        #expect(plan.environment["VEYSTRIX_MODEL_HANDOFF"] == "auto")   // bots in different sessions may switch the resident model
         #expect(plan.environment["VEYSTRIX_INVALID_TOOL_CALLS"] == "pass")   // a bad tool call goes back to the client, not a failed request
         #expect(plan.environment["VEYSTRIX_MIN_BATTERY_PERCENT"] == "40")
         #expect(plan.environment["VEYSTRIX_ALLOW_LOW_POWER"] == "1")

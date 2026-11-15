@@ -239,6 +239,36 @@ S(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
 '''
 
 class ProcessRouterTests(unittest.TestCase):
+ def _two_conversations(self, handoff):
+  """Model a, then model b, from two unrelated conversations (a bot each), through a real router and two real children."""
+  import os, sys
+  from veystrix.model_process import ProcessDriver
+  models = {x: model(x) for x in ('a','b')}
+  d = ProcessDriver(startup_timeout=5, stop_timeout=5, command_factory=lambda m,p:[sys.executable,'-c',CHILD_ROUTER,str(p),m.id])
+  server = RouterServer(('127.0.0.1',0),ModelCoordinator(models.get,d),d,inventory=lambda:list(models.values()))
+  t = threading.Thread(target=server.serve_forever,daemon=True); t.start()
+  results=[]
+  try:
+   with patch.dict(os.environ, {'VEYSTRIX_MODEL_HANDOFF': handoff}):
+    for name, text in (('a','the first bot talking'),('b','another bot, another conversation')):
+     conn=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=30)
+     conn.request('POST','/v1/chat/completions',json.dumps({'model':name,'messages':[{'role':'user','content':text}]}),{'Content-Type':'application/json'})
+     response=conn.getresponse(); results.append((response.status,json.loads(response.read()))); conn.close()
+  finally:
+   server.shutdown(); server.server_close(); t.join(); d.unload()
+  return results
+
+ def test_another_conversation_cannot_switch_the_model_by_default(self):
+  (first,_),(second,body)=self._two_conversations('off')
+  self.assertEqual(first,200)
+  self.assertEqual(second,409)
+  self.assertIn('another session owns the current model',json.dumps(body))
+
+ def test_auto_handoff_lets_another_conversation_switch_the_model(self):
+  (first,one),(second,two)=self._two_conversations('auto')
+  self.assertEqual((first,second),(200,200))
+  self.assertEqual((one['process_model'],two['process_model']),('a','b'))
+
  def test_two_owned_processes_switch_and_serve_exact_model(self):
   import sys
   from veystrix.model_process import ProcessDriver

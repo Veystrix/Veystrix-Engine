@@ -91,6 +91,19 @@ class _InputCache:
             return {"cross_model_hits": self._cross_model_hits}
 
 
+MODEL_HANDOFF_ENV = "VEYSTRIX_MODEL_HANDOFF"
+
+
+def auto_handoff() -> bool:
+    """``auto``: a request for the other installed model takes over the engine once the current request has finished.
+
+    The coordinator otherwise refuses a switch unless the caller is the session that owns the resident model, to protect a
+    long-running coding session from being evicted. A client with one conversation per bot (Rakazo) has a different
+    session identity for every bot, so it could never move between the Qwen and Nemotron bots. A request is never
+    interrupted: the switch waits for the running one. Default ``off`` keeps the strict rule; the app sets ``auto``."""
+    return os.environ.get(MODEL_HANDOFF_ENV, "off").strip().lower() == "auto"
+
+
 def session_owner(headers, payload):
     # A dual-model workflow keeps lifecycle ownership across its agents while
     # each agent still supplies a distinct session ID to the inference server.
@@ -231,6 +244,7 @@ class RouterHandler(VeystrixHandler):
                 self._router_heartbeat_thread.start()
             owner = session_owner(self.headers, payload)
             with self.server.coordinator.request(requested, owner=owner, timeout=20, cancelled=self._client_gone,
+                                                 handoff=auto_handoff(),
                                                  exclusive_owner=bool(owner and owner.startswith("workflow:"))):
                 self._forward(path, payload)
         except RequestError as exc:

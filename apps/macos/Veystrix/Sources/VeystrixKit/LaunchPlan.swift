@@ -98,6 +98,10 @@ public struct LaunchPlan: Equatable, Sendable {
         // model tries again. The engine's strict default ends the whole request instead, so every slip by the model failed
         // the run. Rollback: start the engine from the command line, where the default stays strict.
         env["VEYSTRIX_INVALID_TOOL_CALLS"] = "pass"
+        // One conversation per bot means a different session for every bot, so without this the router refuses to move
+        // between the Qwen and Nemotron bots ("another session owns the current model"). The switch still waits for the
+        // running request. Rollback: start the router from the command line, where the default stays strict.
+        env["VEYSTRIX_MODEL_HANDOFF"] = "auto"
         env["FLASHNEXT_SWAP_CEILING_MIB"] = String(settings.swapLimitGiB * 1024)
         env["VEYSTRIX_PORT"] = String(settings.port)
         // Lifetime statistics: the engine appends one counts-only line per finished request here.

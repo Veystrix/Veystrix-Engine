@@ -119,3 +119,12 @@ Real checkpoint, in-process cold prefill under the guard (driver `qwen_pp.py`, n
 | 3,000 | 35.1 (already layer-major) | unchanged | 82.3 | 6.6 |
 
 The 800 and 1,200 rows were measured with the `layer-major-4k` mode (not hybrid) with the order forced; the 1,200 baseline there is chunk-major. Layer-major reads every layer's 512 experts once (about 80 GB) whatever the prompt length, so it loses below about 1,000 tokens, where the reference path reads only the routed union (54 GB at 800 tokens), and wins from about 1,000 to 2,048 by overlapping those reads with compute. An earlier draft of this section compared 3,000 tokens against a forced chunk-major baseline (68.5 s) and called it 1.94x; the app does not run that, so that figure does not apply. Suggested settings if adopted: `FLASHNEXT_LAYER_MAJOR_SINGLE=1` and `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=1024` (the second value also moves 1,024-2,048-token multi-window cases; prompts of 2,049+ are unchanged). Not adopted into the app's defaults: that and the prefix-cache identity change (layer-major snapshots do not mix with chunk-major ones) are the owner's decision. Evidence: `results/nemotron35/*night-qwen-*`.
+
+## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
+
+Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 193 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,257 OK (3 skipped). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
+
+## What is left (levers, not done)
+
+- Qwen one-chunk and layer-major prefills are SSD-bound at about 3 GB/s (80 GB read in 26.7 s at 1,600 tokens). Fewer bytes needs a good prediction of each layer's routed experts (about 76% of a layer's experts at 1,600 tokens, about 94% at 4K) with on-demand reads for misses; the gain is bounded by the 6-24% of bytes that are unused. More RAM for the file cache is the other lever.
+- Nemotron: dense dequantize + GEMM for large projections (about 3% of prefill, bit-equal for M >= 384), `gather_qmm` for routed experts (about 5-8%, needs memory), Mamba scan step 128 (about 2%, changes rounding).

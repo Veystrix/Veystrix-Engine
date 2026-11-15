@@ -29,6 +29,7 @@ FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries t
 FLAG_MASKED_SPARSE = "FLASHNEXT_QSA_MASKED_SPARSE"           # opt-in: sparse queries use one masked SDPA per query tile over the dequantized history
 FLAG_MASKED_MAX_KEYS = "FLASHNEXT_QSA_MASKED_MAX_KEYS"         # longest history that path handles (longer keeps the per-query gather)
 FLAG_MASKED_TILE = "FLASHNEXT_QSA_MASKED_TILE"                 # queries per masked tile
+SPECIAL_MIN_QUERIES = 16                                       # decode and speculative-verify calls (a few rows) keep the per-query gather
 INDEX_RESERVE_TOKENS = 4096
 
 _ORIGINAL_CALL = None
@@ -222,7 +223,7 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         "full_history_token_mask": False,
     }
     first = 0
-    if dense_prefix_enabled() and batch == 1:
+    if dense_prefix_enabled() and batch == 1 and length >= SPECIAL_MIN_QUERIES:
         first = dense_queries(self.indexer, past, length, pooled)
     if first:
         # One causal SDPA over the dequantized cache rows the per-query path would gather (same rows, same dequantization).
@@ -235,7 +236,8 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         else:
             mx.eval(out)
         outputs.append(out.transpose(0, 2, 1, 3))
-    if pooled is not None and first < length and batch == 1 and masked_sparse_enabled() and key_len <= masked_limits()[0]:
+    if (pooled is not None and length - first >= SPECIAL_MIN_QUERIES and batch == 1 and masked_sparse_enabled()
+            and key_len <= masked_limits()[0]):
         # The same selection as the per-query gather (``_chunk_mask`` is pinned to ``_selected_indices`` by the tests), applied
         # as a boolean mask over the dequantized history: the history is read once per tile instead of once per query.
         at = mx.broadcast_to(mx.arange(key_len)[None, None, :], (batch, 1, key_len))

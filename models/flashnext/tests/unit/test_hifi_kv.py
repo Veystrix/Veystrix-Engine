@@ -145,6 +145,24 @@ class GatherTests(unittest.TestCase):
             self.assertIn("qsa_masked_sparse", Q.fingerprint_parts())
         self.assertNotIn("qsa_masked_sparse", Q.fingerprint_parts())
 
+    def test_special_paths_are_for_prefill_sized_calls_only(self):
+        model = build_model()
+        from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention
+        original = Qwen4ExpAttention.__call__
+        if original is Q._chunked_call:
+            original = Q._ORIGINAL_CALL
+        env = {"FLASHNEXT_QSA_KERNEL": "gather", Q.FLAG_DENSE_PREFIX: "1", Q.FLAG_MASKED_SPARSE: "1"}
+        calls = {"sdpa": 0}
+        real = mx.fast.scaled_dot_product_attention
+        cache = model.make_cache()
+        with patch.object(Q, "_ORIGINAL_CALL", original), patch.object(Qwen4ExpAttention, "__call__", Q._chunked_call), \
+                patch.dict(os.environ, env):
+            mx.eval(model(mx.random.randint(2, 512, (1, 60)), cache=cache).logits)       # long enough to use both paths
+            with patch.object(Q, "_chunk_mask", side_effect=AssertionError("masked path used")), \
+                    patch.object(Q, "dense_queries", side_effect=AssertionError("dense path used")):
+                for length in (1, 1, 4, Q.SPECIAL_MIN_QUERIES - 1):                       # decode and verification rows
+                    mx.eval(model(mx.random.randint(2, 512, (1, length)), cache=cache).logits)
+
     def test_dense_query_count(self):
         indexer = SimpleNamespace(block_topk=512, compress_ratio=4)
         self.assertEqual(Q.dense_queries(indexer, 0, 4096, object()), 2051)

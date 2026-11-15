@@ -116,6 +116,35 @@ class GatherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Q.dense_prefix_enabled()
 
+    def test_masked_sparse_matches_per_query_gather(self):
+        model = build_model()
+        from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention
+        original = Qwen4ExpAttention.__call__
+        if original is Q._chunked_call:
+            original = Q._ORIGINAL_CALL
+        base = {"FLASHNEXT_QSA_KERNEL": "gather", "FLASHNEXT_QSA_GATHER_TILE": "3"}
+        for extra in ({Q.FLAG_MASKED_SPARSE: "1", Q.FLAG_MASKED_TILE: "5"},
+                      {Q.FLAG_MASKED_SPARSE: "1", Q.FLAG_MASKED_TILE: "7", Q.FLAG_DENSE_PREFIX: "1"},
+                      {Q.FLAG_MASKED_SPARSE: "1", Q.FLAG_MASKED_MAX_KEYS: "1"}):       # the last one keeps the gather path
+            reference, candidate = model.make_cache(), model.make_cache()
+            with patch.object(Q, "_ORIGINAL_CALL", original), patch.object(Qwen4ExpAttention, "__call__", Q._chunked_call):
+                for length in (13, 59, 1, 7, 40):
+                    ids = mx.random.randint(2, 512, (1, length))
+                    with patch.dict(os.environ, base):
+                        expected = model(ids, cache=reference).logits
+                    with patch.dict(os.environ, {**base, **extra}):
+                        actual = model(ids, cache=candidate).logits
+                    mx.eval(expected, actual, [c.state for c in candidate], [c.state for c in reference])
+                    self.assertTrue(mx.allclose(actual, expected, atol=2e-4, rtol=2e-3).item(),
+                                    (extra, length, mx.max(mx.abs(actual - expected)).item()))
+        for bad in ({Q.FLAG_MASKED_SPARSE: "2"}, {Q.FLAG_MASKED_TILE: "0"}, {Q.FLAG_MASKED_MAX_KEYS: "0"}):
+            with patch.dict(os.environ, bad):
+                with self.assertRaises(ValueError):
+                    Q.masked_sparse_enabled() if Q.FLAG_MASKED_SPARSE in bad else Q.masked_limits()
+        with patch.dict(os.environ, {Q.FLAG_MASKED_SPARSE: "1"}):
+            self.assertIn("qsa_masked_sparse", Q.fingerprint_parts())
+        self.assertNotIn("qsa_masked_sparse", Q.fingerprint_parts())
+
     def test_dense_query_count(self):
         indexer = SimpleNamespace(block_topk=512, compress_ratio=4)
         self.assertEqual(Q.dense_queries(indexer, 0, 4096, object()), 2051)

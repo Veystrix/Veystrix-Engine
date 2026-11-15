@@ -26,6 +26,9 @@ FLAG_GATHER_TILE = "FLASHNEXT_QSA_GATHER_TILE"
 FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
 FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
 FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries that see every causal token use one causal SDPA
+FLAG_MASKED_SPARSE = "FLASHNEXT_QSA_MASKED_SPARSE"           # opt-in: sparse queries use one masked SDPA per query tile over the dequantized history
+FLAG_MASKED_MAX_KEYS = "FLASHNEXT_QSA_MASKED_MAX_KEYS"         # longest history that path handles (longer keeps the per-query gather)
+FLAG_MASKED_TILE = "FLASHNEXT_QSA_MASKED_TILE"                 # queries per masked tile
 INDEX_RESERVE_TOKENS = 4096
 
 _ORIGINAL_CALL = None
@@ -84,6 +87,21 @@ def kernel_mode():
     return mode
 
 
+def masked_sparse_enabled():
+    value = os.environ.get(FLAG_MASKED_SPARSE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_MASKED_SPARSE} must be 0 or 1")
+    return value == "1"
+
+
+def masked_limits():
+    keys = int(os.environ.get(FLAG_MASKED_MAX_KEYS, "16384"))
+    tile = int(os.environ.get(FLAG_MASKED_TILE, "256"))
+    if keys < 1 or not 1 <= tile <= 2048:
+        raise ValueError(f"{FLAG_MASKED_MAX_KEYS} must be positive and {FLAG_MASKED_TILE} between 1 and 2048")
+    return keys, tile
+
+
 def dense_prefix_enabled():
     value = os.environ.get(FLAG_DENSE_PREFIX, "0") or "0"
     if value not in ("0", "1"):
@@ -114,6 +132,8 @@ def fingerprint_parts():
     parts = {"qsa_prefill_tile_eval": 1} if os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" else {}
     if dense_prefix_enabled():
         parts["qsa_dense_prefix"] = 1
+    if masked_sparse_enabled():
+        parts["qsa_masked_sparse"] = masked_limits()
     if kernel_mode() == "gather":
         parts.update(qsa_kernel="gather-v1", qsa_gather_tile=gather_tile(),
                      qsa_pooled_indexer=QSA_CACHE_POOLED_KEYS)
@@ -215,6 +235,22 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         else:
             mx.eval(out)
         outputs.append(out.transpose(0, 2, 1, 3))
+    if pooled is not None and first < length and batch == 1 and masked_sparse_enabled() and key_len <= masked_limits()[0]:
+        # The same selection as the per-query gather (``_chunk_mask`` is pinned to ``_selected_indices`` by the tests), applied
+        # as a boolean mask over the dequantized history: the history is read once per tile instead of once per query.
+        at = mx.broadcast_to(mx.arange(key_len)[None, None, :], (batch, 1, key_len))
+        k, v = _gather_kv(keys, values, cache, at)
+        tile = masked_limits()[1]
+        for start in range(first, length, tile):
+            end = min(start + tile, length)
+            mask = _chunk_mask(self.indexer, index_query, pooled, key_len, past, blocks, start, end)
+            out = mx.fast.scaled_dot_product_attention(queries[:, :, start:end], k, v, scale=self.scale, mask=mask)
+            if start == first and not first and hasattr(cache, "gather_selected"):
+                mx.eval(out, cache.state)
+            else:
+                mx.eval(out)
+            outputs.append(out.transpose(0, 2, 1, 3))
+        first = length
     for start in range(first, length, tile_size):
         end = min(start + tile_size, length)
         indices, valid = _selected_indices(self.indexer, index_query, pooled,

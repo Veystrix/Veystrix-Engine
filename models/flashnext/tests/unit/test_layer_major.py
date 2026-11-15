@@ -408,6 +408,18 @@ class PrefillIntegrationTests(unittest.TestCase):
         self.assertEqual(trace.windows[0][0], 0)
         self.assertEqual(trace.windows[-1][1], len(self.ids))
 
+    def test_single_chunk_prefill_uses_layer_major_only_when_opted_in_and_stays_exact(self):
+        prompt = self.ids[:60]                                           # one 64-token chunk: a single span
+        want_token, want_cache, _, want_trace = self.run_prefill("chunk", prompt=prompt)
+        token, cache, _, trace = self.run_prefill("layer", window=128, prompt=prompt)
+        self.assertEqual([row["execution"] for row in trace.layers], [])          # default: the reference path
+        with mock.patch.dict(os.environ, {"FLASHNEXT_LAYER_MAJOR_SINGLE": "1"}):
+            token_single, cache_single, _, trace_single = self.run_prefill("layer", window=128, prompt=prompt)
+        self.assertEqual([row["execution"] for row in trace_single.layers], ["layer"])
+        self.assertEqual(token_single, want_token)
+        self.assertEqual(cache_bits(cache_single), cache_bits(want_cache))
+        self.assertEqual(token, want_token)
+
     def test_trailing_tiny_chunk_runs_chunk_major_after_the_window_and_stays_exact(self):
         prompt = self.ids[:456]                                          # seven 64-token chunks and a tail of 8 tokens
         boundaries = (192, 384, 448)

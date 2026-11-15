@@ -487,7 +487,7 @@ def _run_chunks(language, ids, cache, want_logits, want_hidden, sampler, boundar
     # A short tool-result prefill is one span and has no chunk edge, and it skips the F_NOCACHE ring (under 512 tokens).
     # If the controller is still ELEVATED or RECOVERING from the previous turn, start it with uncached reads.
     _uncache_reads_when_elevated(language, trace)
-    if len(spans) == 1:
+    if len(spans) == 1 and not _single_span_layer_major(total, want_logits, want_hidden):
         began, active = time.perf_counter(), _active_memory()
         flight_recorder.record("prefill_chunk_begin", start=offset, end=offset + total, final=True)
         if offset > 0:
@@ -564,6 +564,16 @@ def _head_output(language, out, call):
     else:
         logits = language.lm_head(out)
     return SimpleNamespace(logits=logits, hidden_states=[out] if call.get("return_hidden") else None)
+
+
+def _single_span_layer_major(total: int, want_logits: bool, want_hidden: bool) -> bool:
+    """Opt-in (``FLASHNEXT_LAYER_MAJOR_SINGLE=1``): a one-chunk prefill of at least ``layer_major.min_tokens()`` tokens runs
+    the layer-major order too, so the next layer's experts are read while this layer computes."""
+    if os.environ.get("FLASHNEXT_LAYER_MAJOR_SINGLE", "0") != "1" or want_logits or want_hidden:
+        return False
+    from models.flashnext import layer_major
+
+    return layer_major.enabled() and total >= layer_major.min_tokens()
 
 
 def _run_layer_major(language, ids, cache, sampler, boundaries, on_boundary, offset, spans, anchors, required, trace):

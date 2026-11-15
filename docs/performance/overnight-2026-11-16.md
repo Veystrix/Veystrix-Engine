@@ -102,3 +102,20 @@ The first decode comparisons of the night (shared-expert start, worker counts) u
 ## Integration check (real checkpoint, prefix cache on, 25K-character system prompt, new session identity)
 
 Populate: cold request 24.5 s. A fresh process with the same prompt restored 6,226 tokens from the SSD cache and answered in 4.6 s with the same output hash (`0a64d6fe2eec973b`). A prefill cancelled after 6 s ended as `cancelled`; the next normal request produced the same tokens as an uncancelled run (`81296a2bfae9f667`). Evidence: `results/nemotron35/*night-integ-*`.
+
+## Qwen (Flash-Next) short and mid-size cold prefills: layer-major below 4,096 tokens (opt-in, exact)
+
+The app's Qwen launch (`--mode agentic --enable kv-tiered4 --enable short-throughput`, i.e. layer-major 4K windows with layer prefetch) only uses the layer-major order for prefills of at least `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS` (default 4,096), and `prefill._run_chunks` sent every one-chunk prefill (up to 2,048 tokens) down the reference path regardless. That path reads each layer's routed experts and then computes, with nothing overlapped: 1,600 tokens read 62 GB (about 21 s of SSD time) and computed in series, 34.7 s in all.
+
+Change: `FLASHNEXT_LAYER_MAJOR_SINGLE=1` (default off) lets a one-chunk prefill that reaches `min_tokens()` use `_run_layer_major`, so layer l+1's experts are read while layer l computes. With `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS` lowered to 1,024 the two-chunk prompts (2,049-4,095 tokens) use it as well. Unit test: same token and cache bits as the reference for a one-chunk prompt, off by default.
+
+Real checkpoint, in-process cold prefill under the guard (driver `qwen_pp.py`, app launch environment, natural-text prompt, thermal level 0, AC power, swap unchanged). The output token hash was identical in every pair.
+
+| Prompt tokens | chunk-major s (tok/s) | layer-major + prefetch s (tok/s) | physical read GB | MLX peak GB |
+|---|---|---|---|---|
+| 800 | 24.3 (32.9) | 25.4 (31.5) | 54.5 -> 79.6 | 6.3 -> 6.2 |
+| 1,200 | 29.7 (40.4) | 26.0 (46.1) | 59.5 -> 80.4 | 6.5 -> 6.4 |
+| 1,600 | 34.7 (46.1) | 26.5 (60.4) | 62.3 -> 80.9 | 6.6 -> 6.6 |
+| 3,000 | 68.5 (43.8) | 35.4 (84.8) | 119.5 -> 82.0 | 6.8 -> 6.6 |
+
+Layer-major reads every layer's 512 experts once (about 80 GB) whatever the prompt length, so it loses below about 1,000 tokens, where the reference path reads only the routed union (about 54 GB at 800 tokens), and wins above, where it overlaps those reads with compute. At 3,000 tokens it also reads a third less than the two chunk-major passes. Suggested settings if adopted: `FLASHNEXT_LAYER_MAJOR_SINGLE=1` and `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=1024`. Not adopted into the app's defaults: that and the prefix-cache identity change (layer-major snapshots do not mix with chunk-major ones) are the owner's decision. Evidence: `results/nemotron35/*night-qwen-*`.

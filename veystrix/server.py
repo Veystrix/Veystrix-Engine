@@ -22,6 +22,7 @@ from veystrix.text import (
     CompletedTextBuffer,
     ReasoningStreamFilter,
     ThinkingStreamFilter,
+    ToolCallTextGate,
     build_user_encoder,
     extract_reasoning_and_content,
 )
@@ -395,6 +396,13 @@ def _coerce_argument(value: str, kind: str | list | None, *, tool="", key="param
 
 
 INVALID_TOOL_CALLS_ENV = "VEYSTRIX_INVALID_TOOL_CALLS"
+STREAM_TEXT_WITH_TOOLS_ENV = "VEYSTRIX_STREAM_TEXT_WITH_TOOLS"
+
+
+def _stream_text_with_tools() -> bool:
+    """On by default: a request that declares tools streams its text as it is generated (up to a tool call).
+    ``0`` restores the old behaviour of holding every word until the turn ends."""
+    return os.environ.get(STREAM_TEXT_WITH_TOOLS_ENV, "1").strip().lower() not in ("0", "false", "off", "no")
 
 
 def _pass_invalid_tool_calls() -> bool:
@@ -1583,6 +1591,9 @@ class ModelService:
             )
             words = CompletedTextBuffer()
             hold = bool(tools)
+            # With tools declared, the text may turn into a tool call, so it used to be held until the turn ended: the
+            # client saw nothing for a whole answer. The gate streams it and stops at the first tool-call marker.
+            gate = ToolCallTextGate() if hold and _stream_text_with_tools() else None
 
             began = time.perf_counter()
             first = []
@@ -1610,6 +1621,13 @@ class ModelService:
                 elif kind == "content":
                     on_text(chunk)
 
+            def emit_content(complete: str) -> None:
+                if gate is None:
+                    send_text(None if hold else complete, kind="content")
+                    return
+                released = gate.feed(complete)
+                send_text(released if released else None, kind="content")     # None: a keep-alive tick
+
             def streamed(piece: str) -> None:
                 if not first:
                     first.append(time.perf_counter())
@@ -1623,7 +1641,7 @@ class ModelService:
                         send_text(item, kind="thinking")
                     else:
                         for complete in words.feed(item):
-                            send_text(None if hold else complete, kind="content")
+                            emit_content(complete)
 
             def client_disconnected() -> bool:
                 if gone is None:
@@ -1736,9 +1754,9 @@ class ModelService:
                         send_text(item, kind="thinking")
                     else:
                         for complete in words.feed(item):
-                            send_text(None if hold else complete, kind="content")
+                            emit_content(complete)
                 for complete in words.finish():
-                    send_text(None if hold else complete, kind="content")
+                    emit_content(complete)
 
             extracted_reasoning, raw_visible = extract_reasoning_and_content(
                 text, reasoning.thinking
@@ -1790,8 +1808,11 @@ class ModelService:
                     "no tool was called. Compact the conversation or raise max_tokens / max_completion_tokens "
                     "(the client may be computing it from a context window that leaves too little room).")
             if hold and on_text is not None and visible:
+                unsent = visible if gate is None else gate.remainder(visible)
+                if gate is not None and gate.mismatched:
+                    flight_recorder.record("stream_text_mismatch", sent_chars=len(gate.sent), final_chars=len(visible))
                 final_words = CompletedTextBuffer()
-                for complete in final_words.feed(visible) + final_words.finish():
+                for complete in final_words.feed(unsent) + final_words.finish():
                     try:
                         on_text(complete, kind="content")
                     except TypeError:

@@ -45,17 +45,19 @@ class EvaluateTests(unittest.TestCase):
         self.assertFalse(G.evaluate("battery", 35, 40).ok)
         self.assertTrue(G.evaluate("battery", 1, 0).ok)
 
-    def test_require_ac_overrides_battery_permission(self):
-        self.assertFalse(G.check({"VEYSTRIX_REQUIRE_AC": "1"}, lambda: BATT.format(pct=90)).ok)
-        self.assertTrue(G.check({"VEYSTRIX_REQUIRE_AC": "1"}, lambda: AC.format(pct=10)).ok)
-        self.assertTrue(G.check({"VEYSTRIX_REQUIRE_AC": "0"}, lambda: BATT.format(pct=90)).ok)
+    def test_battery_is_never_refused_for_not_being_plugged_in(self):
+        """There is no plug-in requirement: only a charge below the floor refuses, whatever VEYSTRIX_REQUIRE_AC says."""
+        for env in ({}, {"VEYSTRIX_REQUIRE_AC": "1"}, {"VEYSTRIX_REQUIRE_AC": "0"}):
+            self.assertTrue(G.check(env, lambda: BATT.format(pct=90)).ok)
+            self.assertTrue(G.check(env, lambda: AC.format(pct=10)).ok)
+        self.assertFalse(G.check({}, lambda: BATT.format(pct=10)).ok)
 
     def test_live_watchdog_honours_power_options(self):
         from models.flashnext.tests.bench import prefill_memory_harness as H
         sample = {"power_source": "battery", "battery_percent": 80, "low_power": True}
         self.assertEqual(H.Watchdog(H.SafetyPolicy(), sample).check(sample), "Low Power Mode is on")
         self.assertIsNone(H.Watchdog(H.SafetyPolicy(allow_low_power=True), sample).check(sample))
-        self.assertIn("AC power", H.Watchdog(H.SafetyPolicy(allow_low_power=True, require_ac=True), sample).check(sample))
+        self.assertIsNone(H.Watchdog(H.SafetyPolicy(allow_low_power=True), sample).check(sample))   # battery at 80% is fine
 
     def test_check_reads_through_the_runner(self):
         self.assertFalse(G.check({}, lambda: BATT.format(pct=24)).ok)

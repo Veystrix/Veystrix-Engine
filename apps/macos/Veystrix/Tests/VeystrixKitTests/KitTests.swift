@@ -74,7 +74,7 @@ private func tempDir() -> URL {
     @Test func roundTripAndOwnerOnlyPermissions() throws {
         let paths = Paths(home: tempDir()); let store = SettingsStore(paths: paths)
         var s = AppSettings(); s.port = 9001; s.decodePool = .twoGB; s.checkpointPath = "/models/x"
-        s.allowBattery = false; s.minimumBatteryPercent = 35; s.allowLowPowerMode = true
+        s.minimumBatteryPercent = 35; s.allowLowPowerMode = true
         s.swapLimitGiB = 7
         try store.save(s)
         #expect(store.load() == s)
@@ -86,7 +86,7 @@ private func tempDir() -> URL {
         try Data(#"{"port": 9100, "futureField": true}"#.utf8).write(to: paths.settingsFile)
         let s = SettingsStore(paths: paths).load()
         #expect(s.port == 9100); #expect(s.decodePool == .none); #expect(s.cacheQuotaGB == 80); #expect(s.nemotronContextTokens == 1_048_576)
-        #expect(s.allowBattery); #expect(s.minimumBatteryPercent == 25); #expect(!s.allowLowPowerMode)
+        #expect(s.minimumBatteryPercent == 25); #expect(!s.allowLowPowerMode)
         #expect(s.swapLimitGiB == 5)
     }
     @Test func damagedSettingsAreKeptAndDefaultsUsed() throws {
@@ -154,9 +154,10 @@ private func tempDir() -> URL {
     }
     @Test func powerSettingsReachTheEngine() throws {
         var (s, c) = try good(tempDir())
-        s.allowBattery = false; s.minimumBatteryPercent = 40; s.allowLowPowerMode = true
+        s.minimumBatteryPercent = 40; s.allowLowPowerMode = true
         let plan = try LaunchPlan.make(settings: s, checkpoint: c, source: .developer(repoRoot: URL(fileURLWithPath: "/repo")), apiKey: nil, fileExists: exists, isExecutable: exists)
-        #expect(plan.environment["VEYSTRIX_REQUIRE_AC"] == "1")
+        #expect(plan.environment["VEYSTRIX_REQUIRE_AC"] == nil)   // no plug-in requirement is passed to the engine
+        #expect(plan.environment["VEYSTRIX_INVALID_TOOL_CALLS"] == "pass")   // a bad tool call goes back to the client, not a failed request
         #expect(plan.environment["VEYSTRIX_MIN_BATTERY_PERCENT"] == "40")
         #expect(plan.environment["VEYSTRIX_ALLOW_LOW_POWER"] == "1")
     }

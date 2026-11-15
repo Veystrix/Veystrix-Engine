@@ -66,7 +66,6 @@ public final class EngineController: ObservableObject {
         defer { startInProgress = false }
         // Battery use is allowed; a battery below the floor refuses the start before anything is launched.
         let power = snapshot()
-        if !settings.allowBattery && power.onACPower != true { throw StartError.batteryTooLow("Plug in the Mac or enable battery operation in Settings.") }
         if let refusal = MemoryProbe.powerRefusal(power, minPercent: settings.minimumBatteryPercent) { throw StartError.batteryTooLow(refusal) }
         if power.lowPowerMode && !settings.allowLowPowerMode { throw StartError.batteryTooLow("Low Power Mode is on. Turn it off or allow it in Veystrix Settings.") }
         let source = source ?? .developer(repoRoot: URL(fileURLWithPath: "/nonexistent"))

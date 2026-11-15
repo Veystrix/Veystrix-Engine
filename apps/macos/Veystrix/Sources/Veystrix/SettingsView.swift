@@ -60,11 +60,9 @@ struct SettingsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Power") {
-                Toggle("Allow operation on battery", isOn: $model.settings.allowBattery)
                 Stepper("Minimum battery charge: \(model.settings.minimumBatteryPercent)%", value: $model.settings.minimumBatteryPercent, in: 0...100, step: 5)
-                    .disabled(!model.settings.allowBattery)
                 Toggle("Allow operation in Low Power Mode", isOn: $model.settings.allowLowPowerMode)
-                Text("When battery operation is off, the engine requires AC power. A 0% minimum disables the battery floor. Low Power Mode can reduce speed. Changes apply when the engine starts next; other safety guards remain active.")
+                Text("The engine runs on battery or on AC power. A 0% minimum disables the battery floor. Low Power Mode can reduce speed. Changes apply when the engine starts next; other safety guards remain active.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Loading the model") {

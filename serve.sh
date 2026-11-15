@@ -11,7 +11,7 @@
 # Options: --port N  --pool-gb 0|1|2  --checkpoint DIR  --max-restarts N  --max-guard-stops N  (see --help)
 #          --enable layer-major   opt-in layer-major prefill (docs/flashnext/architecture-overhaul.md); default is chunk-major
 # Environment: VEYSTRIX_CACHE_GB (shared SSD cache quota, default 80), VEYSTRIX_POOL_GB, VEYSTRIX_PORT, VEYSTRIX_API_KEY.
-# Keep the Mac on AC power with Low Power Mode off. Logs: ~/.flashnext/logs/
+# Battery or AC power both work (a charge below VEYSTRIX_MIN_BATTERY_PERCENT, default 25, refuses the start); keep Low Power Mode off. Logs: ~/.flashnext/logs/
 cd "$(dirname "$0")" || exit 1
 export VEYSTRIX_API_KEY="${VEYSTRIX_API_KEY:-local}"
 if [[ "$1" == "--warm" ]]; then

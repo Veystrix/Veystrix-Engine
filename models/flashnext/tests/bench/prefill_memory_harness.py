@@ -520,7 +520,6 @@ def swapin_mib(vm: dict | None, page_bytes: int) -> float:
 class SafetyPolicy:
     min_battery_percent: int = 25
     allow_low_power: bool = False
-    require_ac: bool = False
     swap_growth_mb: float = 64.0
     # Cumulative swap-in growth allowed per arm, measured from that arm's own counter.
     # A few pages are touched back in when a process maps its memory while old swap
@@ -594,8 +593,6 @@ class Watchdog:
             return "Low Power Mode is on"
         percent = sample.get("battery_percent")
         source = sample.get("power_source")
-        if policy.require_ac and source != "ac":
-            return "AC power is required by Veystrix Settings"
         if source == "battery" and percent is not None and percent < policy.min_battery_percent:
             return f"battery {percent}% is below {policy.min_battery_percent}%"
         if policy.final:

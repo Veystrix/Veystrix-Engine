@@ -93,8 +93,11 @@ public struct LaunchPlan: Equatable, Sendable {
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["VEYSTRIX_MIN_BATTERY_PERCENT"] = String(settings.minimumBatteryPercent)
-        env["VEYSTRIX_REQUIRE_AC"] = settings.allowBattery ? "0" : "1"
         env["VEYSTRIX_ALLOW_LOW_POWER"] = settings.allowLowPowerMode ? "1" : "0"
+        // A client harness (Rakazo, Claude Code) answers a malformed or unknown tool call with its own tool error and the
+        // model tries again. The engine's strict default ends the whole request instead, so every slip by the model failed
+        // the run. Rollback: start the engine from the command line, where the default stays strict.
+        env["VEYSTRIX_INVALID_TOOL_CALLS"] = "pass"
         env["FLASHNEXT_SWAP_CEILING_MIB"] = String(settings.swapLimitGiB * 1024)
         env["VEYSTRIX_PORT"] = String(settings.port)
         // Lifetime statistics: the engine appends one counts-only line per finished request here.

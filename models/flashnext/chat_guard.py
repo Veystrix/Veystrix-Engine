@@ -154,7 +154,6 @@ class ChatGuard:
                                         swap_ceiling_mib=(memory_policy.absolute_swap_ceiling_mib() if absolute
                                                           else H.ABSOLUTE_SWAP_CEILING_MIB))
                 policy.allow_low_power = os.environ.get("VEYSTRIX_ALLOW_LOW_POWER") == "1"
-                policy.require_ac = os.environ.get("VEYSTRIX_REQUIRE_AC") == "1"
                 # Owner decision 2026-11-09: VEYSTRIX_MIN_BATTERY_PERCENT=0 removes the battery floor for a run (default stays 25).
                 try:
                     policy.min_battery_percent = int(os.environ.get("VEYSTRIX_MIN_BATTERY_PERCENT", policy.min_battery_percent))

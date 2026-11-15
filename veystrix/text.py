@@ -202,6 +202,60 @@ class CompletedTextBuffer:
         return [final]
 
 
+class ToolCallTextGate:
+    """Streams a reply's visible text while the request declares tools, without ever showing the start of a tool call.
+
+    A model that may call tools writes ``text <tool_call>...</tool_call>``. The server used to hold every word until the
+    turn ended, because the text could turn into a tool call at any point, so a client saw nothing for the whole turn.
+    The gate releases text as it arrives and stops at the first ``<tool_call>`` marker. It also holds back an unfinished
+    marker (``<tool_`` at the end of a piece) and trailing whitespace, because the finished reply is stripped of both.
+    ``remainder(final_text)`` is whatever the finished reply has beyond what was already released (text after a tool
+    call, a held tail, a stray marker), so the client's concatenated text equals the finished text exactly.
+    """
+
+    MARKER = "<tool_call>"
+
+    def __init__(self):
+        self.pending = ""
+        self.sent = ""
+        self.blocked = False
+        self.mismatched = False
+
+    def feed(self, piece: str) -> str:
+        if self.blocked or not piece:
+            return ""
+        self.pending += piece
+        cut = self.pending.find(self.MARKER)
+        if cut >= 0:
+            self.blocked = True
+            ready, self.pending = self.pending[:cut], ""
+            ready = ready.rstrip()
+        else:
+            held = 0
+            for size in range(min(len(self.MARKER) - 1, len(self.pending)), 0, -1):
+                if self.MARKER.startswith(self.pending[-size:]):
+                    held = size
+                    break
+            ready = self.pending[:len(self.pending) - held].rstrip()
+            self.pending = self.pending[len(ready):]
+        if not self.sent:
+            ready = ready.lstrip()
+        self.sent += ready
+        return ready
+
+    def remainder(self, final_text: str) -> str:
+        """The part of the finished text the client has not been sent."""
+        if final_text.startswith(self.sent):
+            return final_text[len(self.sent):]
+        self.mismatched = True              # should not happen: the stream and the parsed reply disagree
+        common = 0
+        for left, right in zip(self.sent, final_text):
+            if left != right:
+                break
+            common += 1
+        return final_text[common:]
+
+
 class ReasoningStreamFilter:
     """Separates thinking and visible content without leaking tags split across streamed pieces.
 

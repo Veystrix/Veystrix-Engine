@@ -13,7 +13,8 @@ process group (SIGINT, then SIGTERM, then SIGKILL) when
     --compressor-growth-mib above launch for 20 consecutive samples. Short bursts that are
     released again (seen in every short prefill) are counted and reported, not stopped,
   * thermal pressure is at or above --thermal-level for --thermal-samples consecutive samples,
-  * the machine leaves AC power, enters Low Power Mode, or the battery is under 25%.
+  * the machine enters Low Power Mode, or the battery is under --min-battery-percent (default 25; 0 turns the floor off).
+    Running on battery is allowed: there is no plug-in requirement.
 
 Exit status: the command's own status, or 90 when the guard stopped it.
 """
@@ -129,6 +130,7 @@ def main():
     parser.add_argument("--thermal-level", type=int, default=2)
     parser.add_argument("--thermal-samples", type=int, default=15)
     parser.add_argument("--max-seconds", type=float, default=3600)
+    parser.add_argument("--min-battery-percent", type=int, default=25)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -137,12 +139,10 @@ def main():
 
     base, state = memory(), power()
     refusal = None
-    if state["ac"] is not True:
-        refusal = "not on AC power"
-    elif state["low_power"]:
+    if state["low_power"]:
         refusal = "Low Power Mode is on"
-    elif state["battery"] is not None and state["battery"] < 25:
-        refusal = "battery under 25%"
+    elif state["ac"] is False and state["battery"] is not None and state["battery"] < args.min_battery_percent:
+        refusal = f"battery under {args.min_battery_percent}%"
     elif thermal() >= args.thermal_level:
         refusal = "thermal pressure already high"
     elif base["available"] < args.floor_gib * GIB:
@@ -179,12 +179,10 @@ def main():
             if tick % 30 == 0:
                 state = power()
                 row["power"] = state
-                if state["ac"] is False:
-                    reason = "left AC power"
-                elif state["low_power"]:
+                if state["low_power"]:
                     reason = "Low Power Mode turned on"
-                elif state["battery"] is not None and state["battery"] < 25:
-                    reason = "battery under 25%"
+                elif state["ac"] is False and state["battery"] is not None and state["battery"] < args.min_battery_percent:
+                    reason = f"battery under {args.min_battery_percent}%"
             if low >= args.floor_samples:
                 reason = (f"available memory under {args.floor_gib:g} GiB for {low} s "
                           f"(now {now['available'] / GIB:.2f} GiB)")

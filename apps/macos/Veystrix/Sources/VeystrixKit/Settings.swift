@@ -131,7 +131,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Let the engine's supervisor restart the server after a crash or memory guard stop (bounded and logged).
     public var supervisedRestarts: Bool = true
     public var keepMacAwake: Bool = true
-    public var allowBattery: Bool = true
     public var minimumBatteryPercent: Int = 25
     public var allowLowPowerMode: Bool = false
     /// Initial shared quota in decimal GB. Applied changes are stored by the cache manager.
@@ -163,7 +162,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion, port, checkpointPath, selectedModel, nemotronCheckpointPath, decodePool, supervisedRestarts, keepMacAwake, cacheQuotaGB,
              cacheDirectory, confirmBeforeLoading, requireAPIKey, checkForUpdatesAutomatically,
-             includeLogsInDiagnostics, developerRepoPath, allowBattery, minimumBatteryPercent, allowLowPowerMode,
+             includeLogsInDiagnostics, developerRepoPath, minimumBatteryPercent, allowLowPowerMode,
              flashNextKVCache, flashNextSpeed, flashNextBoundedPrefill, nemotronContextTokens, swapLimitGiB,
              flashNextPerformance, nemotronPerformance, nemotronKVCache, nemotronMTPPath
     }
@@ -189,7 +188,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         s.nemotronMTPPath = try c.decodeIfPresent(String.self, forKey: .nemotronMTPPath) ?? s.nemotronMTPPath
         s.supervisedRestarts = try c.decodeIfPresent(Bool.self, forKey: .supervisedRestarts) ?? s.supervisedRestarts
         s.keepMacAwake = try c.decodeIfPresent(Bool.self, forKey: .keepMacAwake) ?? s.keepMacAwake
-        s.allowBattery = try c.decodeIfPresent(Bool.self, forKey: .allowBattery) ?? s.allowBattery
         s.minimumBatteryPercent = try c.decodeIfPresent(Int.self, forKey: .minimumBatteryPercent) ?? s.minimumBatteryPercent
         s.allowLowPowerMode = try c.decodeIfPresent(Bool.self, forKey: .allowLowPowerMode) ?? s.allowLowPowerMode
         let oldQuota = try c.decodeIfPresent(Int.self, forKey: .cacheQuotaGB)

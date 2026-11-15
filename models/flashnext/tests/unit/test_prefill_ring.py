@@ -24,6 +24,7 @@ import numpy as np
 from models.flashnext import expert_cache, expert_pool, prefill, prefill_ring
 from models.flashnext.pool_ring import FREE, HazardError
 from models.flashnext.store import SafeTensorStore
+from models.flashnext.hardware_probe import requires_zero_copy
 
 EXPERTS = 12
 HIDDEN = 2560
@@ -232,6 +233,7 @@ class TensorCorrectnessTests(RingCase):
         self.assertRestored()
 
 
+@requires_zero_copy
 class HighOffsetTests(RingCase):
     """A 4.6 GB pool puts the ring above 4.29 GB, where a bf16 element index
     passes 2**31. Only the touched ring pages become resident."""

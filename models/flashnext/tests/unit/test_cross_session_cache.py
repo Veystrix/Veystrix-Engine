@@ -23,6 +23,7 @@ import mlx.core as mx
 from models.flashnext import prefix_cache as P, prefix_session as S
 from models.flashnext.tests.unit.test_prefix_cache import VOCAB, build_model, cache_bits
 from models.flashnext.tests.unit.test_prefix_session import MARK, Base, compat, encode
+from models.flashnext.hardware_probe import requires_zero_copy
 
 TABLE: list[dict] = []
 
@@ -73,6 +74,7 @@ class CrossSessionBase(Base):
         self.assertEqual(cold_report.prefilled_tokens, len(prompt), "the cold reference must compute every token")
 
 
+@requires_zero_copy
 class SharedStaticPrefixTests(CrossSessionBase):
     def test_session_b_reuses_session_a_static_prefix_and_is_exactly_a_cold_run(self):
         a = self.static + self.user_a + self.gen
@@ -116,6 +118,7 @@ class SharedStaticPrefixTests(CrossSessionBase):
         self.assert_same_as_cold(s2, token, cache)
 
 
+@requires_zero_copy
 class ResumeTests(CrossSessionBase):
     def test_resume_after_the_live_state_was_replaced_restores_the_last_message_boundary(self):
         a1 = self.static + self.user_a + self.gen
@@ -147,6 +150,7 @@ class ResumeTests(CrossSessionBase):
         self.assert_same_as_cold(b, token, cache)
 
 
+@requires_zero_copy
 class DamageAndBudgetTests(CrossSessionBase):
     def files(self):
         return sorted(f for f in (self.tmp / "cache").rglob("*") if f.is_file())

@@ -3,8 +3,10 @@ import unittest
 from pathlib import Path
 
 from models.flashnext.tests.bench.bench_endurance_workload import run_endurance
+from models.flashnext.hardware_probe import requires_zero_copy
 
 
+@requires_zero_copy
 class EnduranceWorkloadTests(unittest.TestCase):
     def test_synthetic_endurance_workload_50_requests(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

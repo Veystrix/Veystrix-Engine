@@ -8,6 +8,7 @@ from unittest import mock
 import mlx.core as mx
 
 from models.flashnext import expert_cache, expert_io_stats, expert_pool, memory_manager as M
+from models.flashnext.hardware_probe import requires_zero_copy
 
 GIB, GB = M.GIB, M.GB
 
@@ -85,6 +86,7 @@ class TestPoolReuseMemoryEstimator(unittest.TestCase):
         self.assertFalse(p_opt.release_pool)
 
 
+@requires_zero_copy
 class TestRapidShortPrefillSequence(unittest.TestCase):
     def test_rapid_short_prefill_peak_memory_stability(self):
         """Simulate 20 rapid short-prefill requests (10-50 tokens) and verify memory does not ratchet."""

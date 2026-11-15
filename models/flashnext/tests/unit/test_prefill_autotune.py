@@ -3,6 +3,7 @@ import unittest
 
 from models.flashnext import prefill, prefill_autotune as tune
 from models.flashnext.tests.unit.test_prefix_session import Base, cache_bits
+from models.flashnext.hardware_probe import requires_zero_copy
 
 
 class SelectionTests(unittest.TestCase):
@@ -47,6 +48,7 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual((prefill.chunk_tokens(), prefill.chunk_policy()), (1024, "grid"))
 
 
+@requires_zero_copy
 class PrefixTests(Base):
     def test_restore_is_exact_at_same_cap_and_isolated_across_caps(self):
         model, session = self.engine()

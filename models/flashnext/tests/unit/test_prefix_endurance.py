@@ -31,6 +31,7 @@ from models.flashnext import prefix_cache as P
 from models.flashnext import prefix_profiles as PP
 from models.flashnext import prefix_session as S
 from models.flashnext.tests.unit.test_prefix_cache import VOCAB, build_model, cache_bits
+from models.flashnext.hardware_probe import requires_zero_copy
 
 MARK = [3, 4]
 RAM_GB, DISK_GB = "0.0015", "0.006"          # about 3 resident and 12 stored snapshots of the small model
@@ -49,6 +50,7 @@ def encode(text):
     return list(MARK)
 
 
+@requires_zero_copy
 class EnduranceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

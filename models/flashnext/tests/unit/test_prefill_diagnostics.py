@@ -24,6 +24,7 @@ from models.flashnext import expert_pool, prefill, prefill_ring
 from models.flashnext.tests.bench import bench_prefill_memory as B
 from models.flashnext.tests.bench import prefill_memory_harness as H
 from models.flashnext.tests.unit import test_bench_prefill_memory as T
+from models.flashnext.hardware_probe import requires_zero_copy
 
 GB = 1_000_000_000
 PAGE = 16384
@@ -753,6 +754,7 @@ class InstrumentationTests(unittest.TestCase):
 FLAGS_MIN = H.production_flags()["min_tokens"]
 
 
+@requires_zero_copy
 class ChildMainTests(unittest.TestCase):
     """``child_main`` end to end with a fake backend: no model, no GPU, ``os._exit`` mocked."""
 

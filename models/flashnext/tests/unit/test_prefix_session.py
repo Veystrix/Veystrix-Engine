@@ -12,6 +12,7 @@ import mlx.core as mx
 
 from models.flashnext import prefill, prefix_cache as P, prefix_session as S
 from models.flashnext.tests.unit.test_prefix_cache import VOCAB, build_model, cache_bits
+from models.flashnext.hardware_probe import requires_zero_copy
 
 MARK = [3, 4]                                   # stands for "<|im_end|>\n"
 
@@ -54,6 +55,7 @@ class Base(unittest.TestCase):
         return int(token.item()), cache, report
 
 
+@requires_zero_copy
 class WorkflowTests(Base):
     def test_async_last_snapshot_is_restartable_after_flush(self):
         model, session = self.engine()
@@ -315,6 +317,7 @@ class BoundaryTests(Base):
         self.assertEqual(session.boundaries(self.system, 0), (), "no token would be left to prefill")
 
 
+@requires_zero_copy
 class BalancedPolicyTests(Base):
     def test_new_plan_never_auto_chains_to_unrelated_old_boundary(self):
         with mock.patch.dict(os.environ, {S.FLAG_BOUNDARIES: "chunks", S.FLAG_DIR: str(self.tmp / "chain")}):
@@ -590,6 +593,7 @@ class _DiesAfter:
         return getattr(self._model, name)
 
 
+@requires_zero_copy
 class ResumablePrefillTests(Base):
     """AGENTIC boundaries="all": message ends plus every chunk edge, so an interrupted cold prefill resumes."""
 
@@ -689,6 +693,7 @@ class ResumablePrefillTests(Base):
         self.assertEqual(report.hit_tokens, 300)
 
 
+@requires_zero_copy
 class EffortTurnSharingTests(Base):
     """The effort sentence is its own system turn after the system message: every effort shares the whole system prompt."""
 
@@ -761,6 +766,7 @@ class EffortTurnSharingTests(Base):
             self.assertEqual(session.cold_edges(self.prompt()), before, "all vs messages differ only in extra snapshots")
 
 
+@requires_zero_copy
 class ProvenanceSessionTests(Base):
     """A prefix is reused only when its chunk history is the one this prompt's cold run would have made."""
 

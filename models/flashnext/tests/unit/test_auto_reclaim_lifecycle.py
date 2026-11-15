@@ -2,8 +2,10 @@
 import unittest
 
 from models.flashnext.tests.bench.bench_auto_reclaim_lifecycle import run_lifecycle_stress_test
+from models.flashnext.hardware_probe import requires_zero_copy
 
 
+@requires_zero_copy
 class AutoReclaimLifecycleTests(unittest.TestCase):
     def tearDown(self):
         from models.flashnext import auto_reclaim, expert_pool, memory_manager

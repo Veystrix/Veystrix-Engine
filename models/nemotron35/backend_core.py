@@ -211,6 +211,7 @@ class EngineCore:
             return logits
         finally:
             pool.end_layer()
+            pool.restore_staged_budget()     # prefetch_layer raised it to a full layer for this segment only
             pool.speculate = True
 
     def prefill(self, tokens, *, cancelled=lambda: False, progress=None, boundary=None, emit_logits=True, anchor=None, save_anchor=None):

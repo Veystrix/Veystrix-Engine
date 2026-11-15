@@ -922,6 +922,24 @@ class StockKernelTests(unittest.TestCase):
         finally:
             streamed.close()
 
+    def test_decode_read_ahead_can_be_turned_off_without_changing_the_result(self):
+        outputs, issued = [], []
+        for flag in ("1", "0"):
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_DECODE_READ_AHEAD": flag}):
+                streamed = load_streamed(Path(_dir) / "ck", pool_bytes=0, config_check=permissive_config_check)
+            self.addCleanup(streamed.close)
+            cache = streamed.model.make_cache()
+            mx.eval(streamed.model(mx.array([[3, 9, 1, 5]]), cache=cache))        # a multi-token call reads ahead either way
+            before = streamed.pool.stats()["prefetch_issued"]
+            steps = [streamed.model(mx.array([[token]]), cache=cache) for token in (7, 2, 11)]
+            mx.eval(*steps)
+            outputs.append(steps)
+            issued.append(streamed.pool.stats()["prefetch_issued"] - before)
+        self.assertGreater(issued[0], 0)
+        self.assertEqual(issued[1], 0)
+        for with_ahead, without in zip(*outputs):
+            self.assertTrue(bool(mx.all(with_ahead == without)))
+
     def test_gather_cap_is_reported_in_pool_statistics(self):
         from models.nemotron35 import streamed_experts as se
         streamed = load_streamed(Path(_dir) / "ck", pool_bytes=0, config_check=permissive_config_check)

@@ -53,6 +53,21 @@ GATHER_MAX_EXPERTS = 24      # beyond this (large prefill chunks) the per-expert
 # stock result bit for bit.
 EXACT_ROWS = os.environ.get('VEYSTRIX_NEMOTRON_EXACT_ROWS', '0') == '1'
 PREFILL_PREDICT_CAP = 40     # experts staged per layer during prefill (nearly all are needed there anyway)
+# Opt-in: a staged prediction that the router did not pick is dropped, oldest first, when the staging area is full.
+# Without it such an expert stays staged until some later token asks for it, the area fills with them, and read-ahead
+# then issues only as many reads as demand happens to consume (measured 15 November 2026: 26 of the 138 experts of a
+# token). Measured and not adopted: with it, 58-72% of a token's experts arrive ahead of time, and decode still falls
+# from 7.0 to 5.0-5.7 tok/s because the wrong predictions add 100-260 MB of reads per token.
+STAGED_EVICT_FLAG = 'VEYSTRIX_NEMOTRON_STAGED_EVICT'
+# Next-layer read-ahead for single-token (decode) calls is off unless this is "1"; prefill is unaffected. Measured
+# on the real checkpoint (15 November 2026, same digests): with the staging area back at its configured size,
+# read-ahead on decoded at 5.9 tok/s and 283 MB/token, off at 7.0 tok/s and 217 MB/token. A wrong prediction costs a
+# 5.6 MB read, and decode is bound by the bytes read, so even 75% precision loses. Off also frees the staging area
+# (about 0.5 GB of active memory) for the file cache.
+DECODE_READ_AHEAD_FLAG = 'VEYSTRIX_NEMOTRON_DECODE_READ_AHEAD'
+# Layer-major prefill raises the staging area to one full layer (about 724 MB). "1" keeps it raised afterwards, which
+# is what happened before 15 November 2026; by default it returns to its configured size when the segment ends.
+KEEP_STAGED_BUDGET_FLAG = 'VEYSTRIX_NEMOTRON_KEEP_STAGED_BUDGET'
 # Opt-in, measured and not adopted: mapped experts. With a full expert pack on disk (models/shared/expert_pack.py,
 # built in 17 s, 16.6 GB) the routed experts are used in place from a read-only mapping of the pack, so the kernel's
 # file cache is the only expert cache and nothing is copied. "1" requires a pack, "auto" maps when the pack for this
@@ -332,7 +347,7 @@ class ExpertPool:
         self.score_order = os.environ.get("VEYSTRIX_NEMOTRON_PREFETCH_SCORE_ORDER") == "1"
         self.reader, self.budget = reader, budget_bytes
         self._least_stale = LeastStale() if policy == "least-stale" else None
-        self.staged_budget = staged_bytes
+        self.staged_budget = self._staged_base = staged_bytes
         self._items: OrderedDict = OrderedDict()      # (layer, expert) -> (mx arrays, size)   main thread only
         self._staged: OrderedDict = OrderedDict()     # (layer, expert) -> (mx arrays, size)   guarded by _lock
         self._inflight: dict = {}                     # (layer, expert) -> Future (prefetch)  guarded by _lock
@@ -363,6 +378,8 @@ class ExpertPool:
         self.read_ahead = os.environ.get('VEYSTRIX_NEMOTRON_MAP_READ_AHEAD', '1') != '0'
         self.view_hits = self.resident_hits = 0       # mapped experts: served by a pooled view / by the file cache
         self.gather_calls = self.gather_over_cap = 0  # VEYSTRIX_NEMOTRON_GATHER: calls taken / refused by the cap
+        self.evict_staged = os.environ.get(STAGED_EVICT_FLAG) == '1'
+        self.decode_read_ahead = os.environ.get(DECODE_READ_AHEAD_FLAG, '0') == '1'
 
     # -- layer scope (layer-major prefill) ---------------------------------------------------------------------
     def begin_layer(self, layer: int, *, seed=False) -> None:
@@ -400,6 +417,19 @@ class ExpertPool:
         self.staged_budget = max(self.staged_budget, need)
         return self.prefetch(layer, range(self.reader.expert_count))
 
+    def restore_staged_budget(self) -> None:
+        """Return the staging area to its configured size after ``prefetch_layer`` raised it, dropping the oldest
+        staged experts beyond it. Reads still in flight land under the restored size (``_landed`` trims)."""
+        if os.environ.get(KEEP_STAGED_BUDGET_FLAG) == '1':
+            return
+        with self._lock:
+            self.staged_budget = self._staged_base
+            while self._staged and self._staged_total > self.staged_budget:
+                stale, (_, old) = self._staged.popitem(last=False)
+                self._staged_total -= old
+                self.prefetch_wasted += 1
+                self._history_keys.discard(stale)
+
     # -- prefetch ----------------------------------------------------------------------------------------------
     def prefetch(self, layer: int, experts, *, history: bool = False) -> int:
         """Start background reads for experts not already resident, staged or in flight. Never blocks."""
@@ -413,7 +443,16 @@ class ExpertPool:
                 if key in self._items or key in self._staged or key in self._inflight:
                     continue
                 if self._staged_total + len(self._inflight) * self.reader.expert_bytes >= self.staged_budget:
-                    break
+                    if not self.evict_staged:
+                        break
+                    room = self.staged_budget - (len(self._inflight) + 1) * self.reader.expert_bytes
+                    while self._staged and self._staged_total > room:      # oldest predictions nobody asked for
+                        stale, (_, old) = self._staged.popitem(last=False)
+                        self._staged_total -= old
+                        self.prefetch_wasted += 1
+                        self._history_keys.discard(stale)
+                    if self._staged_total > room:                          # reads in flight fill the area by themselves
+                        break
                 options = {'deadline': key[0], 'demand': False} if self.edf else {}
                 future = self.reader.submit_expert(executor, key[0], key[1], **options)
                 self._inflight[key] = future
@@ -721,6 +760,8 @@ class StreamedSwitchMLP(nn.Module):
     def _prefetch_next(self, flat, rows_n):
         nxt = self.next_gate
         if nxt is None or not self.pool.speculate or (self.pool.reader.mapped and not self.pool.read_ahead):
+            return
+        if rows_n == 1 and not self.pool.decode_read_ahead:
             return
         scores = mx.sigmoid((flat @ nxt.weight.T).astype(mx.float32)) + nxt.bias
         k = min(nxt.top_k + PREDICT_EXTRA, scores.shape[-1])

@@ -265,6 +265,59 @@ class PoolIntegrationTest(unittest.TestCase):
         finally:
             pool.close()
 
+    def test_full_staging_area_blocks_read_ahead_unless_stale_predictions_are_dropped(self):
+        class Reader(FakeReader):
+            expert_bytes = 16                      # what one staged expert of this fake occupies
+
+        def settle(pool, count):
+            deadline = time.monotonic() + 2
+            while len(pool._staged) < count and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        for flag, issued, wasted in (("0", 0, 0), ("1", 2, 2)):
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_STAGED_EVICT": flag,
+                                                       "VEYSTRIX_NEMOTRON_EDF_IO": "0",
+                                                       "VEYSTRIX_NEMOTRON_LOOKAHEAD_LAYERS": "0"}):
+                pool = ExpertPool(Reader(), 0, workers=1, prefetch_workers=1, staged_bytes=32)
+            try:
+                self.assertEqual(pool.prefetch(3, [1, 2]), 2)          # two predictions the router then ignores
+                settle(pool, 2)
+                self.assertEqual(pool.stats()["staged_bytes"], 32)
+                self.assertEqual(pool.prefetch(4, [5, 6]), issued)
+                if issued:
+                    settle(pool, 2)
+                    self.assertEqual(set(pool._staged), {(4, 5), (4, 6)})
+                else:
+                    self.assertEqual(set(pool._staged), {(3, 1), (3, 2)})
+                self.assertEqual(pool.stats()["prefetch_wasted"], wasted)
+                self.assertLessEqual(pool.stats()["staged_bytes"], 32)
+                self.assertEqual(set(pool.fetch(4, [5, 6])), {5, 6})   # served either way
+            finally:
+                pool.close()
+
+    def test_layer_prefetch_raises_the_staging_area_only_until_it_is_restored(self):
+        class Reader(FakeReader):
+            expert_bytes = 16
+
+        for keep, budget, staged in (("0", 32, 2), ("1", 16 * 17, 16)):
+            with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_KEEP_STAGED_BUDGET": keep,
+                                                       "VEYSTRIX_NEMOTRON_EDF_IO": "0",
+                                                       "VEYSTRIX_NEMOTRON_LOOKAHEAD_LAYERS": "0"}):
+                pool = ExpertPool(Reader(), 0, workers=1, prefetch_workers=2, staged_bytes=32)
+                try:
+                    self.assertEqual(pool.prefetch_layer(4), 16)       # a whole layer: the area grows to hold it
+                    deadline = time.monotonic() + 2
+                    while len(pool._staged) < 16 and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertEqual(len(pool._staged), 16)
+                    pool.restore_staged_budget()
+                    self.assertEqual(pool.staged_budget, budget)
+                    self.assertEqual(len(pool._staged), staged)
+                    self.assertEqual(pool.stats()["staged_bytes"], staged * 16)
+                    self.assertEqual(pool.stats()["prefetch_wasted"], 16 - staged)
+                finally:
+                    pool.close()
+
     def test_deadline_executor_receives_layer_deadlines(self):
         reader = FakeReader()
         with unittest.mock.patch.dict(os.environ, {"VEYSTRIX_NEMOTRON_EDF_IO": "1",

@@ -13,7 +13,11 @@ class H(BaseHTTPRequestHandler):
  def do_GET(self):
   b=json.dumps({'ready':True,'instance_id':os.environ['VEYSTRIX_ENGINE_INSTANCE_ID'],'installed_model_id':'test-model'}).encode()
   self.send_response(200); self.send_header('Content-Length',str(len(b))); self.end_headers(); self.wfile.write(b)
-HTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
+import socketserver
+class S(HTTPServer):
+ def server_bind(self):
+  socketserver.TCPServer.server_bind(self); self.server_name='127.0.0.1'; self.server_port=self.server_address[1]
+S(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
 '''
 
 class ModelProcessTests(unittest.TestCase):

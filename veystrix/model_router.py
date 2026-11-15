@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from veystrix.quick_bind import QuickBindMixin
 from urllib.parse import urlsplit
 
 from veystrix import context_budget, model_registry
@@ -110,7 +111,7 @@ def session_owner(headers, payload):
         return None
 
 
-class RouterServer(ThreadingHTTPServer):
+class RouterServer(QuickBindMixin, ThreadingHTTPServer):
     daemon_threads = True
     # Permit immediate restart after recently closed connections. The OS still
     # rejects binding over another active listener (no SO_REUSEPORT).

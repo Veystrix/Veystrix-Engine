@@ -18,6 +18,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
+from veystrix.quick_bind import QuickBindMixin
 from veystrix.text import (
     CompletedTextBuffer,
     ReasoningStreamFilter,
@@ -1940,7 +1941,7 @@ class _ResponseBuffer:
                 self._bytes -= len(frame)
 
 
-class VeystrixHTTPServer(ThreadingHTTPServer):
+class VeystrixHTTPServer(QuickBindMixin, ThreadingHTTPServer):
     """Connections are handled by threads; inference is serialized by ``scheduler`` (see veystrix/scheduler.py)."""
 
     daemon_threads = True

@@ -231,7 +231,11 @@ class H(BaseHTTPRequestHandler):
   self.reply({'model':d['model'],'process_model':sys.argv[2]})
  def reply(self,obj):
   b=json.dumps(obj).encode(); self.send_response(200); self.send_header('Content-Length',str(len(b))); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(b)
-HTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
+import socketserver
+class S(HTTPServer):
+ def server_bind(self):
+  socketserver.TCPServer.server_bind(self); self.server_name='127.0.0.1'; self.server_port=self.server_address[1]
+S(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
 '''
 
 class ProcessRouterTests(unittest.TestCase):

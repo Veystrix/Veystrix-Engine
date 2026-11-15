@@ -58,3 +58,15 @@ The previous reply is cached with the prompt (cached = previous prompt + previou
 ### Nemotron cache-aware routing, observe run on the real model (evidence: `results/nemotron35/20261115-224958-cache-ab-nemotron-observe`)
 
 One guarded run (memory floor off at the owner's instruction; swap, thermal and battery stops on; AC power, thermal 0, swap flat, available memory floor 6.4 GiB), stopped by the owner after 5 of 6 requests (the sampled code request did not run). Exact routing, output unchanged. Decode 6.5–7.9 tok/s. Over 11,968 routed-layer calls (71,808 chosen experts): **45% of chosen experts had been used in the last 3 tokens**; of the other 55%, a recently used expert scoring within epsilon existed for 1.9% (0.005), 4.0% (0.01), **8.9% (0.02)**, 25% (0.05), 48% (0.1) and 71% (0.2). The recency window overstates misses (the macOS cache holds more), so real read savings are smaller than these fractions. Rough expectation, not measured: epsilon 0.02 about +3%, 0.05 about +8%, larger epsilon more with more quality risk. No swap run has been done; `swap` stays off and needs a paired speed run and a tool-call quality check first.
+
+### Nemotron cache-aware routing: swap measured (evidence: `results/nemotron35/20261115-225848-cache-ab-nemotron-{off,swap}`, `results/nemotron35/20261115-230825-quality-ab-nemotron-{off-0,swap-0.05,swap-0.1}`)
+
+Real model, one run per arm, engine otherwise stopped, guard memory floor off at the owner's instruction (swap flat, thermal 0, available memory floor 5.4–6.2 GiB). Greedy decode, speed from the usage log; the exact arm ran first (cooler) in each pair.
+
+| Arm | Speed | Known-answer questions | Tool-call JSON (8) |
+| --- | --- | --- | --- |
+| exact | 6.44 tok/s median (24-request set), 7.0–7.8 on the 6-prompt set | 15/16 (counts "strawberry" wrong) | 8/8 valid and correct |
+| swap, epsilon 0.05 | 6.81 (+5.7%); 6-prompt set +3% to +11%, mean about +6% | 15/16 | **7/8**: one answer lost its closing brace (invalid JSON) |
+| swap, epsilon 0.1 | 7.07 (+9.8%) | 15/16 | **6/8**: after a valid call the model wrote `</think>` and a second, invented call (twice) |
+
+About 0.6 experts of 6 were swapped per layer call at 0.05, and 1.3 at 0.1. Speed samples are small (8–9 requests long enough to time), single runs, so the percentages are rough. **Verdict: swap buys 5–10% and breaks tool calls at both tolerances tried. Do not offer it in the app.** The Rakazo bots depend on tool calls, so it stays an off-by-default developer switch. Epsilon 0.02 was not run (about +3% expected, below what one run can resolve). Observe mode costs nothing in output and can be left available for diagnostics.

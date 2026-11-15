@@ -71,6 +71,9 @@ Short prefills are SSD-bound by nature: at 512 tokens the router uses 107 of 128
 
 - Submitting layers with `mx.async_eval` instead of `mx.eval` in layer-major prefill: 311 against 314 tok/s, no CPU bubbles to remove.
 - `mx.compile` on the Mamba SSD scan: bit-identical but 41.2 against 41.3 ms. Step 128 instead of 256 is 15% faster for the scan but changes rounding and is worth only about 2% of prefill.
+- Starting the shared expert early for single-token decode: decode fell about 10% (5.85 against 6.6 tok/s on a 512-token prompt; note that run was only 8 tokens long, see the measurement note below), so it is used for prefill rows only (`VEYSTRIX_NEMOTRON_OVERLAP_SHARED`, prefill +4-7%, bit-identical).
+- More expert read threads (8 -> 16 or 24) for decode: 8.4-8.5 against 8.2-8.4 tok/s, no gain. Cold reads are capped by the SSD at 3.0-3.3 GB/s at any thread count and any split size (measured after `purge`, 2/6/40 experts); cached reads do scale with threads (6.4 -> 11.9 GB/s at 6 experts) but decode is not limited by them.
+- Reading prefill experts with `F_NOCACHE` so the 22 GB stream does not push decode's experts out of the file cache: not built into the tree. Three consecutive 4,000-token turns with the default build decode at 8.71 / 8.81 / 8.74 tok/s and prefill at 334 / 331 / 329 tok/s, so a fresh prefill leaves nothing to recover.
 - Dequantize + dense bf16 matmul instead of `quantized_matmul` for the large projections: bit-identical for M >= 384 and about 10% faster per GEMM (about 3% of prefill); not done, and not bit-equal at M = 96 so unusable for per-expert calls.
 
 ## Quality check of all three prefill changes together (real checkpoint, teacher-forced)
@@ -87,3 +90,15 @@ Short prefills are SSD-bound by nature: at 512 tokens the router uses 107 of 128
 Mean negative log-likelihood of the true next token: legacy 2.0845, new 2.0922, legacy at chunk 1024 2.0875; next-token accuracy 0.465 / 0.457 / 0.457 (127 positions, so one token is 0.008). The new build moves the distributions as much as halving the prefill chunk size does and no more. The prefetch order and the pipelining are bit-identical; the whole difference comes from the attention change (rounding only, closer to an fp32 reference).
 
 Harness comparison, same cell (8,192 tokens, INT8 KV, prompt lookup, prefix cache on, memory sampler on): legacy 231.9 tok/s (TTFT 35.4 s), new 293.5 tok/s (TTFT 27.9 s), decode 7.66 / 7.70 tok/s, available-memory floor 5.13 / 5.11 GiB (`results/nemotron35/*stage11-qualification-manual`, the two newest).
+
+## Where decode stands (3,000-token natural-text prompt, 128 tokens, real checkpoint)
+
+119 ms per token: 38 ms GPU work up to each router sync, 75.5 ms dispatching and waiting for the experts (physical reads about 200 MB per token, the SSD limit). A dependent chain of the same layers with no host syncs takes 23 ms of GPU time, so about 15 ms per token is sync and dispatch latency that the per-layer router round trip forces. Decode 8.4-8.8 tok/s here; 7.7 at 8K context. Nothing lossless that I could find moves the I/O part: more RAM is the lever.
+
+## Measurement note
+
+The first decode comparisons of the night (shared-expert start, worker counts) used a driver whose context limit was prompt + 8 tokens, so each decoded 8 tokens. They are superseded by the 128-token natural-text runs above. The prefill numbers were never affected (prefill does not depend on the output length).
+
+## Integration check (real checkpoint, prefix cache on, 25K-character system prompt, new session identity)
+
+Populate: cold request 24.5 s. A fresh process with the same prompt restored 6,226 tokens from the SSD cache and answered in 4.6 s with the same output hash (`0a64d6fe2eec973b`). A prefill cancelled after 6 s ended as `cancelled`; the next normal request produced the same tokens as an uncancelled run (`81296a2bfae9f667`). Evidence: `results/nemotron35/*night-integ-*`.

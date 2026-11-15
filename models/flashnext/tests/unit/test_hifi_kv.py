@@ -94,6 +94,37 @@ class GatherTests(unittest.TestCase):
                     if isinstance(r, QSAKVCache):
                         self.assertTrue(mx.allclose(r.index_keys, c.index_keys, atol=2e-5).item())
 
+    def test_dense_prefix_matches_per_query_gather(self):
+        model = build_model()
+        from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention
+        original = Qwen4ExpAttention.__call__
+        if original is Q._chunked_call:
+            original = Q._ORIGINAL_CALL
+        reference, candidate = model.make_cache(), model.make_cache()
+        with patch.object(Q, "_ORIGINAL_CALL", original), patch.object(Qwen4ExpAttention, "__call__", Q._chunked_call):
+            for length in (13, 59, 1, 7, 40):                    # crosses the dense/sparse switch of the tiny indexer
+                ids = mx.random.randint(2, 512, (1, length))
+                with patch.dict(os.environ, {"FLASHNEXT_QSA_KERNEL": "gather", "FLASHNEXT_QSA_GATHER_TILE": "3"}):
+                    expected = model(ids, cache=reference).logits
+                with patch.dict(os.environ, {"FLASHNEXT_QSA_KERNEL": "gather", "FLASHNEXT_QSA_GATHER_TILE": "3",
+                                             Q.FLAG_DENSE_PREFIX: "1"}):
+                    actual = model(ids, cache=candidate).logits
+                mx.eval(expected, actual, [c.state for c in candidate], [c.state for c in reference])
+                self.assertTrue(mx.allclose(actual, expected, atol=2e-4, rtol=2e-3).item(),
+                                (length, mx.max(mx.abs(actual - expected)).item()))
+        with patch.dict(os.environ, {Q.FLAG_DENSE_PREFIX: "2"}):
+            with self.assertRaises(ValueError):
+                Q.dense_prefix_enabled()
+
+    def test_dense_query_count(self):
+        indexer = SimpleNamespace(block_topk=512, compress_ratio=4)
+        self.assertEqual(Q.dense_queries(indexer, 0, 4096, object()), 2051)
+        self.assertEqual(Q.dense_queries(indexer, 2048, 2048, object()), 3)
+        self.assertEqual(Q.dense_queries(indexer, 2051, 100, object()), 0)
+        self.assertEqual(Q.dense_queries(indexer, 5000, 100, object()), 0)
+        self.assertEqual(Q.dense_queries(indexer, 0, 1600, object()), 1600)
+        self.assertEqual(Q.dense_queries(indexer, 0, 4096, None), 4096)
+
 
 class MixedKVTests(unittest.TestCase):
     def append(self, cache, length):

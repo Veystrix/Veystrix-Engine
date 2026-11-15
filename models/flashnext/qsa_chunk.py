@@ -25,6 +25,7 @@ FLAG_KERNEL = "FLASHNEXT_QSA_KERNEL"
 FLAG_GATHER_TILE = "FLASHNEXT_QSA_GATHER_TILE"
 FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
 FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
+FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries that see every causal token use one causal SDPA
 INDEX_RESERVE_TOKENS = 4096
 
 _ORIGINAL_CALL = None
@@ -83,6 +84,25 @@ def kernel_mode():
     return mode
 
 
+def dense_prefix_enabled():
+    value = os.environ.get(FLAG_DENSE_PREFIX, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_DENSE_PREFIX} must be 0 or 1")
+    return value == "1"
+
+
+def dense_queries(indexer, past, length, pooled):
+    """How many leading queries of a chunk select every causal token (the rest select a sparse set).
+
+    A query whose causal length ``past + i + 1`` has at most ``block_topk`` complete blocks takes all causal tokens
+    (``_selected_indices``: ``counts > topk`` is false), so for those the gathered keys are simply the first ``past + i + 1``
+    cache rows."""
+    if pooled is None:
+        return length
+    first_sparse = (indexer.block_topk + 1) * indexer.compress_ratio - 1 - past
+    return max(0, min(length, first_sparse))
+
+
 def gather_tile():
     value = int(os.environ.get(FLAG_GATHER_TILE, "8"))
     if not 1 <= value <= 32:
@@ -92,6 +112,8 @@ def gather_tile():
 
 def fingerprint_parts():
     parts = {"qsa_prefill_tile_eval": 1} if os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" else {}
+    if dense_prefix_enabled():
+        parts["qsa_dense_prefix"] = 1
     if kernel_mode() == "gather":
         parts.update(qsa_kernel="gather-v1", qsa_gather_tile=gather_tile(),
                      qsa_pooled_indexer=QSA_CACHE_POOLED_KEYS)
@@ -179,7 +201,21 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         * (blocks if pooled is not None else 0) * max(index_query.dtype.size, 4),
         "full_history_token_mask": False,
     }
-    for start in range(0, length, tile_size):
+    first = 0
+    if dense_prefix_enabled() and batch == 1:
+        first = dense_queries(self.indexer, past, length, pooled)
+    if first:
+        # One causal SDPA over the dequantized cache rows the per-query path would gather (same rows, same dequantization).
+        rows = past + first
+        at = mx.broadcast_to(mx.arange(rows)[None, None, :], (batch, 1, rows))
+        k, v = _gather_kv(keys, values, cache, at)
+        out = mx.fast.scaled_dot_product_attention(queries[:, :, :first], k, v, scale=self.scale, mask="causal")
+        if hasattr(cache, "gather_selected"):
+            mx.eval(out, cache.state)
+        else:
+            mx.eval(out)
+        outputs.append(out.transpose(0, 2, 1, 3))
+    for start in range(first, length, tile_size):
         end = min(start + tile_size, length)
         indices, valid = _selected_indices(self.indexer, index_query, pooled,
                                            key_len, past, blocks, start, end)
@@ -191,7 +227,7 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
             mask=valid.reshape(batch * (end - start), 1, 1, -1))
         # Realize each tile now. A lazy graph over all tiles retains every
         # gathered KV and indexer score allocation until the final evaluation.
-        if start == 0 and hasattr(cache, "gather_selected"):
+        if start == first and not first and hasattr(cache, "gather_selected"):
             # At short prefixes attention reads only INT8. Materialize the
             # direct INT4 writes too so their lazy graph cannot retain BF16
             # inputs until the first recent row ages out.

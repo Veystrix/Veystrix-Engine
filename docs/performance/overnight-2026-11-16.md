@@ -117,6 +117,33 @@ Real checkpoint, 8,192-token natural-text prefill (cool machine, AC): stock 319.
 
 `FLASHNEXT_PREFILL_CHUNK_TOKENS=4096` (default 2,048; the variable is shared with Qwen, so a Nemotron-only default would need a code change): 8,192-token prefill 353.7 -> 375.3 tok/s (+6%, the routed-expert GEMMs run at 2.85 TFLOPS from 192 rows per expert up, against 2.69 at 96 and 1.3-1.7 at 24-48; a 2,048-token chunk averages 96 rows per expert). The prices: MLX peak 3.64 -> 4.47 GB, available-memory floor 5.79 -> 5.13 GiB, compressor peak 692 -> 1,778 MB. Quality equal (stock-scan-free comparison, 12,160 tokens: 2,048 vs 4,096 mean KL 0.0074, top-1 agreement 0.984, NLL 2.6351 vs 2.6316). Not made the default because of the memory pressure on a 16 GB machine; the owner can set the variable for Nemotron-only sessions. Evidence: `*night-chunk-4096`, `*night-chunk-2048`, `*night-q-fast4096`. Note for any later change that batches chunks: `quantized_matmul` rows computed in calls of fewer than 192 rows differ in the last bits from rows computed in calls of 192 or more (a different kernel), so the result already depends on how many rows an expert gets in one call.
 
+## Qwen full-attention layers: where the non-expert time goes, and the dense prefix (opt-in, rounding-level)
+
+Per-component wall time of the app's Qwen prefill (forced evals per sub-module, so the MoE number includes its read waits; `QPROF=1` in the scratchpad driver `qwen_pp.py`):
+
+| Component (4,096-token prompt, 48.2 s, layer-major) | s | per call |
+|---|---|---|
+| full attention, 12 layers | 17.2 | 1.43 s |
+| linear attention (Gated DeltaNet), 36 layers | 8.2 | 0.23 s |
+| hyper-connections (2 per layer) | 5.0 | |
+| PLE (one layer) | 3.9 | |
+| MoE incl. read waits | 13.2 | |
+
+At 1,600 tokens (chunk-major, 34.9 s): full attention 4.95 s, linear attention 3.14 s, hyper-connections 1.7 s, PLE 1.35 s, MoE 24.2 s. The routed-expert GEMMs themselves are not the compute bottleneck: `gather_qmm` at the real shapes runs 1.7-2.2 TFLOPS (4.4 s of compute for 1,600 tokens over 48 layers, 9 s for 4,096) and the Gated DeltaNet kernel costs 8 us per token per layer. Above about 3,000 tokens the prefill is compute-bound by the attention blocks, not SSD-bound.
+
+Why full attention is slow: `FLASHNEXT_QSA_KERNEL=gather` (set by `kv-tiered4`) runs the sparse-attention indexer per query: tiles of 8 queries each gather their selected K/V rows (up to 2,052 slots, dequantizing the INT4/INT8 cache), run a one-query SDPA, and `mx.eval` after every tile. A query whose causal length has at most `block_topk` (512) complete blocks of 4 tokens, i.e. every query below position 2,051, selects all causal tokens, but still pays for 2,052 gathered slots. A 2,048-token chunk is 256 tiles: 607 ms per layer. Tile size 32 alone only gives 530 ms.
+
+Change: `FLASHNEXT_QSA_DENSE_PREFIX=1` (default off, registered, part of the cache fingerprint as `qsa_dense_prefix`): those leading dense queries run as one causal `mx.fast.scaled_dot_product_attention` over the same dequantized cache rows (`_gather_kv` with `arange(rows)`), the remaining sparse queries use the existing per-tile gather. The K/V values are identical (same rows, same dequantization); only the SDPA reduction order differs (full-sequence kernel instead of the single-query kernel). A first chunk of 2,048 tokens: 607 -> 121 ms per layer. A 4,096-token prefill, app config, cold: 48.0 -> 41.3 s (85 -> 99 tok/s, +16%); tile 32 on top adds nothing (41.4 s). Short prompts gain the most (a 1,600-token prefill spends 4.95 s in full attention, about 1 s after).
+
+Quality, teacher-forced on the real checkpoint (`qwen_logit.py`: prefill N-128 natural-text tokens, then all-position logits for the last 128; the repeat of the baseline is bit-identical, KL 0):
+
+| N | what is scored | mean KL | median | p95 | top-1 agree | NLL base -> dense | next-token acc |
+|---|---|---|---|---|---|---|---|
+| 2,000 | dense-region positions (direct effect) | 0.0040 | 0.0004 | 0.016 | 0.984 | 0.8792 -> 0.8740 | 0.756 / 0.756 |
+| 4,224 | sparse-region positions (effect through the cache) | 0.0067 | 0.0029 | 0.022 | 0.961 | 1.1709 -> 1.1678 | 0.646 / 0.638 |
+
+The first generated token of the 4,096-token cold-prefill pair differed (a high-entropy prompt), which is consistent with these KLs. Not made the default: the fingerprint change invalidates existing Qwen prefix snapshots once, and the app's launch flags are the owner's. Suggested: add `FLASHNEXT_QSA_DENSE_PREFIX=1` to the Qwen launch environment. Evidence: `*night-qattn-*`, `*night-qwen-prof-*`, `*night-qp4096-*`, `*night-ql*`.
+
 ## Qwen (Flash-Next) one-chunk cold prefills: layer-major with read-ahead for 1,024-2,048 tokens (opt-in, exact)
 
 The app launches Qwen with `--enable kv-tiered4 --enable short-throughput`, i.e. the mode `layer-major-hybrid-4k`: 4,096-token layer-major windows, `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=2049`, and windows of up to 2,048 tokens executed chunk-major. So a prompt of 2,049 tokens or more already uses layer-major with read-ahead, and a prompt of up to 2,048 tokens (one chunk) takes `prefill._run_chunks`' one-span shortcut: each layer reads its routed experts and then computes, nothing overlapped. At 1,600 tokens that was 62 GB read (about 21 s of SSD time) in series with the compute, 34.8 s in all.

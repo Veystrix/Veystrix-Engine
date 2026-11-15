@@ -119,6 +119,7 @@ SETTINGS = (
     research("mtp-rollback", "FLASHNEXT_MTP_ROLLBACK", parser=choice(("0", "1"), "mtp-rollback")),
     research("lookup-rollback", "FLASHNEXT_LOOKUP_ROLLBACK", parser=choice(("0", "1"), "lookup-rollback")),
     research("layer-major-single", "FLASHNEXT_LAYER_MAJOR_SINGLE", parser=choice(("0", "1"), "layer-major-single")),
+    research("qsa-dense-prefix", "FLASHNEXT_QSA_DENSE_PREFIX", parser=choice(("0", "1"), "qsa-dense-prefix")),
     research("mtp-cache-limit-mb", "FLASHNEXT_MTP_CACHE_LIMIT_MB", "512", "startup", integer, unset="512"),
     research("prefill-seed-decode", "FLASHNEXT_PREFILL_SEED_DECODE", parser=choice(("0", "1"), "prefill-seed-decode")),
     research("metal-fma-dequant", "FLASHNEXT_METAL_FMA_DEQUANT", parser=choice(("0", "1"), "metal-fma-dequant")),

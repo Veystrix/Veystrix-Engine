@@ -52,11 +52,15 @@ class ProcessDriver:
         # cannot hold its experts in memory, where a pool measured slower: models/nemotron35/admission.py).
         # VEYSTRIX_NEMOTRON_POOL_GB in the router's environment still fixes a size.
         nemotron_pool = os.environ.get("VEYSTRIX_NEMOTRON_POOL_GB") or "auto"
+        # The app's context-window setting chooses a server window for Qwen. The engine still clamps it
+        # to the checkpoint and to what memory admits; an absent/invalid value keeps the 262,144 default.
+        configured_context = os.environ.get("VEYSTRIX_FLASHNEXT_CONTEXT", "")
+        context_limit = int(configured_context) if configured_context.isdigit() and 1 <= int(configured_context) <= 262_144 else None
         args = Namespace(model=model.family, checkpoint=model.checkpoint, host="127.0.0.1", port=port,
                          pool_gb=(nemotron_pool if model.family == "nemotron35-lightning" else self.pool_gb),
                          enable=features, prefix_dir=self.prefix_dir,
                          preferences_file=None, no_auto_purge=is_flashnext and self.flashnext_memory_policy == "absolute-swap-only",
-                         threshold=1.0 if tiered else None)
+                         threshold=1.0 if tiered else None, context_limit=context_limit)
         command = server_command(args)
         # Run the same CLI directly; no launcher shell or additional watchdog process is left behind.
         if command[0].endswith("chat.sh"):

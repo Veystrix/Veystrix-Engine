@@ -71,7 +71,6 @@ struct SettingsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             CacheSettings()
-            NemotronContextSettings(engine: model.engine)
             Section("Local API key") {
                 Toggle("Require an API key (recommended on shared Macs)", isOn: $model.settings.requireAPIKey)
                 Text("Without a key any local process can use the engine; with it, clients must send the key. Browser pages are refused either way.")
@@ -134,30 +133,5 @@ struct SettingsView: View {
         let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false
         p.message = "Choose a Veystrix source checkout that contains .venv/bin/python."
         if p.runModal() == .OK, let u = p.url { model.settings.developerRepoPath = u.path; model.refreshRuntime() }
-    }
-}
-
-private struct NemotronContextSettings: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var engine: EngineController
-
-    var body: some View {
-        Section("Nemotron Context") {
-            TextField("Configured maximum tokens", value: $model.settings.nemotronContextTokens, format: .number)
-            Picker("Attention KV precision", selection: $model.settings.nemotronKVCache) {
-                ForEach(NemotronKVCache.allCases) { Text($0.title).tag($0) }
-            }
-            .onChange(of: model.settings.nemotronKVCache) { _, precision in
-                model.settings.nemotronContextTokens = min(model.settings.nemotronContextTokens, precision.contextLimit)
-            }
-            if let status = engine.health?.nemotron {
-                LabeledContent("Memory admission", value: engine.health?.isHealthy == true ? "Ready" : "Paused")
-                LabeledContent("Admitted context", value: status.admittedContext.formatted() + " tokens")
-                LabeledContent("Attention KV format", value: status.kvFormat)
-                LabeledContent("1M context validation", value: status.millionTokenValidation ? "Passed" : "Pending")
-            }
-            Text("\(model.settings.nemotronKVCache.title) supports a configured window up to \(model.settings.nemotronKVCache.contextLimit.formatted()) tokens and up to 65,536 uncached prefill tokens per request. Positions past 262,144 are unvalidated: the checkpoint declares 262,144 and carries no RoPE scaling metadata. Restart to apply changes.")
-                .font(.callout).foregroundStyle(.secondary)
-        }
     }
 }

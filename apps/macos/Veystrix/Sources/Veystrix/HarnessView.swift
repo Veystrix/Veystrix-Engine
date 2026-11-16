@@ -129,7 +129,6 @@ struct HarnessView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Agents").font(.largeTitle.bold())
-                WorkflowPanel(models: inventory.entries)
                 GroupBox("Local endpoint") {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledContent("Base URL") { Text(model.baseURL).textSelection(.enabled) }
@@ -193,6 +192,7 @@ struct HarnessView: View {
                 }
                 if let error = inventory.error { Text(error).font(.callout).foregroundStyle(.secondary) }
                 Text("Refresh Harness Models updates supported local configuration and keeps a backup. Restart the harness to reload its model list.").font(.footnote).foregroundStyle(.secondary)
+                WorkflowPanel(models: inventory.entries)
             }.padding(20)
         }
         .navigationTitle("Agents")

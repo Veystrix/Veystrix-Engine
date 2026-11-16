@@ -136,6 +136,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Initial shared quota in decimal GB. Applied changes are stored by the cache manager.
     public var cacheQuotaGB: Int = 80
     public var nemotronContextTokens: Int = 1_048_576
+    /// Configured server window for Qwen Flash-Next. The engine still lowers it to what memory admits.
+    public var flashNextContextTokens: Int = 262_144
     /// Empty selects the default shared cache folder.
     public var cacheDirectory: String = ""
     /// Ask for confirmation before the model is loaded. The model is never loaded when the app opens.
@@ -159,11 +161,22 @@ public struct AppSettings: Codable, Equatable, Sendable {
         set { if selectedModel == .nemotron35 { nemotronPerformance = newValue } else { flashNextPerformance = newValue } }
     }
 
+    /// The context window configured for the selected model.
+    public var activeContextTokens: Int {
+        get { selectedModel == .nemotron35 ? nemotronContextTokens : flashNextContextTokens }
+        set { if selectedModel == .nemotron35 { nemotronContextTokens = newValue } else { flashNextContextTokens = newValue } }
+    }
+
+    /// The largest window this build offers for the selected model's KV format.
+    public var activeContextLimit: Int {
+        selectedModel == .nemotron35 ? nemotronKVCache.contextLimit : 262_144
+    }
+
     enum CodingKeys: String, CodingKey {
         case schemaVersion, port, checkpointPath, selectedModel, nemotronCheckpointPath, decodePool, supervisedRestarts, keepMacAwake, cacheQuotaGB,
              cacheDirectory, confirmBeforeLoading, requireAPIKey, checkForUpdatesAutomatically,
              includeLogsInDiagnostics, developerRepoPath, minimumBatteryPercent, allowLowPowerMode,
-             flashNextKVCache, flashNextSpeed, flashNextBoundedPrefill, nemotronContextTokens, swapLimitGiB,
+             flashNextKVCache, flashNextSpeed, flashNextBoundedPrefill, nemotronContextTokens, flashNextContextTokens, swapLimitGiB,
              flashNextPerformance, nemotronPerformance, nemotronKVCache, nemotronMTPPath
     }
 
@@ -194,6 +207,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         if let oldQuota, s.schemaVersion >= 2 || oldQuota != 50 { s.cacheQuotaGB = oldQuota }
         s.nemotronContextTokens = try c.decodeIfPresent(Int.self, forKey: .nemotronContextTokens) ?? s.nemotronContextTokens
         s.nemotronContextTokens = min(max(1, s.nemotronContextTokens), s.nemotronKVCache.contextLimit)
+        s.flashNextContextTokens = try c.decodeIfPresent(Int.self, forKey: .flashNextContextTokens) ?? s.flashNextContextTokens
+        s.flashNextContextTokens = min(max(1, s.flashNextContextTokens), 262_144)
         s.cacheDirectory = try c.decodeIfPresent(String.self, forKey: .cacheDirectory) ?? s.cacheDirectory
         s.confirmBeforeLoading = try c.decodeIfPresent(Bool.self, forKey: .confirmBeforeLoading) ?? s.confirmBeforeLoading
         s.requireAPIKey = try c.decodeIfPresent(Bool.self, forKey: .requireAPIKey) ?? s.requireAPIKey

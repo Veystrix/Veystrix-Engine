@@ -120,6 +120,7 @@ public struct LaunchPlan: Equatable, Sendable {
             env["\(prefix)_MLX_AUTO_BUFFER_CAPS"] = options.largerMetalBuffers ? "1" : "0"
         }
         env["VEYSTRIX_FLASHNEXT_NATIVE_MTP"] = settings.flashNextPerformance.decoder == .nativeMTP ? "on" : "off"
+        env["VEYSTRIX_FLASHNEXT_CONTEXT"] = String(settings.flashNextContextTokens)
         env["VEYSTRIX_FLASHNEXT_OUTPUT_TOKENS"] = String(settings.flashNextPerformance.defaultOutputTokens)
         env["VEYSTRIX_FLASHNEXT_MTP_DEPTH"] = String(settings.flashNextPerformance.draftTokens)
         env["VEYSTRIX_NEMOTRON_NATIVE_MTP"] = settings.nemotronPerformance.decoder == .nativeMTP ? "1" : "0"

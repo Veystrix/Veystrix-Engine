@@ -74,7 +74,7 @@ def server_command(args) -> list:
     command = [*launcher, "--mode", "agentic",
                "--pool-gb", str(args.pool_gb),
                "--host", args.host, "--port", str(args.port),
-               "--context-limit", "262144",
+               "--context-limit", str(getattr(args, "context_limit", None) or 262144),
                "--max-cold-prefill", str(default_cold_prefill(kv_cache)),
                "--max-incremental-prefill", str(DEFAULT_MAX_INCREMENTAL_PREFILL),
                "--model", "flashnext", "--checkpoint", args.checkpoint]

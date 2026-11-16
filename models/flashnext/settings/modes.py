@@ -106,7 +106,7 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_PREFILL_LAYER_PREFETCH": "0",        # layer prefetch overlaps reads with compute; explicit opt-in below
     "FLASHNEXT_UNCACHED_EXPERT_READS": "0",         # buffered reads are the reference; uncached reads are an explicit opt-in below
     "FLASHNEXT_EXPERT_POOL_BUFFERED_FILL": "0",     # decode pool fills bypass the file cache (F_NOCACHE); buffered fills are an opt-in below
-    "FLASHNEXT_NGRAM_DEDUP": "0",                  # bounded per-lookup dedup is an unmeasured prototype
+    "FLASHNEXT_NGRAM_DEDUP": "0",                  # bounded per-lookup dedup of n-gram rows is an opt-in below (exact, about 3% on a 4K prefill)
     "FLASHNEXT_PREFILL_RING_SCRATCH_LATER": "0",   # later turns use the decode pool for the ring; a temporary ring is an opt-in below
     "FLASHNEXT_EXPERT_POOL_POLICY": "lru",          # decode pool replacement is LRU; S3-FIFO is an opt-in below
     "FLASHNEXT_PREFILL_MERGE_TAIL": "0",           # a small final window runs on its own; folding it into the previous one is an opt-in below
@@ -133,7 +133,7 @@ EXPERIMENTAL = {
     "kv-tiered4": ({"FLASHNEXT_KV_CACHE_DTYPE": "tiered4", "FLASHNEXT_QSA_KERNEL": "gather"},
                   "INT4 history / INT8 recent KV; experimental 262K candidate, NOT production qualified"),
     "ngram-dedup": ({"FLASHNEXT_NGRAM_DEDUP": "1"},
-                    "deduplicate repeated n-gram rows within each lookup; offline exactness tests only, real-checkpoint speed unmeasured"),
+                    "deduplicate repeated n-gram rows within each lookup (the same rows, gathered back to every position); exactness tests offline, real 4.3K cold prefill 43.1 -> 41.8 s (-3%) with an identical output hash"),
     "long-context": ({"FLASHNEXT_PREFILL_CHUNK_POLICY": "budgeted", "FLASHNEXT_PREFILL_CHUNK_TOKENS": "2048",
                       "FLASHNEXT_PREFILL_CHUNK_BUDGET_MB": "1000", "FLASHNEXT_PREFILL_ADAPTIVE_CHUNKS": "1"},
                      "deterministic memory-budgeted chunk plan (2048/1024/512/256) with live step-down and a 'long' "

@@ -6,12 +6,14 @@ import hashlib
 import os
 from pathlib import Path
 
+from veystrix import model_identity
+
 
 FLASHNEXT_ALIASES = {
     "oq3": "Qwen3.8-Flash-Next-MLX-oQ3-MTP",
     "oq3-mtp": "Qwen3.8-Flash-Next-MLX-oQ3-MTP",
     "oq4": "Qwen3.8-Flash-Next-MLX-oQ4",
-    "vontra-mtp": "Qwen3.8-Flash-Next-MLX-4bit-MTP",
+    model_identity.FLASHNEXT.checkpoint_alias: model_identity.FLASHNEXT.checkpoint_directory,
 }
 _TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
 TOKENIZER_IDENTITY_FILES = (*_TOKENIZER_FILES, "special_tokens_map.json", "added_tokens.json",
@@ -96,7 +98,7 @@ def flashnext_compatible(path: Path, complete: bool = True) -> bool:
     model_types.update(
         item.get("model_type") for item in nested if isinstance(item, dict)
     )
-    if not ({"qwen4_exp", "qwen4_exp_text"} & model_types):
+    if not (model_identity.FLASHNEXT.model_types & model_types):
         return False
     index = _json(path / "model.safetensors.index.json")
     weight_map = index.get("weight_map")

@@ -124,6 +124,25 @@ class CheckpointTests(unittest.TestCase):
                 self.assertEqual(
                     resolve_flashnext("vontra-mtp"), expected.resolve())
 
+    def test_identity_coupling(self):
+        from dataclasses import replace
+        from veystrix import checkpoints, model_identity
+
+        self.assertEqual(
+            checkpoints.FLASHNEXT_ALIASES[model_identity.FLASHNEXT.checkpoint_alias],
+            model_identity.FLASHNEXT.checkpoint_directory,
+        )
+        # The model_type gate follows the descriptor, not a hardcoded set.
+        custom = replace(model_identity.FLASHNEXT,
+                         model_types=frozenset({"brand_new_type"}))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            future = flashnext(root, "future", model_type="brand_new_type")
+            legacy = flashnext(root, "legacy", model_type="qwen4_exp")
+            with patch.object(checkpoints.model_identity, "FLASHNEXT", custom):
+                self.assertTrue(checkpoints.flashnext_compatible(future))
+                self.assertFalse(checkpoints.flashnext_compatible(legacy))
+
 
 if __name__ == "__main__":
     unittest.main()

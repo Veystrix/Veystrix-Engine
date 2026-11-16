@@ -289,9 +289,7 @@ def fused_sdpa_selected(cache, queries, indices, valid, scale):
         at = mx.clip(indices, 0, recent_n - 1)
     # Query heads that share one dequantization of a key/value row. Two is the fastest on the M4 (one head redoes the dequantization
     # for every head, three or more spill registers and run several times slower); the bits do not depend on it.
-    heads_per_group = int(os.environ.get("FLASHNEXT_QSA_FUSED_SDPA_HEADS", "2" if (q_heads // kv_heads) % 2 == 0 else "1"))
-    if heads_per_group < 1 or (q_heads // kv_heads) % heads_per_group:
-        return None
+    heads_per_group = 2 if (q_heads // kv_heads) % 2 == 0 else 1
     if _FUSED_SDPA_KERNEL[0] is None:
         _FUSED_SDPA_KERNEL[0] = mx.fast.metal_kernel(
             name="flashnext_fused_sdpa", input_names=_FUSED_SDPA_NAMES, output_names=["out"], source=_FUSED_SDPA_SOURCE)

@@ -5,6 +5,14 @@ with [`handoff.md`](handoff.md) and [`research.md`](research.md) before code
 changes or experiments.
 The shared measurement rules are in [`../measurement-standard.md`](../measurement-standard.md).
 
+## Hardware validation order (owner decision, 2026-11-17)
+
+Owner rule: **test every new feature on the 16 GB M4 Mac first. Move to larger
+Macs only if the feature succeeds there.** Do not design, benchmark, or justify
+work primarily for 24–128 GB tiers before it has been validated on 16 GB.
+Higher-memory tiers remain implemented for later use, but 16 GB is the
+validation gate and the primary development target.
+
 ## Runtime invariants
 
 - Keep the canonical control path unchanged unless we explicitly approve

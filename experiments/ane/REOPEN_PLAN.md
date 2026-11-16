@@ -24,6 +24,13 @@ Therefore:
 - **Track B (32 GB and larger Macs) is the credible path.** Evaluate ANE offload of *static, repeated, non-routing* work there: attention projections and dense FFN of the resident model. This is where the memory fits and where the GPU has work to offload.
 - **Track A (16 GB) stays conservative.** Do not put ANE in the output-affecting hot path. The only defensible 16 GB role is **output-neutral work during SSD stalls** (the GPU is idle while waiting on experts), gated on a contention measurement. Expected gain is small.
 
+## Validation order (owner rule, 2026-11-17)
+
+**All features are tested on the 16 GB M4 Mac first. Higher-Mac work comes only
+after success on 16 GB.** So Track B (32 GB+ full residency, ANE offload there)
+is deferred until the 16 GB path is settled — the earlier "Track B is the
+credible path" wording below is a physics note, not a development priority.
+
 ## Hard gates (unchanged)
 
 1. **Bit-identical token digest** and BF16 rounding boundaries (`docs/flashnext/AGENT_INVARIANTS.md:42-44`). Any output-affecting ANE path must pass the 24-case quality gate with 24/24 token-identical results. A "close" numerical match is a failure.

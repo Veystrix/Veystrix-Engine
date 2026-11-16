@@ -2,6 +2,16 @@
 
 Branch `overnight-speed-2026-11-16` (from `unlimited-generation` at f9a9713). The owner was away for ten hours and asked for continuous experiments on prefill and decode speed with two fixed rules: the weights stay 4-bit, and quality comes before speed. Nothing here lowers precision, prunes experts, drops tokens or changes the routed experts. A change that is not bit-identical is opt-in and carries a measured quality check.
 
+## Summary for the owner (read this first)
+
+**Nemotron (default on, each with a rollback flag; weights and routed experts unchanged):** prefetch order, SDPA prefill attention, pipelined expert compute, early shared expert for prefill rows, fused Mamba-2 scan. Real 8K prefill 252 -> 355.6 tok/s overall. The SDPA attention and the fused scan are rounding-level (not bit-identical); see the tool-call comparison and the review notes below. Your call whether they should be default.
+
+**Qwen Flash-Next (all opt-in, app defaults untouched).** Suggested launch flags, in decreasing order of safety: `--enable later-turn-scratch-ring --enable single-chunk-layer-major --enable merge-small-tail` (exact; bit-identical arithmetic) and `--enable qsa-fast-prefill` (rounding-level, changes the prefix-cache fingerprint once) and `--enable s3fifo-pool` (decode only, exact). Server measurements with the first six options: agentic turns of 1.6-1.8K new tokens 51 -> 27 s; larger turns of 3.5-4.1K new tokens over 4-12K cached 105-112 s -> 34-44 s; cold 3,954-token turn 37 s; minimum available memory 2.68 GiB (baseline 3.18 GiB), peak compressor 4.35 GB, swap flat; follow-ups of about 300 tokens stay 23-28 s (SSD-bound). Needle retrieval at 4.5K and 10K tokens and tool-call replies show no regression; cancel mid-prefill is clean. Decode: 2.49 -> 2.62 tok/s with `s3fifo-pool`.
+
+**What did not work (all recorded below):** decode prefetch/overlap/IO workers/buffered fill/pool policies other than S3-FIFO, larger pools (RAM-bound), route-union reads, PLE row prefetch, 8K windows, chunk 4096 for Nemotron, dense GEMM and block-parallel Mamba. Both models are SSD-bound at their floors on 16 GB; what is left is RAM or lossy changes, which the rules exclude.
+
+**Other things to know:** old prefix snapshots do not restore once after enabling `qsa-fast-prefill` (Qwen) or after the Nemotron attention/scan markers; the fanless Air reaches thermal level 2 after about 100 s of sustained prefill, so the guard stops 16K cold runs (not measured); the wired-limit sysctl, `/Applications` and the app defaults were not touched; nothing is pushed.
+
 Source of ideas: `Veystrix-Core Prefill and Decode Optimization.txt` (a generic Apple Silicon survey written without access to this repository).
 
 ## How the plan maps onto this engine

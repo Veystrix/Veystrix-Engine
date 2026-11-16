@@ -122,6 +122,8 @@ def load_streamed(directory, *, pool_bytes: int, config_check=None, verify: bool
         _overlap_shared_experts(model, moe_layers)
     from . import fast_ssm
     fast_ssm.install()                  # prefill-sized scans use the fused kernel unless VEYSTRIX_NEMOTRON_FAST_SSM=0
+    from . import dense_gemm
+    dense_gemm.install()                # opt-in: bit-equal dense GEMM for prefill-sized quantized projections
     from . import cache_routing
     cache_routing.install(model)         # off unless VEYSTRIX_NEMOTRON_CACHE_ROUTING is observe or swap
     try:

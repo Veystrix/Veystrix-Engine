@@ -21,7 +21,7 @@ class ProcessDriver:
     """Start one guarded CLI engine and prove its process group has exited on unload."""
     def __init__(self, *, pool_gb="0", prefix_dir=None, startup_timeout=1800, stop_timeout=60,
                  command_factory=None, flashnext_kv_cache="bf16", flashnext_memory_policy=None, flashnext_speed=False,
-                 flashnext_bounded_prefill=False):
+                 flashnext_exact_speed=False, flashnext_bounded_prefill=False):
         if flashnext_speed and flashnext_bounded_prefill:
             raise ValueError("the Flash-Next speed profile and the bounded prefill plan the prefill differently; choose one")
         self.pool_gb = pool_gb
@@ -31,6 +31,7 @@ class ProcessDriver:
         self.flashnext_kv_cache = flashnext_kv_cache
         self.flashnext_memory_policy = flashnext_memory_policy
         self.flashnext_speed = flashnext_speed
+        self.flashnext_exact_speed = flashnext_exact_speed
         self.flashnext_bounded_prefill = flashnext_bounded_prefill
         self.command_factory = command_factory or self._command
         self.process = None
@@ -46,6 +47,8 @@ class ProcessDriver:
         features = ["kv-tiered4"] if tiered else []
         if is_flashnext and self.flashnext_speed:
             features.append("short-throughput")
+        if is_flashnext and self.flashnext_exact_speed:
+            features.append("exact-speed")
         if is_flashnext and self.flashnext_bounded_prefill:
             features.append("prefill-16gb")
         # The pool setting is Flash-Next's. Nemotron sizes its own pool from the machine (none on a Mac that

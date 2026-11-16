@@ -37,6 +37,7 @@ collect runtime-specific correctness and experiment constraints.
 |---|---|
 | [`decisions/README.md`](decisions/README.md) | Architecture decision record (ADR) log for model and runtime decisions |
 | [`security/ANTI_REVERSE_ENGINEERING.md`](security/ANTI_REVERSE_ENGINEERING.md) | Honest limits of local tamper resistance and the commercial protection path |
+| [`performance/EXACT_SPEED.md`](performance/EXACT_SPEED.md) | Curated bit-identical speed profile for both models |
 | [`hardware/MEMORY_SUPPORT.md`](hardware/MEMORY_SUPPORT.md) | Supported unified-memory tiers and pool caps |
 | [`measurement-standard.md`](measurement-standard.md) | Shared live-test and JSONL evidence rules |
 | [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) | Using the engine from other devices over Tailscale |

@@ -54,6 +54,14 @@ class ModelProcessTests(unittest.TestCase):
   self.assertIn("short-throughput", driver._command(flashnext, 8080))
   self.assertNotIn("short-throughput", driver._command(nemotron, 8080))
 
+ def test_exact_speed_only_applies_to_qwen_and_is_independent(self):
+  driver = ProcessDriver(flashnext_exact_speed=True)
+  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
+  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
+  self.assertIn("exact-speed", driver._command(flashnext, 8080))
+  self.assertNotIn("exact-speed", driver._command(nemotron, 8080))
+  self.assertNotIn("short-throughput", driver._command(flashnext, 8080))
+
  def test_bounded_prefill_only_applies_to_qwen_and_excludes_the_speed_profile(self):
   driver = ProcessDriver(flashnext_bounded_prefill=True)
   flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")

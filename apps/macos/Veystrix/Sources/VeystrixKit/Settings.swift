@@ -127,6 +127,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var swapLimitGiB: Int = 5
     public var flashNextKVCache: FlashNextKVCache = .bf16
     public var flashNextSpeed: Bool = false
+    /// Curated bit-identical exact-speed set (24/24 quality gate); independent of the older speed toggle.
+    public var flashNextExactSpeed: Bool = false
     /// Experimental: 128-token prefill chunks with a reused expert scratch ring and uncached prefill reads, which keeps
     /// more memory free on a 16 GB Mac while a prompt is read. Off by default; excludes the speed profile.
     public var flashNextBoundedPrefill: Bool = false
@@ -182,7 +184,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case schemaVersion, port, checkpointPath, selectedModel, nemotronCheckpointPath, decodePool, supervisedRestarts, keepMacAwake, cacheQuotaGB,
              cacheDirectory, confirmBeforeLoading, requireAPIKey, checkForUpdatesAutomatically,
              includeLogsInDiagnostics, developerRepoPath, minimumBatteryPercent, allowLowPowerMode,
-             flashNextKVCache, flashNextSpeed, flashNextBoundedPrefill, nemotronContextTokens, flashNextContextTokens, swapLimitGiB,
+             flashNextKVCache, flashNextSpeed, flashNextExactSpeed, flashNextBoundedPrefill, nemotronContextTokens, flashNextContextTokens, swapLimitGiB,
              flashNextPerformance, nemotronPerformance, nemotronKVCache, nemotronMTPPath
     }
 
@@ -200,6 +202,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
         s.flashNextKVCache = (try? c.decodeIfPresent(FlashNextKVCache.self, forKey: .flashNextKVCache)) ?? s.flashNextKVCache
         s.flashNextSpeed = try c.decodeIfPresent(Bool.self, forKey: .flashNextSpeed) ?? s.flashNextSpeed
+        s.flashNextExactSpeed = try c.decodeIfPresent(Bool.self, forKey: .flashNextExactSpeed) ?? s.flashNextExactSpeed
         s.flashNextBoundedPrefill = try c.decodeIfPresent(Bool.self, forKey: .flashNextBoundedPrefill) ?? s.flashNextBoundedPrefill
         s.flashNextPerformance = (try? c.decode(PerformanceOptions.self, forKey: .flashNextPerformance)) ?? s.flashNextPerformance
         s.nemotronPerformance = (try? c.decode(PerformanceOptions.self, forKey: .nemotronPerformance)) ?? s.nemotronPerformance

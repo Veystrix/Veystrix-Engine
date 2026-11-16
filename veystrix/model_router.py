@@ -328,6 +328,8 @@ def main(argv=None):
     parser.add_argument("--prefix-dir")
     parser.add_argument("--flashnext-kv-cache", choices=("bf16", "tiered4"), default="bf16")
     parser.add_argument("--flashnext-speed", action="store_true", help="enable the experimental short throughput profile")
+    parser.add_argument("--flashnext-exact-speed", action="store_true",
+                        help="enable the curated bit-identical exact-speed flag set (24/24 quality gate)")
     parser.add_argument("--flashnext-bounded-prefill", action="store_true",
                         help="enable the experimental low-transient prefill profile for 16 GB hosts")
     parser.add_argument("--flashnext-memory-policy", choices=("absolute-swap-only",))
@@ -344,6 +346,7 @@ def main(argv=None):
     driver = ProcessDriver(pool_gb=args.pool_gb, prefix_dir=args.prefix_dir,
                            flashnext_kv_cache=args.flashnext_kv_cache,
                            flashnext_memory_policy=args.flashnext_memory_policy, flashnext_speed=args.flashnext_speed,
+                           flashnext_exact_speed=args.flashnext_exact_speed,
                            flashnext_bounded_prefill=args.flashnext_bounded_prefill)
     coordinator = ModelCoordinator(model_registry.resolve, driver)
     try:

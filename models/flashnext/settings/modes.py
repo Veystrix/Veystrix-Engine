@@ -228,6 +228,31 @@ EXPERIMENTAL["single-chunk-layer-major"] = (
     {"FLASHNEXT_LAYER_MAJOR_SINGLE": "1", "FLASHNEXT_LAYER_MAJOR_MIN_TOKENS": "1024"},
     "experimental: prefills of 1,024-2,048 tokens (one chunk) use the layer-major order so the next layer's experts are read "
     "while the current one computes; exact; real 1,200/1,600-token cold prefill 1.14x/1.3x")
+# Curated set of measured, bit-identical (24/24 quality-gate) optimisations.
+# Unlike the experimental one-feature switches, this bundle is the exact set
+# that was validated together on the real 16 GB M4 and is size-independent: it
+# works the same on larger Macs. Every member has an explicit rollback env var.
+# See docs/performance/overnight-2026-11-16.md.
+EXACT_SPEED_FEATURES = (
+    "kv-tiered4",                  # INT4/INT8 KV (app already offers this as a separate control)
+    "layer-major-hybrid-4k",       # 4K layer-major prefill, chunk-major for small windows
+    "single-chunk-layer-major",    # 1K-2K prefills use layer-major (+14-30%)
+    "merge-small-tail",            # fold a small final window into its predecessor (+36% on 4K cold)
+    "qsa-shared-dense-kv",         # shared K/V for dense leading queries (-6% time)
+    "qsa-fused-gather",            # one gather+dequantize kernel (-6.5% time)
+    "qsa-fused-sdpa",              # one gather+dequantize+attend kernel (-3.5% time)
+    "ngram-dedup",                 # dedup repeated n-gram rows (-3% time)
+    "dense-gemm",                  # bit-equal dense GEMM for verified shapes (-2.4% time)
+    "s3fifo-pool",                 # S3-FIFO decode pool (+5% tok/s)
+)
+# The gather tile is an env value, not an --enable feature; include it in the bundle.
+EXACT_SPEED_ENV = {"FLASHNEXT_QSA_GATHER_TILE": "32"}
+EXPERIMENTAL["exact-speed"] = (
+    {key: value for feature in EXACT_SPEED_FEATURES
+     for key, value in EXPERIMENTAL.get(feature, ({}, ""))[0].items()} | EXACT_SPEED_ENV,
+    "curated exact-speed set: the bit-identical, 24/24 quality-gated flags measured together on the 16 GB M4 "
+    "(+14-36% prefill, +5% decode); no precision or token change; works on larger Macs too")
+
 THROUGHPUT_FEATURES = ("layer-major-hybrid-4k", "layer-prefetch", "uncached-prefill-reads", "pool-buffered-fill")
 EXPERIMENTAL["short-throughput"] = (
     {key: value for feature in THROUGHPUT_FEATURES for key, value in EXPERIMENTAL[feature][0].items()},

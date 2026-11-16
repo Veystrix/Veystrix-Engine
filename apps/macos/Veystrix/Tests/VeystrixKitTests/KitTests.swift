@@ -291,6 +291,20 @@ private func tempDir() -> URL {
         #expect(DecodePool(rawValue: 12) == .twelveGB)
     }
 
+    @Test func exactSpeedToggleIsIndependentAndPersists() throws {
+        var s = AppSettings()
+        #expect(!s.flashNextExactSpeed)
+        s.flashNextExactSpeed = true
+        s.checkpointPath = "/tmp/ckpt"
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(s))
+        #expect(decoded.flashNextExactSpeed)
+        let c = CheckpointReport(verdict: .compatible, path: "/tmp/ckpt")
+        let plan = try LaunchPlan.make(settings: s, checkpoint: c, source: .developer(repoRoot: URL(fileURLWithPath: "/r")), apiKey: nil,
+                                       fileExists: { _ in true }, isExecutable: { _ in true })
+        #expect(plan.arguments.contains("--flashnext-exact-speed"))
+        #expect(plan.environment["VEYSTRIX_NEMOTRON_DENSE_GEMM"] == "1")
+    }
+
 @Suite struct SettingsTests {
     @Test func defaultsAreSafe() {
         let s = AppSettings()

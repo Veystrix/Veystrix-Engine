@@ -248,3 +248,25 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ExactSpeedBundleTests(unittest.TestCase):
+    def test_bundle_is_bit_identical_members_and_size_independent(self):
+        from models.flashnext.settings import modes
+        for gib in (16, 32, 128):
+            for mode in (modes.CHAT, modes.AGENTIC):
+                with self.subTest(gib=gib, mode=mode):
+                    plan = modes.plan_mode(mode, enable=("exact-speed",), free_disk_gb=200)
+                    self.assertEqual(plan.env["FLASHNEXT_QSA_GATHER_TILE"], "32")
+                    self.assertEqual(plan.env["FLASHNEXT_EXPERT_POOL_POLICY"], "s3fifo")
+                    self.assertEqual(plan.env["FLASHNEXT_PREFILL_ORDER"], "layer")
+                    self.assertEqual(plan.env["FLASHNEXT_DENSE_GEMM"], "1")
+
+    def test_every_member_has_a_rollback(self):
+        from models.flashnext.settings import modes
+        flags = modes.EXPERIMENTAL["exact-speed"][0]
+        for key in flags:
+            self.assertIn(key, modes.OWNED, key)
+
+
+if __name__ == "__main__":
+    unittest.main()

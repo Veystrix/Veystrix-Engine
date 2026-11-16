@@ -85,6 +85,7 @@ public struct LaunchPlan: Equatable, Sendable {
         args += ["--flashnext-kv-cache", settings.flashNextKVCache.rawValue,
                  "--flashnext-memory-policy", "absolute-swap-only"]
         if settings.flashNextSpeed { args.append("--flashnext-speed") }
+        if settings.flashNextExactSpeed { args.append("--flashnext-exact-speed") }
         if settings.flashNextBoundedPrefill { args.append("--flashnext-bounded-prefill") }
         if settings.supervisedRestarts { args.append("--overnight") }
         // The router forwards the shared cache location when either model starts.
@@ -114,6 +115,10 @@ public struct LaunchPlan: Equatable, Sendable {
         // unvalidated, so the engine's strict LCT-05 gate stays off by default.
         env["VEYSTRIX_NEMOTRON_EXTENDED_CONTEXT"] = settings.nemotronContextTokens > 262_144 ? "1" : "0"
         env["VEYSTRIX_NEMOTRON_KV"] = settings.nemotronKVCache.rawValue
+        // The exact-speed toggle also enables Nemotron's bit-equal dense GEMM
+        // (shape-verified, about +4% prefill). Its accepted speed defaults are
+        // already on; this is the only remaining bit-identical opt-in.
+        env["VEYSTRIX_NEMOTRON_DENSE_GEMM"] = settings.flashNextExactSpeed ? "1" : "0"
         for (prefix, options) in [("FLASHNEXT", settings.flashNextPerformance), ("VEYSTRIX_NEMOTRON", settings.nemotronPerformance)] {
             env["\(prefix)_PROMPT_LOOKUP"] = options.decoder == .promptLookup ? "1" : "0"
             env["\(prefix)_PREFILL_SEED_DECODE"] = options.seedExperts ? "1" : "0"

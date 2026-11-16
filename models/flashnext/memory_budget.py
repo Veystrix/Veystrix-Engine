@@ -26,9 +26,10 @@ def enabled(environ=None, physical_bytes=None):
         return False
     if mode == "elastic":
         return True
-    if physical_bytes is None:
-        physical_bytes = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-    return physical_bytes <= 16 * GIB
+    # The elastic planner is available on every supported memory size. Pool
+    # capacity is bounded by the size tier (see veystrix.memory_tiers), not by
+    # a 16 GB check. ``physical_bytes`` is accepted for call-site compatibility.
+    return True
 
 
 @dataclass(frozen=True)

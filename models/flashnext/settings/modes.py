@@ -269,9 +269,15 @@ class ModePlan:
     max_incremental_prefill: int | None = None
 
 
-def choose_pool_gb(requested, available_gb=None):
-    """Return ``(gb, reason)``. ``None`` or ``"auto"``: up to 2 GB, decided at the first decode from real headroom.
-    A number: 0, or a fixed size up to 2 GB allocated without that check. Never above the cap."""
+def choose_pool_gb(requested, available_gb=None, physical_bytes=None):
+    """Return ``(gb, reason)``. ``None``/``"auto"`` and fixed sizes are bounded by the physical-memory tier.
+
+    The 16 GB baseline keeps its 2 GB cap; larger Macs get a larger optional
+    pool. Safety thresholds are unchanged: this only limits pool size.
+    """
+    from veystrix.memory_tiers import physical_bytes as detect_bytes, tier_for
+    tier = tier_for(detect_bytes() if physical_bytes is None else physical_bytes)
+    cap_gb = tier.pool_cap_gb
     if requested is not None and str(requested).lower() != "auto":
         try:
             gb = float(requested)
@@ -279,9 +285,10 @@ def choose_pool_gb(requested, available_gb=None):
             raise ModeError(f"pool size must be 'auto' or a number of GB, not {requested!r}") from None
         if gb < 0:
             raise ModeError("pool size must not be negative")
-        if gb > POOL_CAP_GB:
-            raise ModeError(f"pool size {gb:g} GB is above the {POOL_CAP_GB:g} GB cap; a larger pool needs a "
-                            "validated memory budget (the recorded 6 GB arms ran near the 3 GiB guard line)")
+        if gb > cap_gb:
+            raise ModeError(f"pool size {gb:g} GB is above the {cap_gb:g} GB cap for a {tier.name} Mac; "
+                            "a larger pool needs a validated memory budget (the recorded 6 GB arms ran near "
+                            "the 3 GiB guard line)")
         if gb == 0:
             return 0.0, "requested: no decode pool (SSD streaming, memory-safe; recorded 3.42-3.47 tok/s)"
         reason = ("fixed, allocated with no headroom check: the first real chat at a fixed 2 GB stopped the "
@@ -291,8 +298,9 @@ def choose_pool_gb(requested, available_gb=None):
         return gb, reason
     if available_gb is not None and available_gb < START_GATE_GB:
         return 0.0, f"available memory {available_gb:.1f} GB is under the {START_GATE_GB:g} GB start gate"
-    return DEFAULT_POOL_GB, ("auto: a 2 GB pool only if available memory covers it plus the 3 GiB guard floor and "
-                             "0.5 GiB margin when the first token is decoded, otherwise SSD streaming without a pool")
+    return DEFAULT_POOL_GB, (
+        f"auto: up to {cap_gb:g} GB on a {tier.name} Mac, only if available memory covers it plus the "
+        "3 GiB guard floor and 0.5 GiB margin when the first token is decoded, otherwise SSD streaming")
 
 
 def _free_disk_gb(directory) -> float:

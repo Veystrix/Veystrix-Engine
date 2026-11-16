@@ -411,7 +411,7 @@ The one lever the sparse-attention section left open. MLX's per-query attention 
 
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
-Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:20, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
+Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,277 OK (3 skipped) at 14:40, after the `qsa-fused-sdpa` commits, Nemotron 202 OK (8 skipped) at 13:20; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
 
 ## What is left (levers, not done)
 

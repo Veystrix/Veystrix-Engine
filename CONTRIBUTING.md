@@ -81,6 +81,21 @@ promotion exception; its long-turn quality gate remains open. Follow the
 [Flash-Next handoff](docs/flashnext/handoff.md) rather than copying its
 checkpoint-specific controls to another runtime.
 
+## Verification commands
+
+Run everything locally with one command:
+
+```sh
+./scripts/verify.sh            # shared + Flash-Next + Nemotron units, secret scan, app build + app tests
+./scripts/verify.sh --python-only   # skip Swift when the local toolchain cannot load the test macros
+./scripts/verify.sh --fast     # Linux fast lane (no MLX) + secret scan, seconds
+```
+
+`make verify`, `make fast` and `make python-only` are aliases. CI runs the same
+suites: a fast Linux job for pure-Python tests and macOS jobs for the full
+unit suites, the app build and the app logic tests. If a change can alter model
+output, also run the quality gate above and retain live evidence.
+
 ## Repository rules
 
 - Keep unrelated user changes intact. Do not reset or discard them implicitly.

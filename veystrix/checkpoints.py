@@ -94,9 +94,11 @@ def flashnext_compatible(path: Path, complete: bool = True) -> bool:
     if not all((path / name).is_file() for name in _TOKENIZER_FILES):
         return False
     nested = [config.get("text_config"), config.get("llm_config")]
-    model_types = {config.get("model_type")}
+    model_types = {value for value in (config.get("model_type"),)
+                   if isinstance(value, str)}
     model_types.update(
-        item.get("model_type") for item in nested if isinstance(item, dict)
+        value for item in nested if isinstance(item, dict)
+        for value in (item.get("model_type"),) if isinstance(value, str)
     )
     if not (model_identity.FLASHNEXT.model_types & model_types):
         return False

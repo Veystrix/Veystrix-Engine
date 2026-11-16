@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 
+from veystrix import model_identity
+
 MTP_PREFIX = "language_model.mtp."
 MTP_SIDECAR_NAME = "model-mtp.safetensors"
 
@@ -109,9 +111,11 @@ def describe_checkpoint(model_dir: str | os.PathLike) -> CheckpointCaps:
     text = config.get("text_config", {})
     if not isinstance(text, dict):
         text = {}
-    model_types = {config.get("model_type"), text.get("model_type")}
-    caps.model_type = str(text.get("model_type") or config.get("model_type") or "")
-    caps.compatible = bool({"qwen4_exp", "qwen4_exp_text"} & {m for m in model_types if m})
+    model_types = {value for value in (config.get("model_type"), text.get("model_type"))
+                   if isinstance(value, str)}
+    caps.model_type = next((value for value in (text.get("model_type"), config.get("model_type"))
+                            if isinstance(value, str)), "")
+    caps.compatible = bool(model_identity.FLASHNEXT.model_types & model_types)
     if not caps.compatible:
         return caps
     try:

@@ -203,7 +203,18 @@ def tensor_names(families: dict[str, str]) -> set[str]:
 
 
 def expert_record_bytes(hidden: int, intermediate: int, bits: int, group: int) -> int:
-    """Bytes of one expert's nine tensors (gate, up, down; weight, scales, biases)."""
+    """Bytes of one expert's nine tensors (gate, up, down; weight, scales, biases).
+
+    Malformed metadata yields 0 rather than raising: preflight must report a
+    bad checkpoint, not crash while describing it.
+    """
+    try:
+        hidden, intermediate, bits, group = (int(hidden), int(intermediate), int(bits), int(group))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if group <= 0:
+        return 0
+
     def projection(rows, cols):
         weight = rows * (cols * bits // 32) * 4          # uint32 packs 32/bits values
         scales = rows * (cols // group) * 2              # bf16
@@ -296,8 +307,9 @@ def _check_config(report: Report, config: dict | None, profile: dict | None) -> 
 
 def describe_checkpoint_dict(config: dict) -> dict:
     text = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
-    types = {config.get("model_type"), text.get("model_type")}
-    return {"compatible": bool(model_identity.FLASHNEXT.model_types & {t for t in types if t})}
+    types = {value for value in (config.get("model_type"), text.get("model_type"))
+             if isinstance(value, str)}
+    return {"compatible": bool(model_identity.FLASHNEXT.model_types & types)}
 
 
 def _slab_stride(group_size):
@@ -315,8 +327,9 @@ def _check_index(report: Report, root: Path, index: dict | None, layer_types: li
         report.add("tensor index", FAIL, "model.safetensors.index.json is missing, invalid or empty")
         return {}
     weight_map = index["weight_map"]
-    shards = sorted({v for v in weight_map.values()})
-    insane = [s for s in shards if not (isinstance(s, str) and SHARD_NAME.match(s))]
+    values = list(weight_map.values())
+    shards = sorted({v for v in values if isinstance(v, str)})
+    insane = [s for s in values if not (isinstance(s, str) and SHARD_NAME.match(s))]
     report.add("shard names", FAIL if insane else PASS,
                f"unsafe names {insane[:3]}" if insane else f"{len(shards)} shards, plain file names")
     report.add("tensor index", PASS, f"{len(weight_map):,} tensors in {len(shards)} shards",
@@ -392,10 +405,12 @@ def _check_download(report: Report, root: Path, index_info: dict, manifest: dict
     state: dict[str, dict] = {}
     by_sha = {}
     if manifest:
-        for name, meta in manifest["files"].items():
-            if meta.get("sha256"):
+        files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+        for name, meta in files.items():
+            if isinstance(meta, dict) and isinstance(meta.get("sha256"), str):
                 by_sha[meta["sha256"]] = name
-        expected = {n: m["size"] for n, m in manifest["files"].items()}
+        expected = {n: m.get("size") for n, m in files.items()
+                    if isinstance(m, dict) and isinstance(m.get("size"), int)}
     else:
         expected = {}
     writing = {}

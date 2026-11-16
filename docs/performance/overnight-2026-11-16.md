@@ -250,6 +250,19 @@ Four tool-call prompts (450-454 tokens, JSON-only replies, greedy, 70 tokens). F
 
 Larger sample (20 tool-call prompts, same format): 16 replies identical, 4 differ. Valid JSON: fused 19 of 20, stock 18 of 20 (the stock failures include a stray `</think>` after the object). The four differences are equally sensible in both directions (stock chose `npm test` for the `test_prefix_cache_restore` prompt, fused chose it for the parser prompt; fused omitted the optional `timeout_s` once, on the line-count prompt, where stock included it). That is what rounding-level divergence between two equally valid greedy paths looks like, not a systematic loss, so the default stays on; the rollback flag is above.
 
+## Qwen decode: S3-FIFO pool replacement (opt-in `s3fifo-pool`, exact, +5%)
+
+The decode expert pool's replacement policy only changes which experts stay resident; the experts read and the arithmetic are the same. In-process real Qwen, app launch environment, 300-token prompt, 120 then 200 decode tokens, identical tokens across policies (same hash):
+
+| Policy | 120 tokens | 200 tokens (two runs) |
+|---|---|---|
+| lru (default) | 2.39 tok/s, 157.7 GB read | 2.50 / 2.48, 222.8 / 223.0 GB |
+| s3fifo | 2.54, 146.9 GB | 2.63 / 2.61, 211.5 / 211.3 GB |
+| cost-aware | 2.45, 153.2 GB | not repeated |
+| least-stale | 2.43, 153.5 GB | not repeated |
+
+S3-FIFO gives +5% decode speed and 5% fewer bytes read, reproducibly (alternating order). `--enable s3fifo-pool` sets `FLASHNEXT_EXPERT_POOL_POLICY=s3fifo`; default stays `lru` (the off value is in `EXPERIMENTAL_OFF`, test added). Not measured through the server yet, and the gain is for decode-bound output, so a conversation that mostly generates a few tokens will see less.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

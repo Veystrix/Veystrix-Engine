@@ -26,7 +26,7 @@ class FlagNameTests(unittest.TestCase):
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
                  prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION,
                  qsa_chunk.FLAG_DENSE_PREFIX, qsa_chunk.FLAG_MASKED_SPARSE, "FLASHNEXT_LAYER_MAJOR_SINGLE",
-                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL}
+                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL, expert_pool.POLICY_FLAG}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):
@@ -177,6 +177,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.env["FLASHNEXT_PREFILL_RELEASE_DECODE_POOL"], "0")   # the manager releases the pool
         self.assertEqual(set(plan.labels), {"memory-manager", "prefix-profiles"})
         self.assertIn("EXPERIMENTAL", M.banner(plan))
+
+    def test_s3fifo_pool_option_defaults_to_lru(self):
+        base = ["kv-tiered4", "short-throughput"]
+        self.assertEqual(M.plan_mode("agentic", pool_gb=2, enable=base, prefix_dir="/tmp/x", serve=True).env["FLASHNEXT_EXPERT_POOL_POLICY"], "lru")
+        env = M.plan_mode("agentic", pool_gb=2, enable=base + ["s3fifo-pool"], prefix_dir="/tmp/x", serve=True).env
+        self.assertEqual(env["FLASHNEXT_EXPERT_POOL_POLICY"], "s3fifo")
+        with patch.dict(os.environ, {"FLASHNEXT_EXPERT_POOL_POLICY": "s3fifo"}):      # a stale inherited value is replaced
+            applied = M.apply_mode(dict(os.environ), M.plan_mode("agentic", pool_gb=2, enable=base, prefix_dir="/tmp/x", serve=True))
+            self.assertEqual(applied["FLASHNEXT_EXPERT_POOL_POLICY"], "lru")
 
     def test_prefill_speed_options_compose_and_default_off(self):
         base = ["kv-tiered4", "short-throughput"]

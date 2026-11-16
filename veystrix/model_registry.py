@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 from pathlib import Path
 
+from veystrix import model_identity
 from veystrix.checkpoints import _json, installed_checkpoints
 
 
@@ -41,9 +42,9 @@ def installation_id(family: str, path: str | Path) -> str:
 # reports 262,144 there). Neither number claims that a 262K or 1M prompt has run on real
 # hardware; admission may still admit less at load, and the loaded server reports the admitted
 # value on /v1/models and /health.
-FLASHNEXT_CONFIGURED_CONTEXT = 262_144
-NEMOTRON_CONFIGURED_CONTEXT = 1_048_576
-UNKNOWN_FAMILY_CONTEXT = 32_768
+FLASHNEXT_CONFIGURED_CONTEXT = model_identity.FLASHNEXT.context_limit
+NEMOTRON_CONFIGURED_CONTEXT = model_identity.NEMOTRON.context_limit
+UNKNOWN_FAMILY_CONTEXT = model_identity.UNKNOWN.context_limit
 
 
 def catalog_context(model: InstalledModel) -> int:

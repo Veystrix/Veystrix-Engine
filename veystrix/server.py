@@ -18,6 +18,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
+from veystrix import model_identity
 from veystrix.quick_bind import QuickBindMixin
 from veystrix.text import (
     CompletedTextBuffer,
@@ -567,16 +568,14 @@ DEFAULT_CONTEXT_WINDOW = 32768
 # 32K is an admission ceiling, not a single physical chunk or a hardware-validation claim.
 MAX_COLD_PREFILL_DEFAULT = 32768
 MAX_INCREMENTAL_PREFILL_DEFAULT = 32768
-ARCHITECTURAL_CONTEXT_MAXIMUM = 262144
+ARCHITECTURAL_CONTEXT_MAXIMUM = model_identity.FLASHNEXT.context_limit
 
-_MODEL_DISPLAY_NAMES = {
-    "flashnext": "Veystrix Flash-Next",
-    "nemotron35-lightning": "Veystrix Nemotron 3.5 Lightning",
-}
+_MODEL_DISPLAY_NAMES = {family: identity.display_name
+                        for family, identity in model_identity.IDENTITIES.items()}
 
 _BACKEND_DISPLAY_NAMES = {
-    "FlashNextBackend": "Veystrix Flash-Next",
-    "NemotronBackend": "Veystrix Nemotron 3.5 Lightning",
+    "FlashNextBackend": model_identity.FLASHNEXT.display_name,
+    "NemotronBackend": model_identity.NEMOTRON.display_name,
 }
 
 _WINDOW_ATTRS = (

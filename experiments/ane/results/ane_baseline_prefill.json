@@ -1,0 +1,216 @@
+{
+ "date": "2026-11-17T01:59:46",
+ "on_ac": [
+  "Now drawing from 'AC Power'",
+  " -InternalBattery-0 (id=35586147)\t80%; AC attached; not charging present: true"
+ ],
+ "coremltools": "9.0",
+ "note": "random weights; placement/latency/memory/contention only",
+ "placement": [
+  {
+   "label": "router_b1",
+   "layers": {
+    "flat_in": {
+     "type": "flatten",
+     "preferred": "MLCPUComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice"
+     ]
+    },
+    "fc": {
+     "type": "inner_product",
+     "preferred": "MLCPUComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice",
+      "MLNeuralEngineComputeDevice"
+     ]
+    }
+   }
+  },
+  {
+   "label": "router_b16",
+   "layers": {
+    "flat_in": {
+     "type": "flatten",
+     "preferred": "MLCPUComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice"
+     ]
+    },
+    "fc": {
+     "type": "inner_product",
+     "preferred": "MLNeuralEngineComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice",
+      "MLNeuralEngineComputeDevice"
+     ]
+    }
+   }
+  },
+  {
+   "label": "router_b256",
+   "layers": {
+    "flat_in": {
+     "type": "flatten",
+     "preferred": "MLCPUComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice"
+     ]
+    },
+    "fc": {
+     "type": "inner_product",
+     "preferred": "MLNeuralEngineComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice",
+      "MLNeuralEngineComputeDevice"
+     ]
+    }
+   }
+  },
+  {
+   "label": "router_b1024",
+   "layers": {
+    "flat_in": {
+     "type": "flatten",
+     "preferred": "MLCPUComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice"
+     ]
+    },
+    "fc": {
+     "type": "inner_product",
+     "preferred": "MLNeuralEngineComputeDevice",
+     "supported": [
+      "MLCPUComputeDevice",
+      "MLGPUComputeDevice",
+      "MLNeuralEngineComputeDevice"
+     ]
+    }
+   }
+  }
+ ],
+ "latency": [
+  {
+   "p50_ms": 0.04116701893508434,
+   "p95_ms": 0.04812492989003658,
+   "n": 400,
+   "model": "router_b1",
+   "units": "coreml-cpu",
+   "batch": 1,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.04199997056275606,
+   "p95_ms": 0.04787510260939598,
+   "n": 400,
+   "model": "router_b1",
+   "units": "coreml-ne",
+   "batch": 1,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.23699994198977947,
+   "p95_ms": 0.7159169763326645,
+   "n": 400,
+   "model": "router_b1",
+   "units": "mlx-gpu",
+   "batch": 1
+  },
+  {
+   "p50_ms": 0.09541597682982683,
+   "p95_ms": 0.09695801418274641,
+   "n": 200,
+   "model": "router_b16",
+   "units": "coreml-cpu",
+   "batch": 16,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.1889170380309224,
+   "p95_ms": 0.2079999540001154,
+   "n": 200,
+   "model": "router_b16",
+   "units": "coreml-ne",
+   "batch": 16,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.23504195269197226,
+   "p95_ms": 0.7999169174581766,
+   "n": 200,
+   "model": "router_b16",
+   "units": "mlx-gpu",
+   "batch": 16
+  },
+  {
+   "p50_ms": 0.6600409979000688,
+   "p95_ms": 0.675167073495686,
+   "n": 100,
+   "model": "router_b256",
+   "units": "coreml-cpu",
+   "batch": 256,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.5656670546159148,
+   "p95_ms": 0.5883750272914767,
+   "n": 100,
+   "model": "router_b256",
+   "units": "coreml-ne",
+   "batch": 256,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 0.5086669698357582,
+   "p95_ms": 1.5462919836863875,
+   "n": 100,
+   "model": "router_b256",
+   "units": "mlx-gpu",
+   "batch": 256
+  },
+  {
+   "p50_ms": 2.6639580028131604,
+   "p95_ms": 2.9154160292819142,
+   "n": 40,
+   "model": "router_b1024",
+   "units": "coreml-cpu",
+   "batch": 1024,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 2.235042047686875,
+   "p95_ms": 2.392792026512325,
+   "n": 40,
+   "model": "router_b1024",
+   "units": "coreml-ne",
+   "batch": 1024,
+   "neural_MB": 0.0
+  },
+  {
+   "p50_ms": 1.4180419966578484,
+   "p95_ms": 1.8398750107735395,
+   "n": 40,
+   "model": "router_b1024",
+   "units": "mlx-gpu",
+   "batch": 1024
+  }
+ ],
+ "throughput": {
+  "1024x2560x2560": {
+   "ane_tflops": 3.191853973072979,
+   "gpu_tflops": 2.1204075037249748
+  },
+  "512x2048x2048": {
+   "ane_tflops": 2.5235442508207075,
+   "gpu_tflops": 1.2990416284576831
+  }
+ },
+ "contention": []
+}

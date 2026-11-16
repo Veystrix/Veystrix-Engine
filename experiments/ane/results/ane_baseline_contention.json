@@ -1,0 +1,60 @@
+{
+ "date": "2026-11-17T02:00:28",
+ "note": "random weights; GPU compute-bound (prefill shape); 2 reversed rounds",
+ "rounds": [
+  {
+   "label": "none",
+   "rate_hz": null,
+   "order": "gpu_first",
+   "gpu": {
+    "p50_ms": 4.959749989211559,
+    "n": 575
+   }
+  },
+  {
+   "label": "ANE 200Hz",
+   "rate_hz": 200,
+   "order": "gpu_first",
+   "gpu": {
+    "p50_ms": 5.125582916662097,
+    "n": 560
+   }
+  },
+  {
+   "label": "ANE flat",
+   "rate_hz": 0,
+   "order": "gpu_first",
+   "gpu": {
+    "p50_ms": 5.170083953998983,
+    "n": 556
+   }
+  },
+  {
+   "label": "none",
+   "rate_hz": null,
+   "order": "ane_first",
+   "gpu": {
+    "p50_ms": 5.032125045545399,
+    "n": 571
+   }
+  },
+  {
+   "label": "ANE 200Hz",
+   "rate_hz": 200,
+   "order": "ane_first",
+   "gpu": {
+    "p50_ms": 5.189166986383498,
+    "n": 552
+   }
+  },
+  {
+   "label": "ANE flat",
+   "rate_hz": 0,
+   "order": "ane_first",
+   "gpu": {
+    "p50_ms": 5.24962495546788,
+    "n": 547
+   }
+  }
+ ]
+}

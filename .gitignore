@@ -35,3 +35,7 @@ dist/
 *.key
 *.mobileprovision
 sparkle_ed25519_private*
+
+# Local ANE experiment venv and generated Core ML models
+experiments/ane/V/
+experiments/ane/out/

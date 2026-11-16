@@ -18,6 +18,25 @@ GB = 1e9
 METAL_LIMIT = 12_713_115_648          # measured: max recommended working set
 GUARD_HEADROOM = 500_000_000          # the child guard stops within 0.5 GB of the limit
 
+
+def device_metal_limit(fallback: int = METAL_LIMIT) -> int:
+    """Metal's recommended working set on this Mac, or the 16 GB fallback.
+
+    The 12.7 GB constant is the measured value on the validated 16 GB M4; a
+    larger Mac reports a larger limit, which is what lets a full-resident plan
+    pass. This is a budget input, never a safety guard.
+    """
+    try:
+        import mlx.core as mx
+        reader = getattr(mx, "device_info", None)
+        if reader is None:
+            reader = getattr(getattr(mx, "metal", None), "device_info", None)
+        if reader is None:
+            return fallback
+        return int(reader().get("max_recommended_working_set_size", 0)) or fallback
+    except Exception:
+        return fallback
+
 # Model shape (config.json, checkpoint qwen4_exp).
 HIDDEN, HC = 2560, 4
 LAYERS, FULL_LAYERS = 48, 12
@@ -67,8 +86,11 @@ class Budget:
         return (self.weights + self.scratch_ring + retained + self.state_kv + self.logits
                 + self.transient + self.attention_scores + self.allocator_cache)
 
-    def fits(self, fixed: bool) -> bool:
-        return self.peak(fixed) <= METAL_LIMIT - GUARD_HEADROOM
+    def fits(self, fixed: bool, metal_limit: int = METAL_LIMIT) -> bool:
+        """Fit check. ``metal_limit`` may be queried from MLX on the running Mac;
+        the constant is the validated 16 GB fallback. The headroom is unchanged.
+        """
+        return self.peak(fixed) <= metal_limit - GUARD_HEADROOM
 
 
 def state_and_kv(tokens: int) -> float:

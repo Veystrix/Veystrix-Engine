@@ -411,7 +411,9 @@ class AutoPoolTests(unittest.TestCase):
         self.assertEqual(small.pool_bytes, 0)
         large = admission.make_plan(self.cfg, machine(total=32 * gib, available=24 * gib, gpu_limit=24 * gib),
                                     pool_bytes=None, **sizes)
-        self.assertEqual(large.pool_bytes, admission.AUTO_POOL_MAX)
+        # A 32 GB machine holds every routed expert beside the dense core, so
+        # the auto pool is now the full resident set (not the old 4 GiB cap).
+        self.assertEqual(large.pool_bytes, sizes["routed_expert_bytes"])
         explicit = admission.make_plan(self.cfg, machine(), pool_bytes=2 * gib, **sizes)
         self.assertEqual(explicit.pool_bytes, 2 * gib)        # an explicit size is never overridden
 

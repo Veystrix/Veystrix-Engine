@@ -1,6 +1,9 @@
 import unittest
 
-from veystrix.memory_tiers import GIB, TIERS, MemoryTier, current_tier, physical_bytes, tier_for
+from veystrix.memory_tiers import (
+    FLASHNEXT_KERNEL_POOL_CAP_BYTES, GIB, TIERS, MemoryTier, current_tier,
+    flashnext_pool_cap_bytes, full_resident_bytes, physical_bytes, tier_for,
+)
 
 
 class MemoryTierTests(unittest.TestCase):
@@ -34,6 +37,22 @@ class MemoryTierTests(unittest.TestCase):
         self.assertEqual(current_tier({"VEYSTRIX_PHYSICAL_MEMORY_GIB": "128"}).name, "128 GB")
         self.assertEqual(current_tier({"VEYSTRIX_PHYSICAL_MEMORY_GIB": "bad"}).name,
                          tier_for(physical_bytes({})).name)
+
+    def test_flashnext_pool_is_capped_by_the_kernel_addressing(self):
+        # 64/96 GB tier caps (6/8 GB) are below the ceiling; 128 GB (12 GB) is clamped to it.
+        for gib in (64, 96):
+            with self.subTest(gib=gib):
+                tier = tier_for(gib * GIB)
+                self.assertEqual(flashnext_pool_cap_bytes(tier), round(tier.pool_cap_gb * 1_000_000_000))
+        self.assertEqual(flashnext_pool_cap_bytes(tier_for(128 * GIB)), FLASHNEXT_KERNEL_POOL_CAP_BYTES)
+
+    def test_full_residency_is_fail_closed(self):
+        dense, routed = 2 * GIB, 16 * GIB
+        # 32 GB passes the OS-reserve rule; 16 GB does not.
+        self.assertEqual(full_resident_bytes(routed_expert_bytes=routed, dense_bytes=dense,
+                                             total_bytes=32 * GIB), routed)
+        self.assertEqual(full_resident_bytes(routed_expert_bytes=routed, dense_bytes=dense,
+                                             total_bytes=16 * GIB), 0)
 
     def test_tier_is_a_frozen_value(self):
         tier = MemoryTier("test", 1.0, 1.0)

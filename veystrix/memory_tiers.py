@@ -24,6 +24,12 @@ class MemoryTier:
     nemotron_pool_cap_gb: float  # auto Nemotron pool cap in GiB
 
 
+# MLX shape dimensions are 32-bit; Flash-Next passes its decode pool to Metal
+# kernels as a single uint32 array, so no pool can exceed ~8 GiB until the
+# kernel addressing is redesigned. This is a hardware/kernel ceiling, not a
+# memory-size decision, and applies equally to every tier.
+FLASHNEXT_KERNEL_POOL_CAP_BYTES = 8 * GIB
+
 BASELINE = MemoryTier("16 GB", 2.0, 4.0)
 TIERS: tuple[tuple[int, MemoryTier], ...] = (
     (112, MemoryTier("128 GB", 12.0, 8.0)),
@@ -59,3 +65,23 @@ def tier_for(total_bytes: int) -> MemoryTier:
 
 def current_tier(environ=None) -> MemoryTier:
     return tier_for(physical_bytes(environ))
+
+
+def flashnext_pool_cap_bytes(tier: MemoryTier) -> int:
+    """Largest Flash-Next pool the Metal kernel can address on this tier."""
+    return min(round(tier.pool_cap_gb * 1_000_000_000), FLASHNEXT_KERNEL_POOL_CAP_BYTES)
+
+
+def full_resident_bytes(*, routed_expert_bytes: int, dense_bytes: int, total_bytes: int,
+                        os_reserve_bytes: int | None = None) -> int:
+    """Bytes needed to keep every routed expert resident beside the dense core.
+
+    Returns 0 when the machine cannot hold them plus the OS reserve — the caller
+    must then fall back to SSD streaming. The reserve is the same rule Nemotron
+    already uses (3 GiB floor or a quarter of RAM), never lowered to make a fit.
+    """
+    if os_reserve_bytes is None:
+        os_reserve_bytes = max(3 * GIB, total_bytes // 4)
+    if total_bytes < dense_bytes + routed_expert_bytes + os_reserve_bytes:
+        return 0
+    return routed_expert_bytes

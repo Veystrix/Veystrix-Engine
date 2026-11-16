@@ -33,6 +33,14 @@ The tier table is therefore conservative and based on **physical memory**, not c
 
 Caps are about 12–17% of usable unified memory. The 16 GB baseline keeps its exact 2 GB cap; every large tier is bounded further by the headroom checks at the first decode.
 
+## Full-resident inference
+
+"Full residency" means keeping every routed expert in memory instead of reading it from SSD on demand.
+
+- **Nemotron: supported, fail-closed.** Routed experts are 15.38 GiB. When `full_resident_bytes()` proves they fit beside the dense core (1.25 GiB) and the unchanged OS reserve (`max(3 GiB, total/4)`), the auto pool is sized to the entire routed set. On a 16 GB Mac it does not fit and the runtime streams from SSD. A working-set check re-verifies the plan before it is accepted; if it fails, the pool falls back to zero.
+- **Flash-Next: limited by the kernel, not by RAM.** All 48×512 experts are 24,576 records × 3,072,000 B = **75.5 GB (70.31 GiB)**. The decode pool is passed to Metal as a single `uint32` MLX array; MLX shape dimensions are 32-bit, so the pool cannot exceed **8 GiB** regardless of installed RAM. A 12 GB tier request is clamped to 8 GiB. Holding all Flash-Next experts resident would require redesigning the kernel addressing (multiple buffers or 64-bit offsets), which is out of scope and cannot be validated on a 16 GB Mac. The runtime keeps SSD streaming for the rest.
+- `prefill_budget.device_metal_limit()` queries the real `max_recommended_working_set_size` from MLX (12.7 GB on the validated 16 GB M4) and uses it as a budget input; the guard headroom is unchanged.
+
 ## What was deliberately NOT changed
 
 These are **absolute** limits from measured behaviour, not RAM fractions. They stay the same on every machine:
@@ -40,7 +48,7 @@ These are **absolute** limits from measured behaviour, not RAM fractions. They s
 - 9 GiB start gate (`modes.START_GATE_GB`, `admission_model.MANDATORY_GATE_GIB`, `prefill_readiness.MANDATORY_START_GATE_BYTES`)
 - 3 GiB guard floor (`prefill_scheduler.GUARD_FLOOR_BYTES`)
 - 3 GiB swap-growth ceiling and 2.5 GiB swap-growth stop (`memory_policy`)
-- 12.7 GB Metal working-set limit (`prefill_budget`)
+- 12.7 GB Metal working-set fallback (`prefill_budget.device_metal_limit`); the live value is now queried from the device
 - Nemotron OS reserve `max(3 GiB, total/4)` and `pool_pays_off`
 
 Raising these would weaken safety guards to make a larger pool load — explicitly against the project rule.

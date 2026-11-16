@@ -32,16 +32,20 @@ class HigherMemoryPoolTests(unittest.TestCase):
     def test_larger_machines_accept_larger_pools(self):
         gb, _ = modes.choose_pool_gb("8", physical_bytes=128 * GIB)
         self.assertEqual(gb, 8.0)
-        gb, _ = modes.choose_pool_gb("12", physical_bytes=128 * GIB)
-        self.assertEqual(gb, 12.0)
+        # 8 GiB is the kernel-addressable ceiling; beyond that is refused.
+        from veystrix.memory_tiers import FLASHNEXT_KERNEL_POOL_CAP_BYTES
+        ceiling = FLASHNEXT_KERNEL_POOL_CAP_BYTES / 1_000_000_000
+        gb, _ = modes.choose_pool_gb(str(ceiling), physical_bytes=128 * GIB)
+        self.assertLessEqual(gb * 1_000_000_000, FLASHNEXT_KERNEL_POOL_CAP_BYTES)
         with self.assertRaises(modes.ModeError):
-            modes.choose_pool_gb("13", physical_bytes=128 * GIB)
+            modes.choose_pool_gb(str(ceiling + 1), physical_bytes=128 * GIB)
 
     def test_planner_steps_are_unchanged_on_the_baseline(self):
         self.assertEqual(memory_budget.pool_steps(6 * GIB, 16 * GIB), memory_budget.POOL_STEPS)
 
     def test_planner_can_reach_a_larger_pool_on_a_larger_machine(self):
-        cap = 12_000_000_000  # decimal GB, as in --pool-gb
+        from veystrix.memory_tiers import FLASHNEXT_KERNEL_POOL_CAP_BYTES
+        cap = FLASHNEXT_KERNEL_POOL_CAP_BYTES
         steps = memory_budget.pool_steps(cap, 128 * GIB)
         self.assertEqual(steps[0], cap)
         self.assertEqual(steps[1:], memory_budget.POOL_STEPS)
@@ -62,6 +66,37 @@ class HigherMemoryPoolTests(unittest.TestCase):
         gb, reason = modes.choose_pool_gb("auto", available_gb=8.0, physical_bytes=128 * GIB)
         self.assertEqual(gb, 0.0)
         self.assertIn("start gate", reason)
+
+
+
+
+class DeviceMetalLimitTests(unittest.TestCase):
+    def test_fallback_when_no_device_is_present(self):
+        from models.flashnext import prefill_budget as pb
+        from unittest import mock
+        with mock.patch.dict("sys.modules", {"mlx.core": None}):
+            self.assertEqual(pb.device_metal_limit(fallback=123), 123)
+        self.assertGreater(pb.device_metal_limit(), 0)
+
+    def test_fit_accepts_a_device_limit(self):
+        from models.flashnext import prefill_budget as pb
+        tiny = pb.Budget(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        self.assertTrue(tiny.fits(False, metal_limit=pb.METAL_LIMIT))
+        self.assertFalse(tiny.fits(False, metal_limit=1))
+
+class DeviceMetalLimitTests(unittest.TestCase):
+    def test_fallback_when_no_device_is_present(self):
+        from models.flashnext import prefill_budget as pb
+        from unittest import mock
+        with mock.patch.dict("sys.modules", {"mlx.core": None}):
+            self.assertEqual(pb.device_metal_limit(fallback=123), 123)
+        self.assertGreater(pb.device_metal_limit(), 0)
+
+    def test_fit_accepts_a_device_limit(self):
+        from models.flashnext import prefill_budget as pb
+        tiny = pb.Budget(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        self.assertTrue(tiny.fits(False, metal_limit=pb.METAL_LIMIT))
+        self.assertFalse(tiny.fits(False, metal_limit=1))
 
 
 if __name__ == "__main__":

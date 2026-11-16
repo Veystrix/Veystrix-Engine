@@ -160,9 +160,18 @@ def make_plan(config: dict, machine: Machine, *, dense_bytes: int, context_token
                             + (INT8_ATTENTION_SCRATCH_BYTES if int8_kv else 0)),
                         reserve_bytes=allocator_slack + prefix_cache_bytes, int8_kv=int8_kv)
 
-    if pool_bytes is None and routed_expert_bytes is not None and not pool_pays_off(
-            machine, dense_bytes=dense_bytes, routed_expert_bytes=routed_expert_bytes):
-        pool_bytes = 0
+    if pool_bytes is None and routed_expert_bytes is not None:
+        from veystrix.memory_tiers import full_resident_bytes
+        # Full residency: when all routed experts fit beside the dense core and
+        # OS reserve, keep every one resident instead of streaming from SSD.
+        # Fail closed: 0 means stream, never a partial guess.
+        pool_bytes = full_resident_bytes(
+            routed_expert_bytes=routed_expert_bytes, dense_bytes=dense_bytes,
+            total_bytes=machine.total)
+        if pool_bytes:
+            check = build(pool_bytes, chunk_tokens)
+            if check.total_bytes > limit:
+                pool_bytes = 0   # working-set admission refuses; stream instead
     if pool_bytes is None:
         base = build(0, chunk_tokens).total_bytes
         room = limit - base - AUTO_POOL_HEADROOM

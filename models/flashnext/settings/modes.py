@@ -275,9 +275,9 @@ def choose_pool_gb(requested, available_gb=None, physical_bytes=None):
     The 16 GB baseline keeps its 2 GB cap; larger Macs get a larger optional
     pool. Safety thresholds are unchanged: this only limits pool size.
     """
-    from veystrix.memory_tiers import physical_bytes as detect_bytes, tier_for
+    from veystrix.memory_tiers import (flashnext_pool_cap_bytes, physical_bytes as detect_bytes, tier_for)
     tier = tier_for(detect_bytes() if physical_bytes is None else physical_bytes)
-    cap_gb = tier.pool_cap_gb
+    cap_gb = flashnext_pool_cap_bytes(tier) / 1_000_000_000
     if requested is not None and str(requested).lower() != "auto":
         try:
             gb = float(requested)

@@ -19,10 +19,10 @@ def pool_steps(cap: int, physical_bytes: int | None = None) -> tuple[int, ...]:
     Larger tiers add one step at their cap so the elastic planner can actually
     use the larger pool the UI allowed; safety headroom checks still apply.
     """
-    from veystrix.memory_tiers import tier_for
+    from veystrix.memory_tiers import flashnext_pool_cap_bytes, tier_for
     if physical_bytes is None or tier_for(physical_bytes).name == "16 GB":
         return POOL_STEPS
-    tier_cap = min(cap, round(tier_for(physical_bytes).pool_cap_gb * 1_000_000_000))
+    tier_cap = min(cap, flashnext_pool_cap_bytes(tier_for(physical_bytes)))
     if tier_cap <= POOL_STEPS[0]:
         return POOL_STEPS
     return (tier_cap, *POOL_STEPS)

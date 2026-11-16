@@ -8,6 +8,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_protect_engine():
+    path = ROOT / "packaging" / "engine" / "protect_engine.py"
+    spec = importlib.util.spec_from_file_location("_protect_engine_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_protect():
     path = ROOT / "packaging" / "engine" / "_protect.py"
     spec = importlib.util.spec_from_file_location("_protect_under_test", path)
@@ -41,6 +49,24 @@ class BytecodeProtectionTests(unittest.TestCase):
     def test_truncated_blob_is_rejected(self):
         with self.assertRaises(ValueError):
             self.protect.decrypt(b"short", self.secret)
+
+    def test_key_derivation_cancels_only_for_the_clean_digest(self):
+        engine = _load_protect_engine()
+        base = b"b" * 32
+        clean = bytes(5) + b"c" * 32
+        derived = engine.derive(base, clean)
+        self.assertEqual(engine.derive(derived, clean), base)
+        self.assertNotEqual(engine.derive(derived, bytes(5) + b"x" * 32), base)
+
+    def test_bootstrap_files_are_bound_into_the_clean_digest(self):
+        engine = _load_protect_engine()
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            lib = Path(tmp)
+            for name in engine.BOOTSTRAP:
+                (lib / name).write_text("bootstrap " + name)
+            first = engine.clean_signals(lib)
+            (lib / "_protect.py").write_text("modified")
+            self.assertNotEqual(engine.clean_signals(lib), first)
 
 
 if __name__ == "__main__":

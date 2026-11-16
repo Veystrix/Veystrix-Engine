@@ -50,9 +50,11 @@ class SourceHygieneTests(unittest.TestCase):
 
     def test_protection_script_encrypts_every_module(self):
         script = (ROOT / "packaging" / "engine" / "protect_engine.py").read_text()
-        self.assertIn("encrypt(pyc.read_bytes(), secret)", script)
+        self.assertIn("encrypt(pyc.read_bytes(), base)", script)
         self.assertIn("pyc.unlink()", script)
         self.assertIn("unencrypted bytecode remains", script)
+        self.assertIn("derive(base, clean_signals(lib))", script)
+        self.assertIn("shield derived the wrong key", script)
 
 
 if __name__ == "__main__":

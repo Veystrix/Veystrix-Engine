@@ -26,10 +26,16 @@ _INSTALLED = False
 
 
 def key() -> bytes:
+    """Derive the decryption key from the runtime shield digest.
+
+    The dylib holds a key XOR the digest of a clean run. Any changed signal
+    (debugger, injection, modified bootstrap) changes the digest, so decryption
+    fails far from the check instead of hitting a patchable refuse branch.
+    """
     lib = ctypes.CDLL(str(_KEY_DYLIB))
-    lib.vx_protect_key.restype = ctypes.c_void_p
-    length = lib.vx_protect_key_length()
-    return ctypes.string_at(lib.vx_protect_key(), length)
+    lib.vx_shield_key.restype = ctypes.c_void_p
+    length = lib.vx_shield_key_length()
+    return ctypes.string_at(lib.vx_shield_key(), length)
 
 
 def _keystream(key: bytes, nonce: bytes, size: int) -> bytes:

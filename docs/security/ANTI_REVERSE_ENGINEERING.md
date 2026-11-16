@@ -21,13 +21,17 @@ be extracted — not to make analysis impossible.
 
 ## What it does not do
 
-- The engine ships as **encrypted bytecode** (`.pyc.enc`). Each build generates
-  a random 256-bit key compiled into a small native dylib; a minimal import
-  hook decrypts modules in memory at load time. A decompiler now fails with
-  `bad marshal data` instead of recovering docstrings, strings and logic.
-  No readable source ships: settings providers load from encrypted bytecode,
-  and `native_read.c` is compiled to a bundled dylib. The private git repo is
-  what keeps the editable source off GitHub.
+- The engine ships as **encrypted bytecode** (`.pyc.enc`). The encryption key
+  is not stored: the shield dylib holds `base XOR sha256(clean_signals)` and
+  recomputes the signal digest at runtime. Signals are P_TRACED after
+  `PT_DENY_ATTACH`, dyld image names, `DYLD_INSERT_LIBRARIES`, Frida thread
+  names, a timing delta and a hash of the two bootstrap files. On a clean run
+  the XOR cancels; a patched check or modified bootstrap changes the digest,
+  so decryption fails with `bad marshal data` or an HMAC error far from the
+  check. There is deliberately no `if detected { refuse }` branch to patch.
+  Exception-port and Frida-port checks were evaluated and removed: they
+  false-positived on ordinary machines and would brick honest users.
+  No readable source ships; the private git repo keeps editable source off GitHub.
 - A user with local access can call the same key dylib, patch the import hook,
   or remove the integrity check. Encryption stops decompilers, not a debugger.
   It raises the cost from "unzip and disassemble" to "reverse the bootstrap".

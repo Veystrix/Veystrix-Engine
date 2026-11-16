@@ -65,7 +65,9 @@ public struct LaunchPlan: Equatable, Sendable {
         guard isExecutable(python.path) else { throw PlanError.runtimeMissing("Python is not executable: \(python.path)") }
         guard fileExists(cwd.path) else { throw PlanError.runtimeMissing("working directory: \(cwd.path)") }
         if case .bundled = source {
-            for file in ["models/flashnext/overnight.pyc", "veystrix/cli.pyc", "veystrix/session.pyc", "veystrix/model_router.pyc", "veystrix/engine_guard.pyc"] {
+            // Packaged bytecode is encrypted to *.pyc.enc at build time; the
+            // import hook decrypts it in memory. Plaintext .pyc is not shipped.
+            for file in ["models/flashnext/overnight.pyc.enc", "veystrix/cli.pyc.enc", "veystrix/session.pyc.enc", "veystrix/model_router.pyc.enc", "veystrix/engine_guard.pyc.enc"] {
                 let path = cwd.appendingPathComponent(file).path
                 guard fileExists(path) else { throw PlanError.runtimeMissing(path) }
             }

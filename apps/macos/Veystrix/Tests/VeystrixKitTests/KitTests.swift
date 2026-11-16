@@ -426,7 +426,12 @@ private func tempDir() -> URL {
         }
         #expect(throws: LaunchPlan.PlanError.self) {
             try LaunchPlan.make(settings: s, checkpoint: c, source: source, apiKey: nil,
-                                fileExists: { !$0.hasSuffix("overnight.pyc") }, isExecutable: exists)
+                                fileExists: { !$0.hasSuffix("overnight.pyc.enc") }, isExecutable: exists)
+        }
+        // Plaintext bytecode is no longer shipped; the encrypted name must pass.
+        #expect(throws: LaunchPlan.PlanError.self) {
+            try LaunchPlan.make(settings: s, checkpoint: c, source: source, apiKey: nil,
+                                fileExists: { !$0.hasSuffix(".pyc.enc") }, isExecutable: exists)
         }
         let plan = try LaunchPlan.make(settings: s, checkpoint: c, source: source, apiKey: nil, fileExists: exists, isExecutable: exists)
         #expect(plan.environment["PYTHONPATH"] == "/Applications/App With Spaces.app/Contents/Resources/engine/lib")

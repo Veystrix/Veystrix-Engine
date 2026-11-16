@@ -23,6 +23,33 @@ private func tempDir() -> URL {
     return u
 }
 
+// MARK: persisted UI state
+@Suite struct PersistedStateTests {
+    private func withDefaults(_ body: (UserDefaults) -> Void) {
+        let suite = "veystrix.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        body(defaults)
+    }
+
+    @Test func aValueSurvivesANewInstance() {
+        withDefaults { defaults in
+            let first = PersistedState("tab", default: "dashboard", defaults: defaults)
+            first.value = "chat"
+            let second = PersistedState("tab", default: "dashboard", defaults: defaults)
+            #expect(second.value == "chat")
+        }
+    }
+
+    @Test func missingOrCorruptDataFallsBackToTheDefault() {
+        withDefaults { defaults in
+            #expect(PersistedState("count", default: 7, defaults: defaults).value == 7)
+            defaults.set(Data("not json".utf8), forKey: "count")
+            #expect(PersistedState("count", default: 7, defaults: defaults).value == 7)
+        }
+    }
+}
+
 // MARK: model identity (single source of truth)
 @Suite struct ModelIdentityTests {
     @Test func flashNextIdentityMatchesTheBaseline() {

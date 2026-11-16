@@ -165,11 +165,11 @@ struct ChatView: View {
     @EnvironmentObject var engine: EngineController
     @StateObject private var chat = ChatStore()
     @StateObject private var draft = LocalState("")
-    @StateObject private var system = LocalState("")
-    @StateObject private var effort = LocalState(ChatReasoningEffort.medium)
-    @StateObject private var useExplicitLimit = LocalState(false)
-    @StateObject private var explicitLimitText = LocalState("")
-    @StateObject private var showOptions = LocalState(false)
+    @StateObject private var system = PersistedState("ui.chat.system", default: "")
+    @StateObject private var effort = PersistedState("ui.chat.reasoning", default: ChatReasoningEffort.medium)
+    @StateObject private var useExplicitLimit = PersistedState("ui.chat.useExplicitLimit", default: false)
+    @StateObject private var explicitLimitText = PersistedState("ui.chat.explicitLimit", default: "")
+    @StateObject private var showOptions = PersistedState("ui.chat.showOptions", default: false)
 
     private var activeModelID: String? {
         engine.health?.installedModelID ?? engine.health?.model

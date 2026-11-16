@@ -1,7 +1,7 @@
 import SwiftUI
 import VeystrixKit
 
-enum SidebarItem: String, CaseIterable, Identifiable {
+enum SidebarItem: String, Codable, CaseIterable, Identifiable {
     case dashboard = "Dashboard", chat = "Chat", statistics = "Statistics", model = "Model", harness = "Agents", logs = "Logs", settings = "Settings"
     var id: String { rawValue }
     var symbol: String {
@@ -20,7 +20,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: EngineController
-    @StateObject private var selection = LocalState<SidebarItem?>(.dashboard)
+    @StateObject private var selection = PersistedState<SidebarItem?>("ui.selectedTab", default: .dashboard)
 
     var body: some View {
         NavigationSplitView {

@@ -1,0 +1,37 @@
+{
+ "date": "2026-11-17T02:05:29",
+ "source": "real Nemotron layer 5 q_proj, dequantized Q4 G64 to fp16",
+ "weight_shape": [
+  4096,
+  2688
+ ],
+ "cases": [
+  {
+   "rows": 512,
+   "ane_ms": 3.473,
+   "gpu_ms": 4.634,
+   "ane_vs_gpu": 1.334,
+   "max_abs_diff": 0.00335693359375,
+   "mean_abs_diff": 0.00027284148382022977,
+   "gpu_abs_max": 8.903709411621094
+  },
+  {
+   "rows": 2048,
+   "ane_ms": 11.432,
+   "gpu_ms": 17.627,
+   "ane_vs_gpu": 1.542,
+   "max_abs_diff": 0.004034996032714844,
+   "mean_abs_diff": 0.0002730581327341497,
+   "gpu_abs_max": 10.00589656829834
+  },
+  {
+   "rows": 4096,
+   "ane_ms": 22.329,
+   "gpu_ms": 35.102,
+   "ane_vs_gpu": 1.572,
+   "max_abs_diff": 0.004113197326660156,
+   "mean_abs_diff": 0.0002729753323365003,
+   "gpu_abs_max": 9.585217475891113
+  }
+ ]
+}

@@ -131,6 +131,33 @@ def fused_sdpa_enabled() -> bool:
     return value == "1"
 
 
+# The fused kernel mirrors MLX's single-pass SDPA reduction: one of 32 simdgroups
+# per dimension slice, 32 lanes per simdgroup. Some Metal devices cap a
+# threadgroup below 1024 threads, where MLX raises only when the kernel is
+# evaluated. Probe once so callers can fall back to gather + MLX SDPA on those
+# devices instead of surfacing a device error at request time.
+_FUSED_SDPA_THREADS = 1024
+_FUSED_SDPA_SUPPORTED = [None]
+
+
+def fused_sdpa_supported() -> bool:
+    """Whether the GPU can launch a 1024-thread fused-SDPA threadgroup."""
+    if _FUSED_SDPA_SUPPORTED[0] is None:
+        try:
+            probe = mx.fast.metal_kernel(
+                name="flashnext_sdpa_threadgroup_probe", input_names=["x"], output_names=["out"],
+                source="uint i = thread_position_in_grid.x; out[i] = x[i];")
+            result = probe(
+                inputs=[mx.zeros((_FUSED_SDPA_THREADS,), mx.float32)],
+                output_shapes=[(_FUSED_SDPA_THREADS,)], output_dtypes=[mx.float32],
+                grid=(1, 1, 1), threadgroup=(_FUSED_SDPA_THREADS, 1, 1))
+            mx.eval(result)
+            _FUSED_SDPA_SUPPORTED[0] = True
+        except Exception:
+            _FUSED_SDPA_SUPPORTED[0] = False
+    return _FUSED_SDPA_SUPPORTED[0]
+
+
 # MLX's single-pass ``sdpa_vector`` kernel (mlx/backend/metal/kernels/sdpa_vector.h) with its K and V loads replaced by the
 # gather and the affine dequantization of the cache rows. Same thread mapping, same per-thread order of operations, same
 # simd reductions and the same final cross-simdgroup reduction, so the result is bit-identical to gathering bfloat16 K/V
@@ -251,7 +278,7 @@ def fused_sdpa_selected(cache, queries, indices, valid, scale):
     """Attention of ``queries`` [T, Hq, 1, D] over the cache rows ``indices`` [1, T, S] (boolean ``valid`` [T, 1, 1, S]) in one
     kernel, bit-identical to ``gather_selected`` followed by ``mx.fast.scaled_dot_product_attention``. Returns [T, Hq, 1, D], or
     None when the cache layout, the shapes or the flag are not the supported ones (the caller then takes the reference path)."""
-    if not fused_sdpa_enabled() or cache.mode != "tiered4" or not isinstance(cache.recent_keys, tuple):
+    if not fused_sdpa_enabled() or not fused_sdpa_supported() or cache.mode != "tiered4" or not isinstance(cache.recent_keys, tuple):
         return None
     recent_n = cache.offset - cache.history_tokens
     history = int(cache.history_tokens)

@@ -202,65 +202,6 @@ def render_tool_result(name, result, fmt="pretty"):
         return json.dumps(head, ensure_ascii=False) + "\n" + result["content"]
     return json.dumps(result, ensure_ascii=False)
 
-INTENT_RE = re.compile(
-    r"""(?xi)
-    # naming the tool at all, while never calling it
-    \bweb[_\ -]?search\b
-  | # another / one more / a quick lookup
-    \b(?:another|one\ more|a\ quick)\ (?:web[_\ -]?search|search|lookup|look-?up)\b
-  | # "let me ... search|verify|confirm|check|look up", with filler in between,
-    # but not "let me search my memory", which is the opposite of acting
-    \b(?:let\ me|i(?:'ll|\ will|\ should|\ must|\ need\ to|\ have\ to)?)
-    \s+(?:\w+\s+){0,4}?
-    (?:search|verify|confirm|look\s+(?:this|it|that|them)?\s*up|check\s+(?:\w+[.\w]*\s+){0,3}?(?:docs?|api|signature|reference|documentation))
-    \b(?!\s+my\s+(?:memory|knowledge|recollection|notes))
-    """)
-
-def detect_loop(text, window=220, lookback=1600, min_reps=3):
-    """Return a reason string for a stall, or "" when generation is healthy."""
-    if len(text) >= window * min_reps:
-        tail = text[-window:]
-        if text[-lookback:].count(tail) >= min_reps:
-            return "loop"
-
-    # Declared an intent to verify and still has not called anything. Three
-    # declarations is a stall at any length; two only once it has been talking
-    # for a while, so a plan that mentions searching twice is not cut short.
-    if "<tool_call>" not in text:
-        n = len(INTENT_RE.findall(text))
-        if n >= 3 or (n >= 2 and len(text) > 1200):
-            return "loop:intent"
-
-    lowered = text.lower()
-    words = re.findall(r"[a-z0-9]+", lowered[-8000:])
-    if len(words) < 160:
-        return ""
-
-    # Quantized models often restate a conclusion with small wording changes.
-    # Repeated discourse markers catch that stall before thousands of tokens.
-    markers = (
-        lowered.count("wait, but")
-        + lowered.count("but wait")
-        + lowered.count("let me re")
-        + lowered.count("let me think")
-        + lowered.count("reconsider")
-        + lowered.count("hmm,")
-        + lowered.count("not sure")
-    )
-    if markers >= 6:
-        return "loop"
-
-    # Catch repeated sentence openings while ignoring ordinary function words.
-    openings = {}
-    for sentence in re.split(r"[.!?\n]+", lowered[-8000:]):
-        tokens = re.findall(r"[a-z0-9]+", sentence)
-        if len(tokens) < 8:
-            continue
-        opening = tuple(tokens[:5])
-        openings[opening] = openings.get(opening, 0) + 1
-        if openings[opening] >= 4:
-            return "loop"
-    return ""
 
 def split_think(text):
     i = text.find("</think>")

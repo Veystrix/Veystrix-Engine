@@ -78,10 +78,6 @@ def required_available_bytes(tokens: int, client_gib: float = CLIENT_GIB, other_
     return int(required_available_gib(tokens, client_gib, other_anonymous_bytes / GIB) * GIB)
 
 
-def predicted_lowest_gib(start_gib: float, tokens: int, client_gib: float = CLIENT_GIB) -> float:
-    return start_gib - drop_gib(tokens, client_gib)
-
-
 def expected_purge_gain_bytes(purge_gain_upper: int) -> int:
     """What admission may count on from a purge: the smallest gain ever observed, never more than the accounting's upper bound.
 

@@ -49,7 +49,6 @@ import re
 import shutil
 import time
 import uuid
-from pathlib import Path
 
 from . import prefix_cache as P
 
@@ -105,14 +104,6 @@ def settings_from_env() -> dict:
 
 def _canonical(payload) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-
-
-def _fsync_file(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 class ProfiledPrefixCache(P.PrefixCache):

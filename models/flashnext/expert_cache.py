@@ -478,11 +478,6 @@ def metal_runtime() -> bool:
     return os.environ.get("FLASHNEXT_METAL_RUNTIME") == "1"
 
 
-def set_metal_g64(enabled: bool) -> None:
-    """Set the default Q4/G64 custom Metal executor variant."""
-    os.environ["FLASHNEXT_METAL_G64"] = "1" if enabled else "0"
-
-
 def metal_g64() -> bool:
     return os.environ.get("FLASHNEXT_METAL_G64", "1") == "1"
 

@@ -232,16 +232,6 @@ def check_arity(code, library="sketchup", client=None):
     return bad
 
 
-def arity_report(bad):
-    lines = [f"{len(bad)} call(s) have too few arguments:"]
-    for name, given, low, params in bad:
-        shape = f": ({', '.join(params)})" if params else ""
-        lines.append(f"  {name} was given {given} argument(s); the documented "
-                     f"form takes at least {low}{shape}")
-    lines.append("Call api_docs for the exact signature. Do not guess an overload.")
-    return "\n".join(lines)
-
-
 # ----------------------------------------------------- documented arg types
 
 # Context7 flattens some methods to `*args` where the vendor page carries the

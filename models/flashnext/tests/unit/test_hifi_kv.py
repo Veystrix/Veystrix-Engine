@@ -188,6 +188,10 @@ class GatherTests(unittest.TestCase):
     def test_fused_sdpa_is_bit_identical_to_gather_then_sdpa(self):
         import itertools
         from models.flashnext import mixed_kv
+        # The fused kernel needs a 1024-thread threadgroup. Devices with a lower
+        # limit (some CI runners) fall back to gather + MLX SDPA; exercise the
+        # reference path there and keep the bit-identity check where it applies.
+        supported = mixed_kv.fused_sdpa_supported()
         for dim, heads_q, group, scale, two_tier in itertools.product((128, 256), (4, 24), (32, 64), (0.01, 100.0), (False, True)):
             mx.random.seed(dim + heads_q + group)
             cache = MixedPrecisionQSAKVCache("tiered4", group, 256 if two_tier else 8192)
@@ -206,6 +210,10 @@ class GatherTests(unittest.TestCase):
                 expected = mx.fast.scaled_dot_product_attention(q, keys, values, scale=dim ** -0.5, mask=valid)
                 with patch.dict(os.environ, {mixed_kv.FLAG_FUSED_SDPA: "1"}):
                     actual = mixed_kv.fused_sdpa_selected(cache, q, idx, valid, dim ** -0.5)
+                if not supported:
+                    self.assertIsNone(actual)
+                    mx.eval(expected)
+                    continue
                 self.assertIsNotNone(actual)
                 mx.eval(expected, actual)
                 self.assertEqual(actual.shape, expected.shape)

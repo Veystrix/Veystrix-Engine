@@ -68,22 +68,6 @@ def _checkpoint_error(label: str, path: Path, missing: list[str]) -> ValueError:
     )
 
 
-def _has_chat_template(path: Path) -> bool:
-    if (path / "chat_template.jinja").is_file():
-        return True
-    return bool(_json(path / "tokenizer_config.json").get("chat_template"))
-
-
-def _valid_bf16_asset(path: Path, shape) -> bool:
-    return (
-        isinstance(shape, list)
-        and len(shape) == 2
-        and all(isinstance(value, int) and value > 0 for value in shape)
-        and path.is_file()
-        and path.stat().st_size == shape[0] * shape[1] * 2
-    )
-
-
 def model_root() -> Path:
     return Path(os.environ.get("VEYSTRIX_MODEL_ROOT", "~/models")).expanduser()
 

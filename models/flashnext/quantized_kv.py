@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import json
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Tuple
 
 import mlx.core as mx
 from mlx_vlm.models.cache import ArraysCache
@@ -209,11 +209,6 @@ def make_cache(
             else:
                 caches.append(QSAKVCache())
     return caches
-
-
-def is_quantized_cache(cache_list: Sequence[Any]) -> bool:
-    from .mixed_kv import MixedPrecisionQSAKVCache
-    return any(isinstance(c, (QSAQuantizedKVCache, MixedPrecisionQSAKVCache)) for c in cache_list)
 
 
 _ORIGINAL_MAKE_CACHE = [None]

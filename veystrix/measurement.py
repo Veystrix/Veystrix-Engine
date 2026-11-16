@@ -6,9 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 import os
-import tempfile
 import uuid
-from typing import Any, Iterable
+from typing import Any
 
 
 SCHEMA = 1
@@ -137,34 +136,3 @@ class MeasurementRun:
             "runtime": self.runtime, "experiment": self.experiment,
             "status": status, "summary": summary, "recorded_at": now_iso(),
         })
-
-
-def migrate_legacy(path: Path, destination: Path, *, runtime: str,
-                   experiment: str) -> None:
-    """Wrap an old JSON artifact without fabricating missing provenance."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkstemp(prefix=f".{destination.name}.",
-                                      dir=destination.parent)[1])
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        writer = MeasurementRun(destination, runtime=runtime, experiment=experiment,
-                                metadata={
-                                    "legacy": True,
-                                    "source_path": str(path),
-                                    "source_sha256": source_hash(path),
-                                    "provenance": "unknown where absent",
-                                })
-        writer.path = temporary
-        writer.start()
-        append_record(temporary, {
-            "schema": SCHEMA, "type": "legacy_payload", "run_id": writer.run,
-            "runtime": runtime, "experiment": experiment,
-            "source_path": str(path), "payload": payload,
-        })
-        writer.finish("legacy", source_path=str(path))
-        os.replace(temporary, destination)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass

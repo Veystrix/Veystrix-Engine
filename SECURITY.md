@@ -49,14 +49,6 @@ Tools that modify files require approval by default.
 Review the workspace path before approving a command. Use the plain profile
 when repository access is unnecessary.
 
-## Web terminal
-
-`web_terminal.py` exposes the local terminal on the network. Its URL contains
-an access token.
-
-Use it only on a trusted local network. Do not remove the token or expose the
-port to the public internet.
-
 ## Local API server
 
 Server mode binds to `127.0.0.1` by default. Localhost mode does not require

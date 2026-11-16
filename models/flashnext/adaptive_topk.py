@@ -364,10 +364,6 @@ def set_min_keep(value: int, layer_values=None) -> None:
         )
 
 
-def last_keeps():
-    return dict(_LAST_KEEPS)
-
-
 def reset_keep_stats() -> None:
     _KEEP_SUM[0] = 0
     _KEEP_COUNT[0] = 0

@@ -2,6 +2,10 @@
 
 Every test and benchmark run writes here, and nowhere else.
 
+For a curated map of the runs cited by active documentation, see the generated
+[results index](INDEX.md) (`python scripts/results/index_citations.py --write`
+regenerates it). It lists evidence; it never moves or deletes a record.
+
 ```text
 results/<model>/<YYYYMMDD-HHMMSS>-<test-id>/
   record.jsonl    canonical measurement record

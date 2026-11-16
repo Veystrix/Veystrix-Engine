@@ -1,4 +1,4 @@
-.PHONY: verify fast python-only swift-test scan setup
+.PHONY: verify fast python-only swift-test scan setup results-index
 
 verify:
 	./scripts/verify.sh
@@ -14,6 +14,9 @@ swift-test:
 
 scan:
 	.venv/bin/python scripts/security/secret_scan.py
+
+results-index:
+	.venv/bin/python scripts/results/index_citations.py --write
 
 setup:
 	./chat.sh setup

@@ -387,7 +387,7 @@ The same shape-verified dense GEMM as for Nemotron (shared module `models/shared
 
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
-Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,276 OK (3 skipped) (Flash-Next rerun at 12:10 after the `qsa-tile-pipeline` commit, Nemotron 202 OK (8 skipped) and veystrix 961 OK (11 skipped) at 12:58 after the dense-GEMM commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
+Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:25, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
 
 ## What is left (levers, not done)
 

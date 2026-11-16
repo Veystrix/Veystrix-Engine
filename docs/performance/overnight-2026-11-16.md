@@ -401,6 +401,10 @@ One hyper-connection at the prefill shape (2,048 tokens, 4 streams, 2,560 wide),
 
 With every exact option on, 4,300-token cold prefill, the tile cap temporarily raised in a local edit (reverted): tile 64 gave 41.7 / 41.6 s against 42.1 / 41.7 s for tile 32 (equal), MLX peak 6.68 against 6.66 GB; tile 128 gave 43.4 s (slower) with a 6.95 GB peak. Same output hash throughout. The cap of 32 in `qsa_chunk.gather_tile` stays: nothing is gained above it and memory grows.
 
+### Why short Qwen turns sit at about 28 s (the SSD floor)
+
+A Qwen turn of about 1.7-2.1K new tokens takes 28-29 s however the compute is tuned, and a 300-token follow-up 23-28 s. The reason is the read floor, not the GPU: each token selects 10 of 512 experts, so a few hundred tokens already touch nearly every expert of every layer (300 tokens draw about 3,000 selections, which cover about 99% of 512 experts in expectation; 50 tokens would cover about 65%). A turn longer than a few hundred tokens therefore reads the whole expert set once, about 27 s at the measured 3 GB/s, and the compute hides under it. Only prompts above roughly 2K tokens (cold 3-4K prompts, the stress turns) are compute-bound, which is where the exact options above pay off. Below that, more RAM (a bigger resident expert set) or a faster disk are the only levers; both are outside what this branch changes.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:20, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

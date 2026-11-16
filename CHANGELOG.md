@@ -1,6 +1,6 @@
 # Changelog
 
-## Veystrix 1.0 (public release candidate)
+## Veystrix 1.0.0 (public release candidate)
 
 First public release. The model lineup is unchanged: Qwen 3.8 Flash-Next is the
 default and NVIDIA Nemotron 3.5 Lightning is experimental. This version marks
@@ -19,8 +19,9 @@ the distribution and protection work, not a model swap.
 - **Build guardrails:** `make artifacts` verifies every protection on the built
   app; no DMG is published without it.
 
-Internally the version is `1.0.0` (major.minor.patch) so Sparkle keeps a strictly
-increasing build number; the public name drops the trailing `.0`.
+The version is `1.0.0` (major.minor.patch) everywhere: project version, app
+`CFBundleShortVersionString`, release name and update feed. The build number is
+`1000001` and stays strictly increasing for Sparkle.
 
 ## Veystrix 3.8.1 (development, `qwen3.8-flash-next`)
 

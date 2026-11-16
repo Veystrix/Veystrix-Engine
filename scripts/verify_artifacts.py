@@ -79,10 +79,12 @@ def main() -> int:
     signed = subprocess.run(["codesign", "-v", str(APP)], capture_output=True, text=True)
     check("code signature valid", signed.returncode == 0, signed.stderr.strip()[-160:])
 
-    dmg = sorted(ROOT.glob("dist/Veystrix-*-arm64.dmg"))
-    check("DMG exists", bool(dmg), str(dmg[-1]) if dmg else "none")
-    if dmg:
-        digest = hashlib.sha256(dmg[-1].read_bytes()).hexdigest()
+    import re
+    version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.M).group(1)
+    dmg = ROOT / "dist" / f"Veystrix-{version}-arm64.dmg"
+    check(f"DMG for version {version} exists", dmg.is_file(), str(dmg))
+    if dmg.is_file():
+        digest = hashlib.sha256(dmg.read_bytes()).hexdigest()
         print(f"DMG SHA-256: {digest}")
 
     # Source-level guardrail: the key must still be bound to runtime signals.

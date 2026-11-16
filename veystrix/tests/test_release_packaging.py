@@ -244,9 +244,9 @@ class EngineBundleClosureTests(unittest.TestCase):
 
 
 class ReleaseTitleTests(unittest.TestCase):
-    def test_public_name_drops_a_trailing_zero_patch(self):
-        self.assertEqual(_title("v1.0.0"), "Veystrix 1.0")
-        self.assertEqual(_title("v1.2.0"), "Veystrix 1.2")
+    def test_public_name_is_the_full_version(self):
+        self.assertEqual(_title("v1.0.0"), "Veystrix 1.0.0")
+        self.assertEqual(_title("v1.2.0"), "Veystrix 1.2.0")
 
     def test_nonzero_patch_is_kept(self):
         self.assertEqual(_title("v1.0.1"), "Veystrix 1.0.1")
@@ -256,7 +256,7 @@ class ReleaseTitleTests(unittest.TestCase):
         import tomllib
         version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
         self.assertEqual(version, "1.0.0")
-        self.assertEqual(_title("v" + version), "Veystrix 1.0")
+        self.assertEqual(_title("v" + version), "Veystrix 1.0.0")
 
     def test_build_number_is_strictly_increasing_from_major_minor_patch(self):
         output = subprocess.run(
@@ -265,7 +265,7 @@ class ReleaseTitleTests(unittest.TestCase):
         self.assertEqual(output, "1.0.0|1000001")
 
     def test_changelog_names_the_public_release(self):
-        self.assertIn("## Veystrix 1.0", (ROOT / "CHANGELOG.md").read_text())
+        self.assertIn("## Veystrix 1.0.0", (ROOT / "CHANGELOG.md").read_text())
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ environment. Until step 5 below is completed for a real release, the button is
 present but reports that no update is available. This is a release-publishing
 blocker, not an app bug.
 
-Current release identity: version `1.0.0`, build `1000001`, tag `v1.0.0`, public name **Veystrix 1.0**. The build number is derived as `MAJOR.MINOR.PATCH` → `MMmmmpppB` and must strictly increase; the public name drops a trailing `.0` (see `scripts/release/release_title.py`).
+Current release identity: version `1.0.0`, build `1000001`, tag `v1.0.0`, public name **Veystrix 1.0.0**. The public name is the full three-part version everywhere; the build number is derived as `MAJOR.MINOR.PATCH` → `MMmmmpppB` and must strictly increase for Sparkle (see `scripts/release/release_title.py`).
 
 ## Each release
 

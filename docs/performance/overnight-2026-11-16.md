@@ -230,6 +230,10 @@ Real checkpoint, in-process cold prefill under the guard (driver `qwen_pp.py`, n
 
 The 800 and 1,200 rows were measured with the `layer-major-4k` mode (not hybrid) with the order forced; the 1,200 baseline there is chunk-major. Layer-major reads every layer's 512 experts once (about 80 GB) whatever the prompt length, so it loses below about 1,000 tokens, where the reference path reads only the routed union (54 GB at 800 tokens), and wins from about 1,000 to 2,048 by overlapping those reads with compute. An earlier draft of this section compared 3,000 tokens against a forced chunk-major baseline (68.5 s) and called it 1.94x; the app does not run that, so that figure does not apply. Suggested settings if adopted: `FLASHNEXT_LAYER_MAJOR_SINGLE=1` and `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=1024` (the second value also moves 1,024-2,048-token multi-window cases; prompts of 2,049+ are unchanged). Not adopted into the app's defaults: that and the prefix-cache identity change (layer-major snapshots do not mix with chunk-major ones) are the owner's decision. Evidence: `results/nemotron35/*night-qwen-*`.
 
+## Cancel during prefill with all options on (server, real checkpoint)
+
+With the six suggested flags on, a client that disconnected 10 s and 25 s into a 9,000-character prefill produced `request_cancelled` (`memory_stop: false`) in the flight log. The server then served a normal request each time (501 and 376 new tokens, 34 and 32 s, cold chunk path). Available memory returned to 5.8-6.2 GiB, swap stayed at 1.44-1.51 GB, thermal 0. The scratch ring is released on cancel.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 193 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,257 OK (3 skipped). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

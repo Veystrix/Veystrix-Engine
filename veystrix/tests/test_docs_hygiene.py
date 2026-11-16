@@ -35,8 +35,8 @@ class DocsHygieneTests(unittest.TestCase):
         text = (DOCS / "release" / "VALIDATION.md").read_text()
         for removed in ("qwen27b", "K2", "Bonsai", "OWNER TRAVELLING"):
             self.assertNotIn(removed, text)
-        self.assertIn("973", text)
-        self.assertIn("2,281", text)
+        self.assertIn("988", text)
+        self.assertIn("2,289", text)
 
     def test_historical_performance_handoffs_are_marked(self):
         for name in ("handoff-2026-11-14.md", "inference-blueprint-handoff.md",

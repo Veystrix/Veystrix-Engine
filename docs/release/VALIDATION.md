@@ -4,11 +4,11 @@ Run before every release. "Ran" means executed on this repo state; "NOT RUN" mea
 
 | Check | Command | Status |
 |---|---|---|
-| Shared runtime unit tests | `python -m unittest discover -s veystrix/tests -t . -p 'test_*.py'` | Ran: 973 tests OK (11 skipped) |
-| Flash-Next unit tests | `python -m unittest discover -s models/flashnext/tests/unit -t . -p 'test_*.py'` | Ran: 2,281 tests OK (3 skipped) |
+| Shared runtime unit tests | `python -m unittest discover -s veystrix/tests -t . -p 'test_*.py'` | Ran: 988 tests OK (11 skipped) |
+| Flash-Next unit tests | `python -m unittest discover -s models/flashnext/tests/unit -t . -p 'test_*.py'` | Ran: 2,289 tests OK (3 skipped) |
 | Nemotron unit tests | `python -m unittest discover -s models/nemotron35/tests/unit -t . -p 'test_*.py'` | Ran: 203 tests OK (8 skipped) |
-| Linux fast-lane tests (no MLX) | `python scripts/ci/linux_unit_tests.py` | Ran: 440 tests OK (11 skipped; 45 modules skipped for MLX) |
-| Swift app logic tests | `swift test --package-path apps/macos/Veystrix` | 71 tests pass in CI (local macro-plugin loading is flaky) |
+| Linux fast-lane tests (no MLX) | `python scripts/ci/linux_unit_tests.py` | Ran: 455 tests OK in ~17s (11 skipped; 45 modules skipped for MLX) |
+| Swift app logic tests | `swift test --package-path apps/macos/Veystrix` | Pass in CI; local Command Line Tools macro-plugin loading is flaky (last full local run 80 tests, later additions compile and were checked against the built module) |
 | App builds (dev, ad-hoc) and launches with engine stopped | `packaging/macos/build_app.sh` then run | Ran: opens, no child process |
 | Hermes real-client e2e vs mock | `VEYSTRIX_HERMES_E2E=1 python -m unittest veystrix.tests.test_hermes_integration` | 25/25 pass, zero egress |
 | Release packaging tests | `python -m unittest veystrix.tests.test_release_packaging` | pass |

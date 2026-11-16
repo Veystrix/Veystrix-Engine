@@ -373,6 +373,10 @@ The per-layer-embedding lookup is latency-bound on the SSD (a 2,048-token call o
 
 Profile of a 4.3K cold prefill with every exact option on (43.7 s): MLP 15.7 s, full attention 9.8 s, linear attention 8.9 s, PLE 3.5 s, the two hyper-connections 5.5 s. I tried cutting the shared dense tiles' key range to the keys the tile's queries can see (the rest are masked, so they add exactly zero; a 1,024-key floor kept the SDPA kernel variant). Real layer, five 2,048-token chunks: outputs bit-equal, but the time was unchanged (0.409-0.442 s with and without), so the masked tail is not what the kernel spends its time on. Reverted, not committed.
 
+### Dropped: compiling the prefill injection (no gain)
+
+The two broadcast-multiply-add injections per layer have no transcendental, so a compiled version is bit-equal (checked). At the prefill shape (2,048 tokens, 4 streams, 2,560 wide) plain 0.115-0.168 ms against compiled 0.113-0.149 ms per injection, about 25 ms over a whole 4.3K prefill. The 5.5 s the hyper-connections cost is in their norm, low-rank matmuls and sigmoids, which cannot be fused without changing rounding (see `compile_glue.py`). Not built.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,276 OK (3 skipped) (Flash-Next rerun at 12:10 after the `qsa-tile-pipeline` commit, Nemotron and veystrix at 11:20 after the `qsa-fused-gather` commits; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

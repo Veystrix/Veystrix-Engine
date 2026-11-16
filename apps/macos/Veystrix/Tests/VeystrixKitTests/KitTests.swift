@@ -51,6 +51,59 @@ private func tempDir() -> URL {
     }
 }
 
+// MARK: bundle integrity (tamper detection, not copy protection)
+@Suite struct BundleIntegrityTests {
+    private func withResources(_ body: (URL) throws -> Void) throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("integrity-\(UUID().uuidString)")
+        let res = root.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: res.appendingPathComponent("engine/lib/veystrix"), withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: res.appendingPathComponent("engine/lib/veystrix/core.pyc"))
+        try Data("v1".utf8).write(to: res.appendingPathComponent("VERSION"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        try body(res)
+    }
+
+    @Test func noManifestMeansDevelopmentBuild() throws {
+        try withResources { res in
+            #expect(BundleIntegrity.verify(resources: res) == .notBundled)
+        }
+    }
+
+    @Test func intactBundleVerifies() throws {
+        try withResources { res in
+            try BundleIntegrity.writeManifest(resources: res)
+            #expect(BundleIntegrity.verify(resources: res) == .intact)
+        }
+    }
+
+    @Test func modifiedFileIsDetected() throws {
+        try withResources { res in
+            try BundleIntegrity.writeManifest(resources: res)
+            try Data("tampered".utf8).write(to: res.appendingPathComponent("engine/lib/veystrix/core.pyc"))
+            guard case .tampered(let files) = BundleIntegrity.verify(resources: res) else {
+                Issue.record("expected tampered result"); return
+            }
+            #expect(files == ["engine/lib/veystrix/core.pyc"])
+        }
+    }
+
+    @Test func addedAndRemovedFilesAreDetected() throws {
+        try withResources { res in
+            try BundleIntegrity.writeManifest(resources: res)
+            try Data("extra".utf8).write(to: res.appendingPathComponent("engine/lib/extra.pyc"))
+            try FileManager.default.removeItem(at: res.appendingPathComponent("VERSION"))
+            guard case .tampered(let files) = BundleIntegrity.verify(resources: res) else {
+                Issue.record("expected tampered result"); return
+            }
+            #expect(files == ["VERSION", "engine/lib/extra.pyc"])
+        }
+    }
+
+    @Test func digestIsStableHex() {
+        #expect(BundleIntegrity.sha256(Data("abc".utf8)).count == 64)
+    }
+}
+
 // MARK: decode explanations from live health
 @Suite struct DecodeAdvisorTests {
     private func health(_ json: String) -> HealthReport {
@@ -77,7 +130,7 @@ private func tempDir() -> URL {
         let json = #"{"memory_policy":{"can_admit":false,"stop_reason":"low battery","current_swap_growth_mb":900,"swap_ceiling_mib":1000}}"#
         let factors = DecodeAdvisor.explain(health(json))
         #expect(factors.count == 2)
-        #expect(factors.allSatisfy(\.isWarning))
+        #expect(factors.allSatisfy { $0.isWarning })
         #expect(factors[0].detail.contains("low battery"))
         #expect(factors[1].title == "Swap growth is near the ceiling")
     }

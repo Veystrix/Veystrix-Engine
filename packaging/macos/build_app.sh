@@ -17,6 +17,9 @@ BIN_DIR="$(swift build -c release --arch "$ARCH" --show-bin-path)"
 
 rm -rf "$APP"; mkdir -p "$APP/Contents/"{MacOS,Resources,Frameworks}
 cp "$BIN_DIR/Veystrix" "$APP/Contents/MacOS/Veystrix"
+# Strip debug symbols from the shipped binary (smaller download, fewer internal
+# names for tools like REA to read). This is obfuscation, not copy protection.
+strip -x "$APP/Contents/MacOS/Veystrix"
 
 # Sparkle.framework from the SwiftPM binary artifact
 SPARKLE_FW="$(find "$APP_DIR/.build" -type d -name Sparkle.framework -path '*macos-arm64_x86_64*' | head -1)"
@@ -62,5 +65,26 @@ fi
 if [[ -n "$ENGINE_DIR" ]]; then
   "$APP/Contents/Resources/engine/python/bin/python3" "$ROOT/packaging/engine/smoke_import.py" "$APP/Contents/Resources/engine" || die "embedded engine validation failed"
 fi
+# Integrity manifest: pin the bundled code/resources so the app can detect a
+# modified install. Generated BEFORE signing (signing changes binary bytes);
+# the checker only hashes signed-stable files. No secrets go in this manifest.
+"$ROOT/.venv/bin/python" - "$APP/Contents/Resources" <<'PYEOF' || die "could not write integrity manifest"
+import json, sys
+from pathlib import Path
+import hashlib
+resources = Path(sys.argv[1])
+prefixes = ("engine/lib/", "Info.plist", "VERSION", "LICENSE.txt",
+            "THIRD_PARTY_NOTICES.md", "BUILD-CHANNEL")
+files = {}
+for path in resources.rglob("*"):
+    rel = path.relative_to(resources).as_posix()
+    if rel == "BundleIntegrity.json" or not any(rel == p or rel.startswith(p) for p in prefixes):
+        continue
+    if path.is_file() and not path.is_symlink():
+        files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+(resources / "BundleIntegrity.json").write_text(json.dumps({"version": 1, "files": files}))
+print(f"integrity manifest: {len(files)} files")
+PYEOF
+
 "$SCRIPT_DIR/sign_app.sh" "$APP"
 log "Built $APP"

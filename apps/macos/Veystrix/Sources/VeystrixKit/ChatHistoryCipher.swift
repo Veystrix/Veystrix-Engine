@@ -70,7 +70,7 @@ public enum ChatHistoryCipher {
     }
 
     private static func keychainWrite(_ data: Data) -> Bool {
-        var add: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+        let add: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                   kSecAttrService as String: service,
                                   kSecAttrAccount as String: account,
                                   kSecValueData as String: data,

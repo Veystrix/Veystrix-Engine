@@ -17,10 +17,16 @@ final class AppModel: ObservableObject {
     @Published var pendingStartConfirmation = false
     @Published var pendingRestartConfirmation = false
     @Published var alertMessage: String?
+    /// Set when bundled files were modified after packaging. The engine is then refused.
+    @Published private(set) var integrityIssue: String?
     @Published var apiKey: String?
     @Published var runtimeDescription = "Checking…"
 
     init() {
+        if let resources = Bundle.main.resourceURL,
+           case .tampered(let files) = BundleIntegrity.verify(resources: resources) {
+            integrityIssue = "The app bundle failed its integrity check for \(files.count) file(s). This can mean a corrupted download or a modified install. Reinstall Veystrix from the official release; the engine will not start until the bundle is restored."
+        }
         settingsStore = SettingsStore(paths: paths)
         keyStore = APIKeyStore(paths: paths)
         logs = LogStore(fileURL: paths.engineLogFile)
@@ -111,6 +117,7 @@ final class AppModel: ObservableObject {
     }
 
     func startNow() async {
+        if let integrityIssue { alertMessage = integrityIssue; return }
         refreshRuntime()
         if settings.requireAPIKey, apiKey == nil { apiKey = keyStore.loadOrCreate() }
         do {
@@ -122,6 +129,7 @@ final class AppModel: ObservableObject {
     }
 
     func restartNow() async {
+        if let integrityIssue { alertMessage = integrityIssue; return }
         guard !engine.isExternallyManaged else { alertMessage = "Stop the externally managed engine where it was started."; return }
         guard engine.state != .running || engine.health?.busy == false else { alertMessage = "The engine is busy or its activity is unknown. Wait for active work to finish before switching."; return }
         do {

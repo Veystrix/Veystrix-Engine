@@ -11,6 +11,9 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if let issue = model.integrityIssue {
+                    Banner(symbol: "hand.raised.fill", tint: .red, title: "App integrity check failed", text: issue)
+                }
                 if case .error(let message) = engine.state {
                     Banner(symbol: "exclamationmark.triangle.fill", tint: .red, title: "The engine stopped with an error", text: message)
                 }

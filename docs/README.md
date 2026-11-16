@@ -36,6 +36,7 @@ collect runtime-specific correctness and experiment constraints.
 | Path | Purpose |
 |---|---|
 | [`decisions/README.md`](decisions/README.md) | Architecture decision record (ADR) log for model and runtime decisions |
+| [`security/ANTI_REVERSE_ENGINEERING.md`](security/ANTI_REVERSE_ENGINEERING.md) | Honest limits of local tamper resistance and the commercial protection path |
 | [`measurement-standard.md`](measurement-standard.md) | Shared live-test and JSONL evidence rules |
 | [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) | Using the engine from other devices over Tailscale |
 | [`results/flashnext/`](../results/flashnext/) | Retained Flash-Next records |

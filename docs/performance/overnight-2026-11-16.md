@@ -389,6 +389,10 @@ The same shape-verified dense GEMM as for Nemotron (shared module `models/shared
 
 Real 4,300-token cold prefill with the two exact Qwen kernel options (`qsa-shared-dense-kv`, `qsa-fused-gather`) always on, alternating: gather tile 32 + `ngram-dedup` + `dense-gemm` all on 41.4 / 41.9 s, all three off 45.1 / 44.7 s (the default tile of 8 is the slowest of the three tile settings). That is -3.4 s, **-7.6%**, identical output hash (`ad323869fed1`), MLX peak 6.66 against 6.62 GB. The three gains (about 4%, 3% and 2.4% on their own) are roughly additive.
 
+### The whole recommended set through the real server (eight flags + tile 32 + `ngram-dedup` + `dense-gemm`)
+
+`results/flashnext/20261116-132632-night-qwen-final3x`, same two conversations. Eight-turn conversation: 38.8 (cold) / 27.9 / 28.2 / 27.8 / 28.3 / 27.7 / 28.2 / 28.9 s (28-29 s up to 13K cached tokens, unchanged from tile 8 and tile 32 alone). Stress (3.4K cold, then 3.3-4.5K new tokens over 3.4K, 6.7K, 10.7K cached): 36.9 / 35.7 / 41.1 / 46.6 s against 39.1 / 39.2 / 47.2 / 53.1 s with the eight flags alone (-6% to -12%), and 37.5 / 36.2 / 42.1 / 48.1 s with tile 32 alone. Memory: minimum available 2.26 GiB (2.57 with tile 32 alone, 2.44 with the eight flags alone: the run-to-run spread is as large as the difference), peak compressor 5.11 GB, swap 1,439 MiB at the start, 1,383 MiB at the end, never above the start, thermal level 1 at most, no errors in the server log.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:20, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

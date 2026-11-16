@@ -185,6 +185,27 @@ class GatherTests(unittest.TestCase):
                 self.assertEqual(a.shape, e.shape)
                 self.assertTrue(mx.array_equal(a, e).item(), (group, scale))
 
+    def test_tile_pipeline_is_bit_identical(self):
+        model = build_model()
+        from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention
+        original = Qwen4ExpAttention.__call__
+        if original is Q._chunked_call:
+            original = Q._ORIGINAL_CALL
+        reference, candidate = model.make_cache(), model.make_cache()
+        with patch.object(Q, "_ORIGINAL_CALL", original), patch.object(Qwen4ExpAttention, "__call__", Q._chunked_call):
+            for length in (13, 59, 1, 7, 40, 21):
+                ids = mx.random.randint(2, 512, (1, length))
+                with patch.dict(os.environ, {"FLASHNEXT_QSA_KERNEL": "gather", "FLASHNEXT_QSA_GATHER_TILE": "2"}):
+                    expected = model(ids, cache=reference).logits
+                with patch.dict(os.environ, {"FLASHNEXT_QSA_KERNEL": "gather", "FLASHNEXT_QSA_GATHER_TILE": "2",
+                                             Q.FLAG_TILE_PIPELINE: "1"}):
+                    actual = model(ids, cache=candidate).logits
+                mx.eval(expected, actual, [c.state for c in candidate], [c.state for c in reference])
+                self.assertTrue(mx.array_equal(actual, expected).item(), (length, mx.max(mx.abs(actual - expected)).item()))
+        with patch.dict(os.environ, {Q.FLAG_TILE_PIPELINE: "2"}):
+            with self.assertRaises(ValueError):
+                Q.tile_pipeline_enabled()
+
     def test_masked_sparse_matches_per_query_gather(self):
         model = build_model()
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention

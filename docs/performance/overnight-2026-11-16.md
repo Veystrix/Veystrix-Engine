@@ -353,6 +353,10 @@ With both kernel options on, a 4,300-token cold prefill took 42.1 / 43.6 s at `F
 
 `FLASHNEXT_QSA_FUSED_GATHER` also runs inside decode attention. Real Qwen, 300-token prompt, 120 decode tokens, S3-FIFO on, alternating: fused 2.36 (first run, an outlier), 2.56, 2.56, 2.59 tok/s; reference 2.60, 2.58, 2.56, 2.58 tok/s; identical output hash (`ffa05c287a3b`) in all eight runs. So decode neither gains nor loses; the options are prefill options.
 
+### Pipelined attention tiles (`--enable qsa-tile-pipeline`, exact, no end-to-end gain once tile 32 is used)
+
+The per-query attention loop evaluates each tile before building the next, so the device waits for the host between tiles (64 to 256 times per layer and chunk). `FLASHNEXT_QSA_TILE_PIPELINE=1` queues each tile with `mx.async_eval` and waits for the one before the previous (at most two tiles' gathered K/V alive). The operations are unchanged: bit-identical in a tiny-model unit test and on a real layer over five 2,048-token chunks (outputs equal); at the default tile of 8 with the fused gather on, the sparse chunk went 0.507 -> 0.400 s and the two-tier chunk 0.591 -> 0.472 s per layer. End to end on the 4,300-token cold prefill with both kernels and tile 32: 42.8 / 43.1 s with the pipeline against 43.7 / 43.0 s without (identical hash `ad323869fed1`, MLX peak 6.62-6.63 GB), so about nothing: tile 32 already cuts the number of host round trips, and the SSD hides the rest. Left as an option; not recommended.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,275 OK (3 skipped) (final rerun at 11:20 after the `qsa-fused-gather` commits; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

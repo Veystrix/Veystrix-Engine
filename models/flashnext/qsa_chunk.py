@@ -28,6 +28,7 @@ FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
 FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries that see every causal token use one causal SDPA
 FLAG_MASKED_SPARSE = "FLASHNEXT_QSA_MASKED_SPARSE"           # opt-in: sparse queries use one masked SDPA per query tile over the dequantized history
 FLAG_SHARED_DENSE = "FLASHNEXT_QSA_SHARED_DENSE_KV"           # opt-in: leading dense queries share one gathered K/V instead of one copy per query
+FLAG_TILE_PIPELINE = "FLASHNEXT_QSA_TILE_PIPELINE"             # opt-in: queue the next query tile while the previous one runs (bounded, same operations)
 FLAG_MASKED_MAX_KEYS = "FLASHNEXT_QSA_MASKED_MAX_KEYS"         # longest history that path handles (longer keeps the per-query gather)
 FLAG_MASKED_TILE = "FLASHNEXT_QSA_MASKED_TILE"                 # queries per masked tile
 SPECIAL_MIN_QUERIES = 16                                       # decode and speculative-verify calls (a few rows) keep the per-query gather
@@ -102,6 +103,13 @@ def masked_limits():
     if keys < 1 or not 1 <= tile <= 2048:
         raise ValueError(f"{FLAG_MASKED_MAX_KEYS} must be positive and {FLAG_MASKED_TILE} between 1 and 2048")
     return keys, tile
+
+
+def tile_pipeline_enabled():
+    value = os.environ.get(FLAG_TILE_PIPELINE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_TILE_PIPELINE} must be 0 or 1")
+    return value == "1"
 
 
 def shared_dense_enabled():
@@ -285,6 +293,8 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
                 mx.eval(out)
             outputs.append(out.transpose(0, 2, 1, 3))
         first = length
+    pipeline = tile_pipeline_enabled()
+    in_flight = []
     for start in range(first, length, tile_size):
         end = min(start + tile_size, length)
         indices, valid = _selected_indices(self.indexer, index_query, pooled,
@@ -302,9 +312,18 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
             # direct INT4 writes too so their lazy graph cannot retain BF16
             # inputs until the first recent row ages out.
             mx.eval(out, cache.state)
+        elif pipeline:
+            # Queue this tile and wait for the one before the previous: at most two tiles' gathered K/V are alive, and the
+            # host builds the next tile's graph while the device runs this one. The operations are unchanged.
+            mx.async_eval(out)
+            in_flight.append(out)
+            if len(in_flight) > 2:
+                mx.eval(in_flight.pop(0))
         else:
             mx.eval(out)
         outputs.append(out.reshape(batch, end - start, heads, -1))
+    if in_flight:
+        mx.eval(*in_flight)
     output = mx.concatenate(outputs, axis=1).reshape(batch, length, -1)
     return self.o_proj(output * mx.sigmoid(gate))
 

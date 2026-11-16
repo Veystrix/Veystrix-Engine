@@ -57,3 +57,19 @@ is pure Python and needs no GPU.
 **Consequence.** A new shared test that imports MLX must be added to the
 documented runtime set in `veystrix/tests/_linux.py`, or it is skipped on Linux
 and still runs on macOS.
+
+## ADR-005 — Keep `transformers` for tokenizers for now (2026-11-16)
+
+**Decision.** Do not replace `AutoTokenizer` with a hand-rolled `tokenizers` +
+Jinja2 loader in this cycle, despite `transformers` being a large part of the
+engine bundle.
+
+**Why.** The engine loads chat templates and special tokens through
+`AutoTokenizer.from_pretrained`, and Nemotron reuses the same loader. A swap
+would change tokenisation and tool-call parsing exactly when the Qwen 4 Flash
+cutover needs token-level validation. Bundle size is a packaging concern; a
+wrong token is a correctness regression.
+
+**Consequence.** Use `scripts/packaging/bundle_size_report.py` to measure the
+bundle before proposing a change, and revisit only after Qwen 4 Flash has been
+validated with the current tokenizer path.

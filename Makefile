@@ -1,4 +1,4 @@
-.PHONY: verify fast python-only swift-test scan setup results-index
+.PHONY: verify fast python-only swift-test scan setup results-index bundle-report
 
 verify:
 	./scripts/verify.sh
@@ -17,6 +17,9 @@ scan:
 
 results-index:
 	.venv/bin/python scripts/results/index_citations.py --write
+
+bundle-report:
+	.venv/bin/python scripts/packaging/bundle_size_report.py
 
 setup:
 	./chat.sh setup

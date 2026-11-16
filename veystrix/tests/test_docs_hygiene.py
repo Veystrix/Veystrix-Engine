@@ -27,7 +27,7 @@ class DocsHygieneTests(unittest.TestCase):
 
     def test_decision_log_records_the_model_decisions(self):
         log = (DOCS / "decisions" / "README.md").read_text()
-        for number in ("ADR-001", "ADR-002", "ADR-003", "ADR-004"):
+        for number in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005"):
             self.assertIn(number, log)
         self.assertIn("until Qwen 4 Flash is validated", log)
 

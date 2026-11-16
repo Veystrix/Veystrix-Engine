@@ -129,6 +129,35 @@ private func tempDir() -> URL {
         try Data(#"{"model_type":"wrapper","text_config":{"model_type":"qwen4_exp_text"}}"#.utf8).write(to: d.appendingPathComponent("config.json"))
         #expect(CheckpointValidator.validate(directory: d).verdict == .compatible)
     }
+    private func addMTPKeys(_ keys: [String], in dir: URL) throws {
+        let index = dir.appendingPathComponent("model.safetensors.index.json")
+        var map = ((try JSONSerialization.jsonObject(with: Data(contentsOf: index)) as? [String: Any])?["weight_map"] as? [String: String]) ?? [:]
+        for key in keys { map[key] = "model-00001-of-00002.safetensors" }
+        try JSONSerialization.data(withJSONObject: ["weight_map": map]).write(to: index)
+    }
+
+    @Test func indexedMTPIsDetected() throws {
+        let d = tempDir().appendingPathComponent("ckpt"); try makeCheckpoint(in: d)
+        try addMTPKeys(CheckpointValidator.requiredMTPSubstrings, in: d)
+        let r = CheckpointValidator.validate(directory: d)
+        #expect(r.mtpSource == "indexed"); #expect(r.mtpIssues.isEmpty); #expect(r.verdict == .compatible)
+    }
+
+    @Test func incompleteMTPIsReportedButNotFatal() throws {
+        let d = tempDir().appendingPathComponent("ckpt"); try makeCheckpoint(in: d)
+        try addMTPKeys(Array(CheckpointValidator.requiredMTPSubstrings.dropLast()), in: d)
+        let r = CheckpointValidator.validate(directory: d)
+        #expect(r.mtpSource == "indexed"); #expect(r.mtpIssues.count == 1); #expect(r.verdict == .compatible)
+    }
+
+    @Test func bothMTPStoresAreRefused() throws {
+        let d = tempDir().appendingPathComponent("ckpt"); try makeCheckpoint(in: d)
+        try addMTPKeys(CheckpointValidator.requiredMTPSubstrings, in: d)
+        try Data("x".utf8).write(to: d.appendingPathComponent("model-mtp.safetensors"))
+        let r = CheckpointValidator.validate(directory: d)
+        #expect(r.verdict == .incompatible)
+    }
+
     @Test func pathTraversalShardNamesAreRefused() throws {
         for bad in ["../evil.safetensors", "/abs/evil.safetensors", ".hidden.safetensors", "a\\b.safetensors", "notweights.bin"] {
             let d = tempDir().appendingPathComponent("ckpt"); try makeCheckpoint(in: d, extraWeightMapValue: bad)

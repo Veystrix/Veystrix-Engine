@@ -11,6 +11,9 @@ public struct CheckpointReport: Equatable, Sendable {
     public var totalBytes: Int64 = 0
     public var missingFiles: [String] = []
     public var notes: [String] = []
+    /// Where the MTP draft tensors live: "none", "sidecar" or "indexed".
+    public var mtpSource: String = "none"
+    public var mtpIssues: [String] = []
 
     public var isUsable: Bool { verdict == .compatible }
     /// Approximate disk size, for display.
@@ -21,6 +24,19 @@ public struct CheckpointReport: Equatable, Sendable {
 public enum CheckpointValidator {
     static let tokenizerFiles = ["tokenizer.json", "tokenizer_config.json"]
     static let supportedModelTypes: Set<String> = ModelFamily.flashnext.modelTypes
+
+    /// Mirrors `models/flashnext/checkpoint_compat.py::REQUIRED_MTP_SUBSTRINGS`.
+    static let requiredMTPSubstrings = [
+        "language_model.mtp.pre_fc_norm_embedding.weight",
+        "language_model.mtp.pre_fc_norm_hidden.weight",
+        "language_model.mtp.fc_embedding.weight",
+        "language_model.mtp.fc_hidden.weight",
+        "language_model.mtp.layers.0.mlp.switch_mlp.gate_proj.weight",
+        "language_model.mtp.layers.0.mlp.switch_mlp.up_proj.weight",
+        "language_model.mtp.layers.0.mlp.switch_mlp.down_proj.weight",
+    ]
+    private static let mtpPrefix = "language_model.mtp."
+    private static let mtpSidecar = "model-mtp.safetensors"
 
     public static func validate(directory: URL, family: ModelFamily = .flashnext,
                                 fileManager: FileManager = .default) -> CheckpointReport {
@@ -74,6 +90,9 @@ public enum CheckpointValidator {
             return report
         }
         report.shardCount = shardNames.count
+        CheckpointValidator.inspectMTP(directory: directory, weightMap: weightMap,
+                                       fileManager: fileManager, report: &report)
+        if report.verdict == .incompatible { return report }
         if let leftovers = try? fileManager.contentsOfDirectory(atPath: directory.path),
            leftovers.contains(where: { $0.hasSuffix(".incomplete") || $0.hasSuffix(".part") }) {
             report.verdict = .incomplete
@@ -97,6 +116,30 @@ public enum CheckpointValidator {
             report.notes.append("All \(report.shardCount) weight files are present. Their contents were not read.")
         }
         return report
+    }
+
+    /// Detect the MTP draft source without reading any weights. A checkpoint
+    /// with both sidecar and indexed MTP is refused, as in the engine.
+    static func inspectMTP(directory: URL, weightMap: [String: Any],
+                           fileManager: FileManager, report: inout CheckpointReport) {
+        let sidecar = fileManager.fileExists(atPath: directory.appendingPathComponent(mtpSidecar).path)
+        let indexed = Set(weightMap.keys.filter { $0.hasPrefix(mtpPrefix) })
+        if sidecar && !indexed.isEmpty {
+            report.verdict = .incompatible
+            report.notes.append("Both \(mtpSidecar) and indexed MTP tensors are present; refusing to pick one. Remove one copy, then validate again.")
+            return
+        }
+        if sidecar {
+            report.mtpSource = "sidecar"
+            return
+        }
+        guard !indexed.isEmpty else { return }
+        report.mtpSource = "indexed"
+        let missing = requiredMTPSubstrings.filter { !indexed.contains($0) }
+        report.mtpIssues = missing
+        if !missing.isEmpty {
+            report.notes.append("MTP draft block is incomplete (\(missing.count) of \(requiredMTPSubstrings.count) tensors missing). Speculative decoding needs a complete block; the engine may disable it.")
+        }
     }
 
     /// The model family a folder belongs to, read from its `config.json` only. Nil when it matches none.

@@ -152,6 +152,7 @@ struct ModelView: View {
                             Text(c.verdictText.capitalized).font(.headline)
                         }
                         LabeledContent("Architecture", value: c.modelType ?? "unknown")
+                        LabeledContent("MTP draft", value: c.mtpSource)
                         LabeledContent("Weight files", value: "\(c.shardCount)")
                         LabeledContent("Disk space used", value: c.humanSize)
                         if !c.missingFiles.isEmpty {

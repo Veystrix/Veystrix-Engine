@@ -71,6 +71,7 @@ from .store import expert_read_batch_rows
 
 FLAG_EXPERTS = "FLASHNEXT_PREFILL_RING_EXPERTS"
 FLAG_SCRATCH = "FLASHNEXT_PREFILL_RING_SCRATCH"
+FLAG_SCRATCH_LATER = "FLASHNEXT_PREFILL_RING_SCRATCH_LATER"   # opt-in: a later turn whose pool cannot hold the ring also uses a temporary pool
 FLAG_MIN_TOKENS = "FLASHNEXT_PREFILL_RING_MIN_TOKENS"
 FLAG_MARGIN_GB = "FLASHNEXT_PREFILL_RING_MARGIN_GB"
 FLAG_TRANSIENT_GB = "FLASHNEXT_PREFILL_RING_TRANSIENT_GB"
@@ -128,6 +129,19 @@ def scratch_enabled() -> bool:
     raw = os.environ.get(FLAG_SCRATCH, "0") or "0"
     if raw not in ("0", "1"):
         raise ValueError(f"{FLAG_SCRATCH} must be 0 or 1")
+    return raw == "1"
+
+
+def scratch_later_enabled() -> bool:
+    """Whether a later-turn prefill whose decode pool is too small for the ring may use a temporary right-sized pool instead.
+
+    The decode pool the app runs with is about 1 GB, so the ring (at most half of it, in two halves) holds about 175 experts
+    while a layer of a 1,600-token prompt reads about 390: every layer then falls back to the unstaged read path. A temporary
+    pool the size of the ring (about 3.1 GB for 512 experts in two halves, freed when the prefill ends) restores the staged,
+    overlapped reads. The bytes read are the same; only the buffers they land in differ."""
+    raw = os.environ.get(FLAG_SCRATCH_LATER, "0") or "0"
+    if raw not in ("0", "1"):
+        raise ValueError(f"{FLAG_SCRATCH_LATER} must be 0 or 1")
     return raw == "1"
 
 
@@ -625,10 +639,14 @@ def acquire(language, tokens: int):
         return None
 
     existing = getattr(store, "_flashnext_expert_pool", None)
-    scratch = existing is None and scratch_enabled()
+    later = False
+    if existing is not None and scratch_later_enabled():
+        later = plan_ring(existing.slots, existing.stride, expert_bytes, wanted_experts,
+                          max_pool_fraction=0.5, halves=halves) < wanted_experts
+    scratch = later or (existing is None and scratch_enabled())
     active = mx.get_active_memory()
     cache = mx.get_cache_memory()
-    if existing is not None:
+    if existing is not None and not later:
         # Later turn: the ring lives in the pool, which active memory contains.
         pool_bytes = len(existing._mm)
         used = working_set_bytes(active, pool_bytes) + cache
@@ -647,8 +665,9 @@ def acquire(language, tokens: int):
             scratch_size = 0
             new_bytes = pool_length(int(expert_pool.configured_gb() * 1e9), stride)
             kind = "pool created for the ring"
-        used = active + cache + new_bytes
-        pool_note = f"no pool yet; {kind} {new_bytes / 1e9:.2f} GB added"
+        used = active + cache + new_bytes            # on a later turn ``active`` already holds the decode pool
+        pool_note = (f"the decode pool is too small for the ring; {kind} {new_bytes / 1e9:.2f} GB added" if later
+                     else f"no pool yet; {kind} {new_bytes / 1e9:.2f} GB added")
     if not fits_working_set(0, used + transient_bytes(), limit, margin_bytes()):
         LAST_REASON[0] = (
             f"working set: MLX active {active / 1e9:.2f} GB ({pool_note}) + cache "
@@ -657,7 +676,7 @@ def acquire(language, tokens: int):
         )
         return None
 
-    if existing is not None:
+    if existing is not None and not later:
         pool = existing
     elif scratch:
         pool = expert_pool.ExpertPool(store, scratch_size, group_size)   # temporary

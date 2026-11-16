@@ -107,6 +107,7 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_UNCACHED_EXPERT_READS": "0",         # buffered reads are the reference; uncached reads are an explicit opt-in below
     "FLASHNEXT_EXPERT_POOL_BUFFERED_FILL": "0",     # decode pool fills bypass the file cache (F_NOCACHE); buffered fills are an opt-in below
     "FLASHNEXT_NGRAM_DEDUP": "0",                  # bounded per-lookup dedup is an unmeasured prototype
+    "FLASHNEXT_PREFILL_RING_SCRATCH_LATER": "0",   # later turns use the decode pool for the ring; a temporary ring is an opt-in below
     "FLASHNEXT_LAYER_MAJOR_SINGLE": "0",           # one-chunk prefills use the reference path; layer-major for them is an opt-in below
     "FLASHNEXT_QSA_DENSE_PREFIX": "0",             # per-query gather is the reference; the dense prefix is an explicit opt-in below
     "FLASHNEXT_QSA_MASKED_SPARSE": "0",            # likewise for the masked sparse path
@@ -177,6 +178,10 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
     "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
     "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint")
+EXPERIMENTAL["later-turn-scratch-ring"] = (
+    {"FLASHNEXT_PREFILL_RING_SCRATCH_LATER": "1"},
+    "experimental: a prefill after the first turn whose decode pool (about 1 GB) cannot hold the expert ring uses a temporary "
+    "ring (about 3.1 GB while it runs) so every layer's experts are staged and overlapped; same bytes, same results")
 EXPERIMENTAL["single-chunk-layer-major"] = (
     {"FLASHNEXT_LAYER_MAJOR_SINGLE": "1", "FLASHNEXT_LAYER_MAJOR_MIN_TOKENS": "1024"},
     "experimental: prefills of 1,024-2,048 tokens (one chunk) use the layer-major order so the next layer's experts are read "

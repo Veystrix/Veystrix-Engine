@@ -177,6 +177,25 @@ NLL of the true next token: baseline 1.1351, chunk 1,024 1.1249, flags 1.1047; n
 
 The one PLE layer costs 3.9 s of a 4,096-token prefill (the n-gram embedding reads 16 random rows per token, 65,536 rows, from a 128-shard table on SSD; `FLASHNEXT_NGRAM_PARALLEL_MIN=16` is already in the served environment, and without it a cold 4K prefill measured 60.8 s against 46.8 s). The row ids depend only on the token ids, so I tried queueing every row of the prompt on the read pool before the layers (`FLASHNEXT_PLE_PREFETCH`, exact by construction: unit-tested against the module's own ids). Cold 4K prefill, page cache purged before each arm: off 33.8 s, on 36.8 s, physical reads 84.1 -> 87.3 GB. During prefill every store descriptor is `F_NOCACHE` (the `uncached-prefill-reads` mode), so the warmed pages are not kept and each lookup reads its page again (a row is about 80 bytes but a read moves a 16 KB page: about 3 GB of physical reads per 4,096 tokens, already in the baseline). Warming through a cached descriptor would keep the pages but put 3-6 GB of page cache behind a 4-8K prompt, which the uncached mode exists to avoid. Reverted; nothing of it is in the tree.
 
+## Qwen agentic turns through the real server: the ring that was too small (largest gain of the night)
+
+The in-process driver measures cold prefills. A real agentic session is a conversation: each request carries the history (cached by the prefix cache) plus about 1.5-1.8K new tokens. A guarded private server with the app's flags (`--mode agentic --pool-gb 2 --enable kv-tiered4 --enable short-throughput`, prefix cache on, port 18080, `qconv.py`: four growing requests of about 5,500 characters each with a short assistant reply between them) gave, per request, prefill seconds for the new tokens (`usage.jsonl`):
+
+| Turn (new tokens, cached prefix) | baseline | `later-turn-scratch-ring` | all four options |
+|---|---|---|---|
+| 1 (1,434, 0) | 35.8 | 35.8 | 32.2 |
+| 2 (1,809, 1,436) | 51.5 | 40.8 | 27.2 |
+| 3 (1,600, 3,247) | 52.0 | 38.2 | 27.2 |
+| 4 (1,585, 4,849) | 48.7 | 38.9 | 27.2 |
+
+Why later turns were slow: the first turn gets a temporary scratch ring (3.1 GB, two halves of 512 experts), but a later turn puts the ring into the decode pool, which the app launches at about 1.07 GB (349 slots; the planner caps the 2 GB request). The ring may use half of it, in two halves: 534 MB, about 175 experts per half. A 1,600-token prompt reads about 390 experts per layer, so `ring.stage` could not hold a layer, every layer fell back to the unstaged read path (flight log: `prefill_ring_acquire ... scratch=false ring_view_bytes=534528000`), and the prefill ran at 32 tok/s against 45-60 tok/s on a cold turn.
+
+`FLASHNEXT_PREFILL_RING_SCRATCH_LATER=1` (`--enable later-turn-scratch-ring`, off by default, registered): when the existing pool cannot hold the wanted ring, use a temporary right-sized pool as the first turn does (3.1 GB while the prefill runs, freed after; the decode pool is untouched; the working-set check counts the temporary pool beside the decode pool and refuses if it does not fit). Same bytes read into different buffers, so results are identical (unit test compares every layer's output bit for bit). Turns 2-4: 51.5/52.0/48.7 -> 40.8/38.2/38.9 s (-22 to -26%). With `single-chunk-layer-major` (one-chunk prefills use the layer-major order, overlapping reads with compute) and `qsa-fast-prefill` added: 27.2 s each (-47%, 1.9x, about 59 tok/s on a cached-prefix turn).
+
+Memory and heat of these server runs (guard samples every second): minimum available memory 2.26 GiB (baseline) / 3.72 GiB (scratch ring) / 3.07 GiB (all four); peak compressor 4.5 / 2.2 / 3.7 GB; swap flat at 1,262 MiB in all three; thermal level 0 throughout. The scratch ring did not make memory worse, because the fallback read path it replaces also churned memory.
+
+Suggested app launch: `--enable kv-tiered4 --enable short-throughput --enable later-turn-scratch-ring --enable single-chunk-layer-major --enable qsa-fast-prefill`. The first two options are exact; `qsa-fast-prefill` is rounding-level (KL 0.007-0.019 teacher-forced) and changes the cache fingerprint (existing Qwen prefix snapshots are not restored once). Evidence: `results/flashnext/*night-qwen-conv-*` (`usage.jsonl`, `guard.jsonl`).
+
 ## Qwen (Flash-Next) one-chunk cold prefills: layer-major with read-ahead for 1,024-2,048 tokens (opt-in, exact)
 
 The app launches Qwen with `--enable kv-tiered4 --enable short-throughput`, i.e. the mode `layer-major-hybrid-4k`: 4,096-token layer-major windows, `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=2049`, and windows of up to 2,048 tokens executed chunk-major. So a prompt of 2,049 tokens or more already uses layer-major with read-ahead, and a prompt of up to 2,048 tokens (one chunk) takes `prefill._run_chunks`' one-span shortcut: each layer reads its routed experts and then computes, nothing overlapped. At 1,600 tokens that was 62 GB read (about 21 s of SSD time) in series with the compute, 34.8 s in all.

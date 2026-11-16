@@ -812,6 +812,66 @@ class FirstTurnScratchTests(ScratchBase):
                 pool.close()
 
 
+class LaterTurnScratchTests(RingCase):
+    """A later turn: the decode pool exists. With the opt-in flag a pool too small for the ring is not used for it."""
+
+    def small_pool_then_real(self):
+        real = prefill_ring.plan_ring
+
+        def fake(slots, stride, expert_bytes, requested, **kwargs):
+            if kwargs.get("max_pool_fraction") == 0.5 and slots == self.pool.slots:
+                return 1                                   # the existing pool could hold one expert per half
+            return real(slots, stride, expert_bytes, requested, **kwargs)
+        return mock.patch.object(prefill_ring, "plan_ring", side_effect=fake)
+
+    def test_flag_is_parsed_strictly(self):
+        for value, expected in (("0", False), ("1", True)):
+            with mock.patch.dict(os.environ, {prefill_ring.FLAG_SCRATCH_LATER: value}):
+                self.assertEqual(prefill_ring.scratch_later_enabled(), expected)
+        with mock.patch.dict(os.environ, {prefill_ring.FLAG_SCRATCH_LATER: "yes"}):
+            with self.assertRaises(ValueError):
+                prefill_ring.scratch_later_enabled()
+        os.environ.pop(prefill_ring.FLAG_SCRATCH_LATER, None)
+        self.assertFalse(prefill_ring.scratch_later_enabled())
+
+    def test_off_by_default_the_ring_lives_in_the_existing_pool(self):
+        with self.small_pool_then_real():
+            with prefill_ring.session(self.language, 1024) as ring:
+                self.need_ring(ring)
+                self.assertFalse(ring.owns_pool)
+                self.assertIs(ring.pool, self.pool)
+
+    def test_a_too_small_pool_gets_a_temporary_ring_and_results_are_identical(self):
+        x, indices = self.inputs()
+        reference = self.run_layers(x, indices)
+        with mock.patch.dict(os.environ, {prefill_ring.FLAG_SCRATCH_LATER: "1"}), self.small_pool_then_real():
+            with prefill_ring.session(self.language, 1024) as ring:
+                self.need_ring(ring)
+                self.assertTrue(ring.owns_pool)
+                self.assertIsNot(ring.pool, self.pool)
+                self.assertIs(getattr(self.store, "_flashnext_expert_pool", None), self.pool)    # the decode pool is untouched
+                produced = self.run_layers(x, indices)
+        for want, got in zip(reference, produced):
+            self.assertTrue(mx.array_equal(want, got).item())
+        self.assertRestored()
+        self.assertIs(getattr(self.store, "_flashnext_expert_pool", None), self.pool)
+
+    def test_a_pool_that_can_hold_the_ring_is_still_used(self):
+        with mock.patch.dict(os.environ, {prefill_ring.FLAG_SCRATCH_LATER: "1"}):
+            with prefill_ring.session(self.language, 1024) as ring:
+                self.need_ring(ring)
+                self.assertFalse(ring.owns_pool)           # the real pool fits the ring: no temporary pool
+                self.assertIs(ring.pool, self.pool)
+
+    def test_the_working_set_check_counts_the_temporary_pool_beside_the_decode_pool(self):
+        with mock.patch.dict(os.environ, {prefill_ring.FLAG_SCRATCH_LATER: "1"}), self.small_pool_then_real(), \
+                mock.patch.object(prefill_ring, "metal_working_set_limit", return_value=1), \
+                mock.patch.object(expert_pool, "ExpertPool") as made:
+            self.assertIsNone(prefill_ring.acquire(self.language, 1024))
+            made.assert_not_called()
+        self.assertIn("decode pool is too small", prefill_ring.LAST_REASON[0])
+
+
 class ScratchMemoryPressureTests(ScratchBase):
     def accounting(self, active, cache, limit):
         return (

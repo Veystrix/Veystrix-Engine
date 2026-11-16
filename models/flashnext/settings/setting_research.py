@@ -120,6 +120,7 @@ SETTINGS = (
     research("lookup-rollback", "FLASHNEXT_LOOKUP_ROLLBACK", parser=choice(("0", "1"), "lookup-rollback")),
     research("layer-major-single", "FLASHNEXT_LAYER_MAJOR_SINGLE", parser=choice(("0", "1"), "layer-major-single")),
     research("qsa-dense-prefix", "FLASHNEXT_QSA_DENSE_PREFIX", parser=choice(("0", "1"), "qsa-dense-prefix")),
+    research("prefill-ring-scratch-later", "FLASHNEXT_PREFILL_RING_SCRATCH_LATER", parser=choice(("0", "1"), "prefill-ring-scratch-later")),
     research("qsa-masked-sparse", "FLASHNEXT_QSA_MASKED_SPARSE", parser=choice(("0", "1"), "qsa-masked-sparse")),
     research("qsa-masked-max-keys", "FLASHNEXT_QSA_MASKED_MAX_KEYS", "16384", "startup", integer, unset="16384"),
     research("qsa-masked-tile", "FLASHNEXT_QSA_MASKED_TILE", "256", "startup", integer, unset="256"),

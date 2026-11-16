@@ -385,6 +385,10 @@ The two broadcast-multiply-add injections per layer have no transcendental, so a
 
 The same shape-verified dense GEMM as for Nemotron (shared module `models/shared/dense_gemm.py`), applied to Qwen's large 4-bit projections (group size 32; at 2,048 rows q+gate 44.3 -> 40.4 ms, linear-attention in-projection 37.2 -> 34.3 ms, z/v and output 22.3 -> 20.5 ms; all of these shapes were bit-equal, the 10,240 -> 4 projection is not and keeps the stock path). Real 4,300-token cold prefill with the final set, tile 32 and `ngram-dedup`, alternating: 41.2 / 41.8 s with it against 42.6 / 42.2 s without, identical output hash, MLX peak 6.66 against 6.62 GB. The full 24-case quality suite with it added: `quality_compare --relation same-plan` **PASS, 24 of 24 cases token-identical** to the baseline. Opt-in; it joins the exact extras (`--enable dense-gemm`).
 
+### The three exact extras together (end to end)
+
+Real 4,300-token cold prefill with the two exact Qwen kernel options (`qsa-shared-dense-kv`, `qsa-fused-gather`) always on, alternating: gather tile 32 + `ngram-dedup` + `dense-gemm` all on 41.4 / 41.9 s, all three off 45.1 / 44.7 s (the default tile of 8 is the slowest of the three tile settings). That is -3.4 s, **-7.6%**, identical output hash (`ad323869fed1`), MLX peak 6.66 against 6.62 GB. The three gains (about 4%, 3% and 2.4% on their own) are roughly additive.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:20, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

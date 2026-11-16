@@ -112,6 +112,10 @@ def stop(process):
             os.killpg(process.pid, signum)
         except ProcessLookupError:
             return
+        except PermissionError:
+            if process.poll() is not None:
+                return                  # macOS refuses killpg on a group whose leader already exited
+            raise
         try:
             process.wait(timeout=wait)
             return

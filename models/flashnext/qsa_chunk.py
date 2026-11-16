@@ -27,6 +27,7 @@ FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
 FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
 FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries that see every causal token use one causal SDPA
 FLAG_MASKED_SPARSE = "FLASHNEXT_QSA_MASKED_SPARSE"           # opt-in: sparse queries use one masked SDPA per query tile over the dequantized history
+FLAG_SHARED_DENSE = "FLASHNEXT_QSA_SHARED_DENSE_KV"           # opt-in: leading dense queries share one gathered K/V instead of one copy per query
 FLAG_MASKED_MAX_KEYS = "FLASHNEXT_QSA_MASKED_MAX_KEYS"         # longest history that path handles (longer keeps the per-query gather)
 FLAG_MASKED_TILE = "FLASHNEXT_QSA_MASKED_TILE"                 # queries per masked tile
 SPECIAL_MIN_QUERIES = 16                                       # decode and speculative-verify calls (a few rows) keep the per-query gather
@@ -101,6 +102,13 @@ def masked_limits():
     if keys < 1 or not 1 <= tile <= 2048:
         raise ValueError(f"{FLAG_MASKED_MAX_KEYS} must be positive and {FLAG_MASKED_TILE} between 1 and 2048")
     return keys, tile
+
+
+def shared_dense_enabled():
+    value = os.environ.get(FLAG_SHARED_DENSE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_SHARED_DENSE} must be 0 or 1")
+    return value == "1"
 
 
 def dense_prefix_enabled():
@@ -236,6 +244,30 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         else:
             mx.eval(out)
         outputs.append(out.transpose(0, 2, 1, 3))
+    if not first and batch == 1 and length >= SPECIAL_MIN_QUERIES and shared_dense_enabled():
+        lead = dense_queries(self.indexer, past, length, pooled)
+        if lead >= SPECIAL_MIN_QUERIES:
+            # Queries that select every causal token all read the same first ``slots`` cache rows, each with its own validity
+            # mask. The per-query path gathers (and dequantizes) a private copy of those rows for every query; this gathers
+            # them once and gives every query of a tile a broadcast view of them. Same SDPA call per query, same rows, same
+            # order, same mask (padding slots are masked in both, so their contents never enter a sum).
+            at = mx.broadcast_to(mx.arange(slots)[None, None, :], (batch, 1, slots))
+            shared_k, shared_v = _gather_kv(keys, values, cache, at)
+            for start in range(0, lead, tile_size):
+                end = min(start + tile_size, lead)
+                count = end - start
+                ends = past + mx.arange(start, end) + 1
+                valid = mx.arange(slots)[None, :] < ends[:, None]
+                q = queries[:, :, start:end].transpose(0, 2, 1, 3).reshape(batch * count, heads, 1, dim)
+                k = mx.broadcast_to(shared_k, (count,) + shared_k.shape[1:])
+                v = mx.broadcast_to(shared_v, (count,) + shared_v.shape[1:])
+                out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=valid.reshape(count, 1, 1, slots))
+                if start == 0 and hasattr(cache, "gather_selected"):
+                    mx.eval(out, cache.state)
+                else:
+                    mx.eval(out)
+                outputs.append(out.reshape(batch, count, heads, -1))
+            first = lead
     if (pooled is not None and length - first >= SPECIAL_MIN_QUERIES and batch == 1 and masked_sparse_enabled()
             and key_len <= masked_limits()[0]):
         # The same selection as the per-query gather (``_chunk_mask`` is pinned to ``_selected_indices`` by the tests), applied

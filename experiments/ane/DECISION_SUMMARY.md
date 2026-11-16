@@ -68,6 +68,31 @@ principled way to use fast low-precision kernels under a bit-identical contract
 and could later guard any ANE output. Unreplicated single-author result; needs
 a Veystrix-specific trigger-rate and exactness measurement.
 
+## Source-level corrections from maderix CODE deep-dive (same day)
+
+I read the actual maderix/ANE source (not just its README). Corrections to our
+earlier notes:
+- **`gpu_ane_share.m` / `gpu_prefill_ane_decode.m` do not exist** in any commit;
+  only the README mentions them. The README's GPU-prefill→ANE-decode direction is
+  inverted vs every working implementation (ANE prefill → GPU/CPU decode). So the
+  "working GPU↔ANE zero-copy demo" I reported earlier is **README-only, unverified**.
+- **INT8 weights DO compile** via `constexpr_affine_dequantize` (`ane_int8_bench.m`);
+  the ~1.95× needs int8 *activation edges* in a deep chain, not INT8 weights alone.
+  INT4 has no path.
+- **S<16/32 is a hard `0x1d` eval error, not silent all-zeros** (our earlier note
+  was wrong). Min IOSurface ~49 KB, W≥32, pad spatial dim.
+- **ANE attention is 560–610× slower than CPU GQA** (M3 Max field guide, S), and
+  ANE RMSNorm has an ~0.01 error floor — both are direct bit-identical threats.
+- **W-lane batching of ≤4 tokens** is the only demonstrated multi-token-per-dispatch
+  ANE path (5.0× matmul / 2.93× oproj_add, max_err ~0.002–0.004) — but norms,
+  attention and argmax must stay off ANE.
+- **Delta weight reload is contested**: maderix M5 says file-swap reload fails;
+  Orion M4 says 494 ms/60 kernels works. Neither replicated. Test locally.
+
+Net effect: ANE remains unsuitable as the main executor; the K=2 *software*
+read-sharing candidate is unaffected by these corrections (it runs on the
+CPU/Metal path, not ANE).
+
 ## Bottom line for the owner
 
 - There IS now one measured, bit-identical, 16 GB-relevant candidate: expert-wise

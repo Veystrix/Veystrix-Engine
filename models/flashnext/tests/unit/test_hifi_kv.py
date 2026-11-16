@@ -161,6 +161,30 @@ class GatherTests(unittest.TestCase):
                 from models.flashnext.mixed_kv import fused_gather_enabled
                 fused_gather_enabled()
 
+    def test_fused_two_tier_gather_is_bit_identical(self):
+        import itertools
+        from models.flashnext import mixed_kv
+        for group, scale in itertools.product((32, 64), (0.01, 1.0, 100.0)):
+            mx.random.seed(group + 7)
+            cache = MixedPrecisionQSAKVCache("tiered4", group, 256)
+            heads, dim = 2, 128
+            for length in (700, 600):                        # two updates, so rows age into the INT4 tier
+                k = (mx.random.normal((1, heads, length, dim)) * scale).astype(mx.bfloat16)
+                v = (mx.random.normal((1, heads, length, dim)) * scale + 3 * scale).astype(mx.bfloat16)
+                cache.update_and_fetch(k, v)
+            self.assertGreater(cache.history_tokens, 0)
+            self.assertGreater(cache.offset - cache.history_tokens, 0)
+            idx = mx.sort(mx.random.randint(0, cache.offset, (1, 6, 53)), axis=-1)
+            self.assertIsNotNone(mixed_kv._fused_dequantize_two_tier(cache.keys, cache.recent_keys, idx, cache.history_tokens, group))
+            with patch.dict(os.environ, {"FLASHNEXT_QSA_FUSED_GATHER": "0"}):
+                expected = cache.gather_selected(idx)
+            with patch.dict(os.environ, {"FLASHNEXT_QSA_FUSED_GATHER": "1"}):
+                actual = cache.gather_selected(idx)
+            mx.eval(*expected, *actual)
+            for a, e in zip(actual, expected):
+                self.assertEqual(a.shape, e.shape)
+                self.assertTrue(mx.array_equal(a, e).item(), (group, scale))
+
     def test_masked_sparse_matches_per_query_gather(self):
         model = build_model()
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention

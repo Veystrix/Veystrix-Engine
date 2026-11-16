@@ -58,6 +58,67 @@ _FUSED_SOURCE = """
     }
 """
 _FUSED_KERNEL = [None]
+_FUSED_TWO_TIER_SOURCE = """
+    uint d4 = thread_position_in_grid.x;
+    uint si = thread_position_in_grid.y;
+    uint th = thread_position_in_grid.z;
+    uint h = th % NH;
+    int row = idx[(th / NH) * NS + si];
+    if (row < (int)HIST) {
+        // history tier: INT4, eight values per word; this thread handles four consecutive values
+        uint base = (h * NCAPO + (uint)row);
+        uint word = wo[base * DWO + d4 / 2];
+        uint shift = (d4 % 2) * 16;
+        for (uint k = 0; k < 4; k++) {
+            uint q = (word >> (shift + 4 * k)) & 0xFu;
+            uint d = d4 * 4 + k;
+            uint g = d / GSZ;
+            float r = static_cast<float>(so[base * NG + g]) * static_cast<float>(q) + static_cast<float>(bo[base * NG + g]);
+            out[((th * NS) + si) * ND + d] = static_cast<bfloat16_t>(r);
+        }
+    } else {
+        uint base = (h * NCAPR + (uint)(row - (int)HIST));
+        uint word = wr[base * DWR + d4];
+        for (uint k = 0; k < 4; k++) {
+            uint q = (word >> (8 * k)) & 0xFFu;
+            uint d = d4 * 4 + k;
+            uint g = d / GSZ;
+            float r = static_cast<float>(sr[base * NG + g]) * static_cast<float>(q) + static_cast<float>(br[base * NG + g]);
+            out[((th * NS) + si) * ND + d] = static_cast<bfloat16_t>(r);
+        }
+    }
+"""
+_FUSED_TWO_TIER_KERNEL = [None]
+
+
+def _fused_dequantize_two_tier(old, recent, indices, history, group):
+    """The two-tier gather of ``gather_selected`` (INT4 rows below ``history``, INT8 rows from the recent tier above it) in one
+    kernel, each element computed with the formula of the single-tier kernel (bit-identical to ``mx.dequantize``).
+    Returns [T, H, S, D], or None for a layout it does not handle."""
+    wo, so, bo = old
+    wr, sr, br = recent
+    if (wo.ndim != 4 or wo.shape[0] != 1 or wr.shape[0] != 1 or indices.ndim != 3 or indices.shape[0] != 1
+            or wo.dtype != mx.uint32 or wr.dtype != mx.uint32
+            or any(a.dtype != mx.bfloat16 for a in (so, bo, sr, br)) or so.shape != bo.shape or sr.shape != br.shape):
+        return None
+    heads, cap_old, words_old = wo.shape[1], wo.shape[2], wo.shape[3]
+    cap_recent, words_recent = wr.shape[2], wr.shape[3]
+    dim = words_recent * 4
+    if (words_old * 8 != dim or dim % group or wr.shape[1] != heads or so.shape != (1, heads, cap_old, dim // group)
+            or sr.shape != (1, heads, cap_recent, dim // group) or dim % 4 or history < 1):
+        return None
+    if _FUSED_TWO_TIER_KERNEL[0] is None:
+        _FUSED_TWO_TIER_KERNEL[0] = mx.fast.metal_kernel(
+            name="flashnext_gather_dequantize_two_tier", input_names=["wo", "so", "bo", "wr", "sr", "br", "idx"],
+            output_names=["out"], source=_FUSED_TWO_TIER_SOURCE)
+    queries, selected = indices.shape[1], indices.shape[2]
+    out = _FUSED_TWO_TIER_KERNEL[0](
+        inputs=[wo, so, bo, wr, sr, br, indices.astype(mx.int32)],
+        template=[("NH", heads), ("NS", selected), ("NCAPO", cap_old), ("NCAPR", cap_recent), ("DWO", words_old),
+                  ("DWR", words_recent), ("NG", dim // group), ("GSZ", group), ("ND", dim), ("HIST", int(history))],
+        grid=(words_recent, selected, queries * heads), threadgroup=(words_recent, 1, 1),
+        output_shapes=[(queries * heads, selected, dim)], output_dtypes=[mx.bfloat16])[0]
+    return out.reshape(queries, heads, selected, dim)
 
 
 def _fused_dequantize_rows(parts, indices, group):
@@ -177,6 +238,12 @@ class MixedPrecisionQSAKVCache(QSAKVCache):
         rk, rv = gather(self.recent_keys, at, 8), gather(self.recent_values, at, 8)
         if self.history_tokens == 0:
             return rk, rv
+        if fused_gather_enabled() and isinstance(self.keys, tuple) and isinstance(self.values, tuple):
+            keys = _fused_dequantize_two_tier(self.keys, self.recent_keys, indices, self.history_tokens, self.group_size)
+            values = (_fused_dequantize_two_tier(self.values, self.recent_values, indices, self.history_tokens, self.group_size)
+                      if keys is not None else None)
+            if keys is not None and values is not None:
+                return keys, values
         old_at = mx.minimum(indices, self.history_tokens - 1)
         hk, hv = gather(self.keys, old_at, 4), gather(self.values, old_at, 4)
         old = (indices < self.history_tokens).reshape(-1, 1, indices.shape[-1], 1)

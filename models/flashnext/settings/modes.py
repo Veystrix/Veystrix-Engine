@@ -184,9 +184,9 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint; fails 1 of 24 cases of the full quality gate (tool_2: stop-or-continue near tie), see docs/performance/overnight-2026-11-16.md")
 EXPERIMENTAL["qsa-fused-gather"] = (
     {"FLASHNEXT_QSA_FUSED_GATHER": "1"},
-    "experimental: the per-query K/V gather of the recent INT8 tier of the hybrid cache (contexts up to 8,192 tokens) runs as one "
-    "gather-and-dequantize kernel instead of six gathers plus a dequantize; the same affine arithmetic, bit-identical to "
-    "mx.dequantize (unit test and real layer outputs equal)")
+    "experimental: the per-query K/V gather of the hybrid cache (INT8 recent tier, and the INT4 history tier beyond 8,192 tokens) "
+    "runs as one gather-and-dequantize kernel instead of gathers plus a dequantize (and, with two tiers, a merge); the same affine "
+    "arithmetic, bit-identical to mx.dequantize (unit tests and real layer outputs equal)")
 EXPERIMENTAL["qsa-shared-dense-kv"] = (
     {"FLASHNEXT_QSA_SHARED_DENSE_KV": "1"},
     "experimental: the leading queries of a prefill chunk that see every causal token share one gathered and dequantized K/V instead "

@@ -51,6 +51,46 @@ private func tempDir() -> URL {
     }
 }
 
+// MARK: decode explanations from live health
+@Suite struct DecodeAdvisorTests {
+    private func health(_ json: String) -> HealthReport {
+        try! JSONDecoder().decode(HealthReport.self, from: Data(json.utf8))
+    }
+
+    @Test func stoppedEngineIsExplained() {
+        let factors = DecodeAdvisor.explain(nil)
+        #expect(factors.count == 1); #expect(factors[0].title == "Engine is stopped")
+    }
+
+    @Test func noTelemetryFallsBackToAnHonestMessage() {
+        #expect(DecodeAdvisor.explain(health("{}")).map(\.title) == ["No slowdown signal yet"])
+    }
+
+    @Test func liveDecodeRateIsShown() {
+        let factors = DecodeAdvisor.explain(health(#"{"activity":{"decode_tokens_per_second":12.5}}"#))
+        #expect(factors.count == 1)
+        #expect(factors[0].title == "Decode rate")
+        #expect(factors[0].detail.contains("12.5"))
+    }
+
+    @Test func memoryAdmissionAndSwapAreFlagged() {
+        let json = #"{"memory_policy":{"can_admit":false,"stop_reason":"low battery","current_swap_growth_mb":900,"swap_ceiling_mib":1000}}"#
+        let factors = DecodeAdvisor.explain(health(json))
+        #expect(factors.count == 2)
+        #expect(factors.allSatisfy(\.isWarning))
+        #expect(factors[0].detail.contains("low battery"))
+        #expect(factors[1].title == "Swap growth is near the ceiling")
+    }
+
+    @Test func kvFormatChoicesAreExplained() {
+        let tiered = DecodeAdvisor.explain(health(#"{"flashnext_kv_cache":"tiered4"}"#))
+        #expect(tiered.map(\.title) == ["Tiered KV cache"])
+        let nemotron = DecodeAdvisor.explain(health(#"{"nemotron_context":{"admitted_context":1000,"kv_format":"int8","million_token_validation":false}}"#))
+        #expect(nemotron.count == 1)
+        #expect(nemotron[0].detail.contains("I/O-bound"))
+    }
+}
+
 // MARK: encrypted chat history
 @Suite struct ChatHistoryCipherTests {
     @Test func roundTripHidesThePlaintext() throws {

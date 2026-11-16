@@ -40,6 +40,7 @@ struct DashboardView: View {
                     }
                 }
                 activityPanel
+                decodePanel
                 Text("Veystrix version \(Bundle.main.shortVersion) (\(Bundle.main.buildNumber)). Engine telemetry comes from the engine's own /health endpoint when it is running.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -96,6 +97,25 @@ struct DashboardView: View {
         }
         return engine.state == .running ? "No data yet" : "Not running"
     }
+    private var decodePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Why decode can feel slow", systemImage: "speedometer").font(.headline)
+            ForEach(DecodeAdvisor.explain(engine.health), id: \.title) { factor in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: factor.isWarning ? "exclamationmark.triangle.fill" : "info.circle")
+                        .foregroundStyle(factor.isWarning ? .orange : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(factor.title).font(.subheadline.weight(.semibold))
+                        Text(factor.detail).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private var activityPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Live inference").font(.headline)

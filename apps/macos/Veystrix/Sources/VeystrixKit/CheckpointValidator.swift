@@ -90,9 +90,9 @@ public enum CheckpointValidator {
             return report
         }
         report.shardCount = shardNames.count
-        CheckpointValidator.inspectMTP(directory: directory, weightMap: weightMap,
-                                       fileManager: fileManager, report: &report)
-        if report.verdict == .incompatible { return report }
+        let mtpIsFatal = CheckpointValidator.inspectMTP(directory: directory, weightMap: weightMap,
+                                                        fileManager: fileManager, report: &report)
+        if mtpIsFatal { return report }
         if let leftovers = try? fileManager.contentsOfDirectory(atPath: directory.path),
            leftovers.contains(where: { $0.hasSuffix(".incomplete") || $0.hasSuffix(".part") }) {
             report.verdict = .incomplete
@@ -120,26 +120,28 @@ public enum CheckpointValidator {
 
     /// Detect the MTP draft source without reading any weights. A checkpoint
     /// with both sidecar and indexed MTP is refused, as in the engine.
+    /// Returns true when the verdict is fatal and validation should stop.
     static func inspectMTP(directory: URL, weightMap: [String: Any],
-                           fileManager: FileManager, report: inout CheckpointReport) {
+                           fileManager: FileManager, report: inout CheckpointReport) -> Bool {
         let sidecar = fileManager.fileExists(atPath: directory.appendingPathComponent(mtpSidecar).path)
         let indexed = Set(weightMap.keys.filter { $0.hasPrefix(mtpPrefix) })
         if sidecar && !indexed.isEmpty {
             report.verdict = .incompatible
             report.notes.append("Both \(mtpSidecar) and indexed MTP tensors are present; refusing to pick one. Remove one copy, then validate again.")
-            return
+            return true
         }
         if sidecar {
             report.mtpSource = "sidecar"
-            return
+            return false
         }
-        guard !indexed.isEmpty else { return }
+        guard !indexed.isEmpty else { return false }
         report.mtpSource = "indexed"
         let missing = requiredMTPSubstrings.filter { !indexed.contains($0) }
         report.mtpIssues = missing
         if !missing.isEmpty {
             report.notes.append("MTP draft block is incomplete (\(missing.count) of \(requiredMTPSubstrings.count) tensors missing). Speculative decoding needs a complete block; the engine may disable it.")
         }
+        return false
     }
 
     /// The model family a folder belongs to, read from its `config.json` only. Nil when it matches none.

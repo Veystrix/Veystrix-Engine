@@ -24,7 +24,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            List {
+            List(selection: $selection.value) {
                 Section {
                     ForEach(SidebarItem.allCases) { section in
                         Label(section.rawValue, systemImage: section.symbol)

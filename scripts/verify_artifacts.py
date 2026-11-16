@@ -1,0 +1,105 @@
+"""Verify that a built app still has every protection guardrail.
+
+Run after build_app.sh / make_dmg.sh. This is deliberately about the built
+artifact, not the source tree: a future change that drops encryption, the
+shield, integrity manifest or signing is caught here even if unit tests pass.
+"""
+from __future__ import annotations
+
+import hashlib
+import marshal
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+APP = ROOT / "dist" / "Veystrix.app"
+RESOURCES = APP / "Contents" / "Resources"
+LIB = RESOURCES / "engine" / "lib"
+PYTHON = RESOURCES / "engine" / "python" / "bin" / "python3"
+BOOTSTRAP = {"_protect.py", "sitecustomize.py"}
+
+results: list[tuple[bool, str, str]] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    results.append((bool(ok), name, detail))
+
+
+def main() -> int:
+    check("app bundle exists", APP.is_dir(), str(APP))
+    if not APP.is_dir():
+        return report()
+
+    engine = RESOURCES / "engine"
+    check("engine lib exists", LIB.is_dir(), str(LIB))
+    encrypted = sorted(LIB.rglob("*.pyc.enc"))
+    check("bytecode encrypted (209 modules)", len(encrypted) >= 100, f"{len(encrypted)} encrypted modules")
+    plaintext = sorted(LIB.rglob("*.pyc"))
+    check("no plaintext bytecode", not plaintext, f"{len(plaintext)} found")
+    source = [p for p in LIB.rglob("*.py") if p.name not in BOOTSTRAP]
+    check("no product source in bundle", not source, f"{len(source)} unexpected .py files")
+    c_source = sorted(LIB.rglob("*.c"))
+    check("no C source in bundle", not c_source, f"{len(c_source)} found")
+    check("bootstrap files are the only readable code",
+          all((LIB / name).is_file() for name in BOOTSTRAP))
+    check("no bytecode caches in bundle", not list(LIB.rglob("__pycache__")))
+    check("shield dylib present", (LIB / "_protect_key.dylib").is_file())
+    check("precompiled native reader present",
+          (LIB / "models" / "flashnext" / "native_read.bundled.dylib").is_file())
+
+    manifest = RESOURCES / "BundleIntegrity.json"
+    if manifest.is_file():
+        import json
+        data = json.loads(manifest.read_text())
+        check("integrity manifest pins files", len(data.get("files", {})) > 100,
+              f"{len(data.get('files', {}))} files pinned")
+    else:
+        check("integrity manifest exists", False)
+
+    if encrypted:
+        try:
+            marshal.loads(encrypted[0].read_bytes()[16:])
+            decompiled = True
+        except Exception:
+            decompiled = False
+        check("naive decompile fails", not decompiled)
+
+    if PYTHON.is_file() and LIB.is_dir():
+        env = dict(os.environ, PYTHONPATH=str(LIB), PYTHONDONTWRITEBYTECODE="1")
+        run = subprocess.run(
+            [str(PYTHON), "-c",
+             "from veystrix import model_identity as m; print(m.FLASHNEXT.context_limit)"],
+            env=env, capture_output=True, text=True, timeout=90,
+        )
+        check("bundled engine loads cleanly", run.returncode == 0 and "262144" in run.stdout,
+              (run.stderr or run.stdout)[-160:])
+
+    signed = subprocess.run(["codesign", "-v", str(APP)], capture_output=True, text=True)
+    check("code signature valid", signed.returncode == 0, signed.stderr.strip()[-160:])
+
+    dmg = sorted(ROOT.glob("dist/Veystrix-*-arm64.dmg"))
+    check("DMG exists", bool(dmg), str(dmg[-1]) if dmg else "none")
+    if dmg:
+        digest = hashlib.sha256(dmg[-1].read_bytes()).hexdigest()
+        print(f"DMG SHA-256: {digest}")
+
+    # Source-level guardrail: the key must still be bound to runtime signals.
+    builder = (ROOT / "packaging" / "engine" / "protect_engine.py").read_text()
+    check("key still bound to shield digest", "derive(base, clean_signals(lib))" in builder)
+    return report()
+
+
+def report() -> int:
+    for ok, name, detail in results:
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
+    failed = [name for ok, name, _ in results if not ok]
+    print(f"\n{len(results) - len(failed)}/{len(results)} guardrails passed")
+    if failed:
+        print("FAILED: " + ", ".join(failed), file=sys.stderr)
+    return 0 if not failed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

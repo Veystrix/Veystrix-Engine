@@ -89,7 +89,14 @@ Run everything locally with one command:
 ./scripts/verify.sh            # shared + Flash-Next + Nemotron units, secret scan, app build + app tests
 ./scripts/verify.sh --python-only   # skip Swift when the local toolchain cannot load the test macros
 ./scripts/verify.sh --fast     # Linux fast lane (no MLX) + secret scan, seconds
+./scripts/verify.sh --artifacts # check the BUILT app still has every protection guardrail
 ```
+
+After any rebuild (`packaging/macos/build_app.sh` and `make_dmg.sh`), run
+`make artifacts`. It fails the build if bytecode is no longer encrypted, source
+reappears in the bundle, the shield or integrity manifest is missing, the app is
+unsigned, or the key is no longer bound to runtime signals. Do not publish a
+DMG without it.
 
 `make verify`, `make fast` and `make python-only` are aliases. CI runs the same
 suites: a fast Linux job for pure-Python tests and macOS jobs for the full

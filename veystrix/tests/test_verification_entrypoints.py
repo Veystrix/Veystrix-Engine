@@ -30,6 +30,16 @@ class VerificationEntrypointTests(unittest.TestCase):
         self.assertIn("preflight profile", template)
         self.assertIn("result folders", template)
 
+    def test_artifact_guardrails_are_a_first_class_check(self):
+        script = ROOT / "scripts" / "verify.sh"
+        self.assertIn("--artifacts", script.read_text())
+        guard = (ROOT / "scripts" / "verify_artifacts.py").read_text()
+        for fragment in ("no plaintext bytecode", "no product source in bundle",
+                         "shield dylib present", "integrity manifest pins files",
+                         "naive decompile fails", "key still bound to shield digest"):
+            self.assertIn(fragment, guard)
+        self.assertIn("artifacts:", (ROOT / "Makefile").read_text())
+
     def test_contributing_points_at_the_one_command(self):
         self.assertIn("./scripts/verify.sh", (ROOT / "CONTRIBUTING.md").read_text())
 

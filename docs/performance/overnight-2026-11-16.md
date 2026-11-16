@@ -263,6 +263,10 @@ The decode expert pool's replacement policy only changes which experts stay resi
 
 S3-FIFO gives +5% decode speed and 5% fewer bytes read, reproducibly (alternating order). `--enable s3fifo-pool` sets `FLASHNEXT_EXPERT_POOL_POLICY=s3fifo`; default stays `lru` (the off value is in `EXPERIMENTAL_OFF`, test added). Through the real server with the six prefill options on (same prompt, 160 new tokens, prefix cache not hit, so each request includes a prefill of about 28-30 s; sampling is not greedy there, so texts differ): lru 93.8 and 95.0 s, s3fifo 89.8 s and (a reply that ended at 78 tokens) 60.2 s. Subtracting the prefill, that is about 2.4 tok/s for lru and 2.6-2.7 tok/s for s3fifo, consistent with the in-process +5-10%; it is a rough figure for that reason. The gain is for decode-bound output, so a conversation that mostly generates a few tokens will see less.
 
+## Qwen decode: I/O worker count and buffered fill (no effect)
+
+With `s3fifo` on and the same 300-token prompt / 120 decode tokens: `FLASHNEXT_IO_WORKERS` 6, 8, 16, 24 and 32 all gave 2.55-2.57 tok/s (the app already uses 8). The decode read path is saturating the SSD at any of these counts. `pool-buffered-fill` also gave nothing in this setup (2.45 and 2.48 tok/s alone, 2.61 with `s3fifo` against 2.62 for `s3fifo` alone), unlike the +13-30% recorded on 14 Nov, so its gain depends on page-cache state and is not reproduced here.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

@@ -10,6 +10,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            PageHeader(title: "Settings", systemImage: "gearshape",
+                       subtitle: "Engine, model, cache and privacy preferences — stored on this Mac.")
             Section("Engine") {
                 TextField("Local API port", text: $port.value)
                     .onSubmit(applyPort).onChange(of: port.value) { _, _ in applyPort() }

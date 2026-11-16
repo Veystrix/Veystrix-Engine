@@ -52,19 +52,18 @@ struct StatisticsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Statistics").font(.largeTitle.weight(.semibold))
-                    Text("Lifetime totals across every session. Counts and times only: no prompts or answers are stored.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Picker("Period", selection: $range.value) {
-                    ForEach(UsageRange.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu).frame(width: 170)
-                .onChange(of: range.value) { _, _ in Task { await reload(force: true) } }
-            }
+            PageHeader(
+                title: "Statistics",
+                systemImage: "chart.bar.xaxis",
+                subtitle: "Lifetime totals across every session. Counts and times only — no prompts or answers are stored.",
+                trailing: AnyView(
+                    Picker("Period", selection: $range.value) {
+                        ForEach(UsageRange.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu).frame(width: 170)
+                    .onChange(of: range.value) { _, _ in Task { await reload(force: true) } }
+                )
+            )
             if let m = message.value { Text(m).font(.footnote).foregroundStyle(.secondary) }
         }
     }

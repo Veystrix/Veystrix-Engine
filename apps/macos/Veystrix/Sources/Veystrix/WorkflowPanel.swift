@@ -70,7 +70,8 @@ struct WorkflowPanel: View {
     }
 
     private var launchForm: some View {
-        GroupBox("Native workflows") {
+        Panel(title: "Native workflows", systemImage: "square.stack.3d.up",
+              subtitle: "Run a multi-agent Swarm or Overnight workflow against a repository.") {
             VStack(alignment: .leading, spacing: 9) {
                 Picker("Mode", selection: $form.value.mode) {
                     ForEach(WorkflowMode.allCases) { Text($0.label).tag($0) }
@@ -128,7 +129,8 @@ struct WorkflowPanel: View {
     }
 
     private var progress: some View {
-        GroupBox("Workflow progress") {
+        Panel(title: "Workflow progress", systemImage: "hourglass.circle",
+              subtitle: "Pause, resume or cancel a running workflow and open its report.") {
             VStack(alignment: .leading, spacing: 9) {
                 Picker("Workflow", selection: $display.value.selected) {
                     Text("Choose a workflow").tag("")

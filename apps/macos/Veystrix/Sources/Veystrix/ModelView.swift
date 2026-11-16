@@ -254,10 +254,3 @@ struct ModelView: View {
         if panel.runModal() == .OK, let url = panel.url { model.chooseCheckpoint(url) }
     }
 }
-
-private struct StatusDot: View {
-    let color: Color
-    var body: some View {
-        Circle().fill(color.gradient).frame(width: 9, height: 9)
-    }
-}

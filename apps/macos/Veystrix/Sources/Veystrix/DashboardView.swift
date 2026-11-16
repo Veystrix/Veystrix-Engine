@@ -55,22 +55,25 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading) {
-                Text("Dashboard").font(.largeTitle.bold())
-                StatusBadge(state: engine.state)
-            }
-            Spacer()
-            Button { model.requestStart() } label: { Label("Start Engine", systemImage: "play.fill") }
-                .buttonStyle(.borderedProminent)
-                .disabled(engine.state.isActive || engine.state == .stopping || engine.isExternallyManaged || model.checkpoint?.isUsable != true)
-                .help(model.checkpoint?.isUsable == true ? "Load the model and start the local server" : "Choose a valid model folder first")
-                .accessibilityHint("Loads the model. Nothing starts automatically.")
-            Button { Task { await engine.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
-                .disabled(engine.state == .stopped || engine.isExternallyManaged)
-            Button { model.requestRestart() } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                .disabled(engine.state != .running || engine.isExternallyManaged)
-        }
+        PageHeader(
+            title: "Dashboard",
+            systemImage: "gauge.with.dots.needle.67percent",
+            subtitle: "Local inference at a glance · engine \(engine.state.label.lowercased())",
+            trailing: AnyView(
+                HStack(spacing: 8) {
+                    Button { model.requestStart() } label: { Label("Start", systemImage: "play.fill") }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(engine.state.isActive || engine.isExternallyManaged || model.checkpoint?.isUsable != true)
+                        .help(model.checkpoint?.isUsable == true ? "Load the model and start the local server" : "Choose a valid model folder first")
+                    Button { Task { await engine.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
+                        .disabled(engine.state == .stopped || engine.isExternallyManaged)
+                    Button { model.requestRestart() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless)
+                        .help("Restart the engine")
+                        .disabled(engine.state != .running || engine.isExternallyManaged)
+                }
+            )
+        )
     }
 
     private var checkpointName: String {
@@ -165,31 +168,13 @@ extension CheckpointReport {
 struct Tile: View {
     let title: String, value: String, detail: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.8)
-            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
+        StatCard(title: title, value: value, detail: detail)
     }
 }
 
 struct Banner: View {
     let symbol: String, tint: Color, title: String, text: String
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol).foregroundStyle(tint).imageScale(.large)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                Text(text).font(.callout).textSelection(.enabled)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
+        NoticeBanner(systemImage: symbol, tint: tint, title: title, text: text)
     }
 }

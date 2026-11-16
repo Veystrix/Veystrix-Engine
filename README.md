@@ -16,25 +16,29 @@ NVIDIA Nemotron 3.5 Lightning streamed runtime (see `docs/nemotron35/`; real
 inference needs explicit authorization and has not been validated). The earlier
 K2-Horizon, Bonsai-2 and Qwen3.8-27B research runtimes were removed.
 
-## Current status (evidence recorded 2026-11-08, one machine)
+## Current status (evidence through 2026-11-16, one machine)
 
-Merged from the `docs/chat-agentic-guides-20261108` branch. The `--mode chat|agentic` launcher and the supervised
-`./serve.sh` are present in this tree; the 2026-11-08 "unpublished working tree" warning no longer applies to this
-repository (it applied to the old public MIT repository).
+Everything below was measured on one M4 MacBook Air (16 GB unified memory, no fan) and is recorded in
+`docs/performance/` and `results/`. These are selected runs, not general performance claims. The 20 tok/s release
+gate is still **open on both models**: both are limited by SSD expert reads, not by the GPU.
 
 | Capability | Evidence | Status |
 |---|---|---|
-| Q4 checkpoint loading and token generation | Real 113 GB checkpoint on M4 MacBook Air | Demonstrated |
-| Personal multi-turn CHAT with `--pool-gb 0` | Five completed responses; ~2.7-3.0 decode tokens/sec | Works on the development machine |
-| CHAT with a fixed 2 GB decode expert pool | Compressor/available-memory guard stopped the first answer | Not recommended as an initial setting |
-| CHAT auto-purge | Startup recovery executed; no OS purge during inference | Experimental |
-| Balanced 2,048-token prefill | Historical 2K full-model run ~61-64 prefill tokens/sec | Preliminary, specific workload |
-| Same-plan 2K prefix caching | 2,046-token RAM/SSD restores; identical 64-token continuation and 124 state tensors | Validated in isolated full-model experiments |
-| AGENTIC API server + harnesses | Protocol and mock-server tests pass offline (Hermes CLI, Qwen Code); real-model harness runs are not complete | End-to-end on the real checkpoint **unverified** |
-| 4K / 8K / 10K+ long-context operation | See [docs/flashnext/](docs/flashnext/) status files; layer-major runs are preliminary and opt-in | Not verified as a long-lived server |
+| Qwen Flash-Next real-checkpoint chat | 113 GB Q4 checkpoint, SSD-streamed experts; ~2.25–2.86 tok/s decode with the pool off | Demonstrated; SSD-bound |
+| Nemotron 3.5 Lightning real-checkpoint chat | INT8 KV, automatic pool; 5.3–6.5 tok/s in recorded traffic, ~7.1–7.4 tok/s in app-like 512×128 cells after the Nov-15 fixes | Demonstrated; GPU ~30% while waiting on SSD |
+| Nemotron 8K prefill | 252 → 355.6 tok/s from the adopted Nov-16 changes (prefetch order, SDPA prefill, pipelined experts, early shared expert, fused Mamba-2 scan) | Measured on the real checkpoint |
+| Qwen prefill turns | Exact opt-in flag set: 1.4–1.7K-token agentic turns 51 → 27 s, larger turns 105–112 s → 42–69 s; 24/24 quality cases token-identical | Measured, opt-in |
+| Prefix cache (both models) | RAM/SSD restoration with identical continuations and state tensors; one shared 80 GB quota | Validated in recorded runs |
+| Lookup drafting / read-ahead / speculative decoding | No gain on this machine: extra verified rows route to different experts and add SSD reads | Rejected with evidence; flags stay off |
+| AGENTIC API server + harnesses | Protocol and mock-server tests pass; real-model harness runs are not complete | End-to-end on the real checkpoint **unverified** |
+| Native Swarm / Overnight workflows | CLI, offline mock and recorded runs | Working, opt-in |
+| macOS app | Redesigned UI with per-model cache/context controls; ~434 MB with the embedded engine; latest CI green | Built, signed and launches |
 
-Data are from a single machine and selected runs; they do not establish general performance or guarantee no quality
-regression. Public performance claims live in the public repository's `docs/performance.md` and only include full
+The accepted engineering rule is lossless only: 4-bit weights, no pruning, no expert or token dropping. Anything
+that changes tokens is opt-in and carries a measured quality check. See the
+[15 November handover](docs/performance/handoff-2026-11-15.md) and the
+[16 November overnight report](docs/performance/overnight-2026-11-16.md) for the current evidence and the rejected
+approaches. Public performance claims live in the public repository's `docs/performance.md` and only include full
 top-10 routing results.
 
 ## Primary runtime: Flash-Next (SSD-streamed sparse MoE)

@@ -128,8 +128,9 @@ struct HarnessView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Agents").font(.largeTitle.bold())
-                GroupBox("Local endpoint") {
+                PageHeader(title: "Agents", systemImage: "point.3.connected.trianglepath.dotted",
+                           subtitle: "Harness setup first — Swarm and Overnight workflows are at the bottom.")
+                Panel(title: "Local endpoint", systemImage: "network", subtitle: "The engine address supported harnesses connect to.") {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledContent("Base URL") { Text(model.baseURL).textSelection(.enabled) }
                         LabeledContent("Connection") { Text(engine.state.label) }

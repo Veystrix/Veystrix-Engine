@@ -24,12 +24,25 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selection.value) { section in
-                Label(section.rawValue, systemImage: section.symbol)
-                    .tag(section)
-                    .accessibilityLabel(section.rawValue)
+            List {
+                Section {
+                    ForEach(SidebarItem.allCases) { section in
+                        Label(section.rawValue, systemImage: section.symbol)
+                            .tag(section)
+                            .accessibilityLabel(section.rawValue)
+                    }
+                } header: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles.rectangle.stack.fill")
+                            .foregroundStyle(AppTheme.gradient())
+                        Text("VEYSTRIX").font(.caption.bold())
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
             }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 190)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 200)
             .safeAreaInset(edge: .bottom) { SidebarStatus() }
         } detail: {
             switch selection.value ?? .dashboard {

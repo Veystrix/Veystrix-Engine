@@ -169,6 +169,7 @@ struct ChatView: View {
     @StateObject private var effort = LocalState(ChatReasoningEffort.medium)
     @StateObject private var useExplicitLimit = LocalState(false)
     @StateObject private var explicitLimitText = LocalState("")
+    @StateObject private var showOptions = LocalState(false)
 
     private var activeModelID: String? {
         engine.health?.installedModelID ?? engine.health?.model
@@ -186,141 +187,276 @@ struct ChatView: View {
         currentConversation?.messages.last(where: { $0.finishReason != nil })?.finishReason
     }
 
+    private var lastMessageID: UUID? { currentConversation?.messages.last?.id }
+
     var body: some View {
         HSplitView {
-            VStack(alignment: .leading) {
-                HStack {
-                    Button("New") { if let active = activeModelID { chat.new(model: active) } }
-                        .disabled(activeModelID == nil)
-                    Button("Delete") { chat.delete() }
-                        .disabled(chat.streaming || chat.selection == nil)
-                }.padding(.horizontal)
+            conversationSidebar
+            conversationPane
+        }
+        .navigationTitle("Chat")
+    }
+
+    // MARK: - sidebar
+
+    private var conversationSidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("Conversations", systemImage: "bubble.left.and.bubble.right")
+                    .font(.headline)
+                Spacer()
+                Button { if let active = activeModelID { chat.new(model: active) } } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("New conversation")
+                .disabled(activeModelID == nil)
+                Button { chat.delete() } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+                    .help("Delete conversation")
+                    .disabled(chat.streaming || chat.selection == nil)
+            }
+            .padding(12)
+
+            Divider()
+
+            if chat.conversations.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.title).foregroundStyle(.secondary)
+                    Text("No conversations yet").font(.subheadline)
+                    Text("Start one with the pencil above.").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
                 List(selection: $chat.selection) {
                     ForEach(chat.conversations) { c in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(c.title).lineLimit(1)
-                                if chat.isStreaming(c.id) {
-                                    ProgressView().controlSize(.mini)
-                                        .accessibilityLabel("Generating")
-                                }
-                            }
-                            Text(c.model).font(.caption2).foregroundStyle(.secondary)
-                        }.tag(Optional(c.id))
-                    }
-                }
-            }.frame(minWidth: 180, idealWidth: 220, maxWidth: 270)
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(activeModelID ?? "No model loaded").font(.headline)
-                        Text(telemetrySummary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if engine.state == .starting {
-                        ProgressView().controlSize(.small)
-                        Text("Loading…")
-                    }
-                    Picker("Reasoning", selection: $effort.value) {
-                        ForEach(ChatReasoningEffort.allCases) { level in
-                            Text(level.label).tag(level)
-                        }
-                    }
-                    .frame(width: 175)
-                }
-
-                HStack(spacing: 12) {
-                    Text(useExplicitLimit.value ? "Output limit: explicit debug cap" : "Output limit: Unlimited (stops on EOS, context, safety, or cancel)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Toggle("Debug limit", isOn: $useExplicitLimit.value)
-                        .toggleStyle(.checkbox)
-                        .font(.caption)
-                        .disabled(chat.streaming)
-                    if useExplicitLimit.value {
-                        TextField("Tokens", text: $explicitLimitText.value)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 90)
-                            .disabled(chat.streaming)
-                    }
-                }
-
-                DisclosureGroup("Optional system prompt") {
-                    TextField("No system prompt", text: $system.value).textFieldStyle(.roundedBorder)
-                }
-
-                ScrollViewReader { _ in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            if let c = currentConversation {
-                                ForEach(c.messages) { m in
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack {
-                                            Text(m.role.capitalized).font(.caption.bold())
-                                            if let finish = m.finishReason, m.role == "assistant" {
-                                                Text("• \(finish)").font(.caption2).foregroundStyle(.secondary)
-                                            }
-                                            if let u = m.usage, m.role == "assistant" {
-                                                Text("• \(u.completionTokens) out · \(u.promptTokens) in (\(u.cachedTokens) cached)")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            if m.role == "assistant" {
-                                                Button("Copy") {
-                                                    NSPasteboard.general.clearContents()
-                                                    NSPasteboard.general.setString(m.content, forType: .string)
-                                                }.buttonStyle(.borderless)
-                                            }
-                                        }
-                                        if let reasoning = m.reasoningContent, !reasoning.isEmpty {
-                                            DisclosureGroup("Reasoning") {
-                                                Text(reasoning)
-                                                    .font(.callout)
-                                                    .foregroundStyle(.secondary)
-                                                    .textSelection(.enabled)
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                            }
-                                        }
-                                        let placeholder = (m.reasoningContent?.isEmpty == false) ? "Thinking…" : "…"
-                                        Text(m.content.isEmpty ? placeholder : m.content)
-                                            .textSelection(.enabled)
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "bubble.left.fill")
+                                .foregroundStyle(c.model.contains("nemotron") ? Color.purple : Color.blue)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(c.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                                HStack(spacing: 4) {
+                                    Text(c.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    if chat.isStreaming(c.id) {
+                                        ProgressView().controlSize(.mini)
+                                            .accessibilityLabel("Generating")
                                     }
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                                    .id(m.id)
                                 }
                             }
-                        }.padding(.vertical)
-                    }
-                }
-
-                if let error = chat.error {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled).font(.callout)
-                }
-
-                HStack(alignment: .bottom) {
-                    TextField("Message", text: $draft.value, axis: .vertical)
-                        .lineLimit(2...6)
-                        .textFieldStyle(.roundedBorder)
-                    if chat.streaming {
-                        Button(role: .destructive) { chat.stop() } label: {
-                            Label("Stop", systemImage: "stop.circle.fill")
+                            Spacer(minLength: 0)
                         }
-                        .keyboardShortcut(.escape, modifiers: [])
-                    } else {
-                        Button("Send") { submitMessage() }
-                            .disabled(engine.state != .running || activeModelID == nil || draft.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .keyboardShortcut(.return, modifiers: .command)
+                        .padding(.vertical, 3)
+                        .tag(Optional(c.id))
                     }
                 }
-            }.padding().frame(minWidth: 420)
-        }.navigationTitle("Chat")
+                .listStyle(.sidebar)
+            }
+        }
+        .frame(minWidth: 190, idealWidth: 230, maxWidth: 280)
+    }
+
+    // MARK: - conversation
+
+    private var conversationPane: some View {
+        VStack(spacing: 12) {
+            chatHeader
+            if showOptions.value { optionsCard }
+            messagesArea
+            if let error = chat.error { NoticeBanner(systemImage: "exclamationmark.triangle.fill", tint: .red, title: "Something went wrong", text: error) }
+            composer
+        }
+        .padding(16)
+        .frame(minWidth: 460)
+    }
+
+    private var chatHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: activeModelID?.contains("nemotron") == true ? "bolt.horizontal.circle.fill" : "sparkles.rectangle.stack.fill")
+                .font(.title2)
+                .foregroundStyle(AppTheme.gradient())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(activeModelID ?? "No model loaded").font(.headline)
+                Text(telemetrySummary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if engine.state == .starting {
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Reasoning", selection: $effort.value) {
+                ForEach(ChatReasoningEffort.allCases) { Text($0.label).tag($0) }
+            }
+            .frame(width: 160)
+            Button { showOptions.value.toggle() } label: { Image(systemName: "slider.horizontal.3") }
+                .buttonStyle(.borderless)
+                .help("Chat options")
+        }
+        .padding(13)
+        .background(AppTheme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.cardStroke, lineWidth: 1))
+    }
+
+    private var optionsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Output limit").font(.subheadline.weight(.medium))
+                Spacer()
+                Picker("", selection: $useExplicitLimit.value) {
+                    Text("Unlimited").tag(false)
+                    Text("Custom").tag(true)
+                }
+                .pickerStyle(.segmented).frame(width: 200)
+            }
+            if useExplicitLimit.value {
+                TextField("Max tokens", text: $explicitLimitText.value)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+            }
+            Text(useExplicitLimit.value
+                 ? "A debug cap stops generation early. The engine still clamps it to the room left in the context."
+                 : "Unlimited: generation stops on EOS, the context limit, a safety guard, or your Stop button.")
+                .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            TextField("Optional system prompt", text: $system.value, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...3)
+        }
+        .padding(13)
+        .background(AppTheme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.cardStroke, lineWidth: 1))
+    }
+
+    private var messagesArea: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Group {
+                    if let c = currentConversation, !c.messages.isEmpty {
+                        LazyVStack(spacing: 14) {
+                            ForEach(c.messages) { message in
+                                messageBubble(message)
+                                    .id(message.id)
+                            }
+                        }
+                    } else {
+                        EmptyState(systemImage: "message.and.waveform",
+                                   title: "A fresh conversation",
+                                   text: "Ask the running model anything. Replies stream in as they are generated; reasoning and token usage stay available on each answer.")
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: currentConversation?.messages.count) { _, _ in scrollToLatest(proxy) }
+            .onChange(of: lastMessageID) { _, _ in scrollToLatest(proxy) }
+            .onAppear { scrollToLatest(proxy) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        guard let id = lastMessageID else { return }
+        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .bottom) }
+    }
+
+    @ViewBuilder
+    private func messageBubble(_ message: ChatMessage) -> some View {
+        let isUser = message.role == "user"
+        HStack(alignment: .top, spacing: 10) {
+            if !isUser {
+                Image(systemName: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(AppTheme.gradient(), in: Circle())
+            }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(isUser ? "You" : "Assistant").font(.caption.bold()).foregroundStyle(.secondary)
+                    if !isUser, let finish = message.finishReason {
+                        Text("· \(finish)").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if !isUser, let u = message.usage {
+                        Text("· \(u.completionTokens) out / \(u.promptTokens) in (\(u.cachedTokens) cached)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                        DisclosureGroup {
+                            Text(reasoning)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } label: {
+                            Label("Reasoning", systemImage: "brain")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
+                    let placeholder = (message.reasoningContent?.isEmpty == false) ? "Thinking…" : "…"
+                    Text(message.content.isEmpty ? placeholder : message.content)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(message.content.isEmpty ? .secondary : .primary)
+                }
+                .padding(12)
+                .background(
+                    (isUser ? AnyShapeStyle(AppTheme.gradient().opacity(0.16)) : AnyShapeStyle(AppTheme.cardFill)),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isUser ? Color.accentColor.opacity(0.22) : AppTheme.cardStroke, lineWidth: 1)
+                )
+                .frame(maxWidth: 620, alignment: isUser ? .trailing : .leading)
+
+                if !isUser && !message.content.isEmpty {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(message.content, forType: .string)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            if isUser {
+                Image(systemName: "person.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+            }
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Message the model…", text: $draft.value, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .lineLimit(2...6)
+                .padding(10)
+                .background(AppTheme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AppTheme.cardStroke, lineWidth: 1))
+            if chat.streaming {
+                Button(role: .destructive) { chat.stop() } label: {
+                    Label("Stop", systemImage: "stop.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.escape, modifiers: [])
+            } else {
+                Button { submitMessage() } label: {
+                    Label("Send", systemImage: "arrow.up.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(engine.state != .running || activeModelID == nil || draft.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .keyboardShortcut(.return, modifiers: .command)
+            }
+        }
     }
 
     private func submitMessage() {

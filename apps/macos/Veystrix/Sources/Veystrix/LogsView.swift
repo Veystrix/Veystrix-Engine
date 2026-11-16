@@ -13,18 +13,26 @@ struct LogsView: View {
     private var exportMessage: String? { st.exportMessage }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                PageHeader(title: "Logs", systemImage: "doc.text.magnifyingglass",
+                           subtitle: "Live app and engine events · newest at the bottom")
+                Spacer()
+                Button("Clear") { model.logs.clear() }
+                Button("Export Diagnostics…") { export() }
+                    .buttonStyle(.borderedProminent)
+                    .help("Writes a sanitized report: no keys, prompts or user name")
+            }
             HStack {
-                TextField("Filter", text: $st.filter).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Filter log lines", text: $st.filter).textFieldStyle(.plain).frame(maxWidth: 260)
                 Toggle("App", isOn: $st.showApp).toggleStyle(.checkbox)
                 Toggle("Engine", isOn: $st.showEngine).toggleStyle(.checkbox)
                 Spacer()
-                Button("Export Diagnostics…") { export() }
-                    .help("Writes a sanitized report: no keys, prompts or user name")
-                Button("Clear") { model.logs.clear() }
             }
             .padding(10)
-            Divider()
+            .background(AppTheme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AppTheme.cardStroke, lineWidth: 1))
             ScrollViewReader { proxy in
                 List(visible) { line in
                     HStack(alignment: .top, spacing: 8) {

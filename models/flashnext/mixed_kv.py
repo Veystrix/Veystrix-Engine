@@ -7,6 +7,8 @@ Only the bounded recent window has a second representation.
 """
 from __future__ import annotations
 
+import os
+
 import mlx.core as mx
 from mlx_vlm.models.qwen4_exp.language import QSAKVCache
 
@@ -27,6 +29,63 @@ def _slice(value, start, end):
     if isinstance(value, tuple):
         return tuple(a[..., start:end, :] for a in value)
     return value[..., start:end, :]
+
+
+FLAG_FUSED_GATHER = "FLASHNEXT_QSA_FUSED_GATHER"   # opt-in: gather and dequantize INT8 rows in one kernel (bit-identical)
+
+
+def fused_gather_enabled() -> bool:
+    value = os.environ.get(FLAG_FUSED_GATHER, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_FUSED_GATHER} must be 0 or 1")
+    return value == "1"
+
+
+_FUSED_SOURCE = """
+    uint d4 = thread_position_in_grid.x;
+    uint si = thread_position_in_grid.y;
+    uint th = thread_position_in_grid.z;
+    uint h = th % NH;
+    int row = idx[(th / NH) * NS + si];
+    uint base = (h * NCAP + (uint)row);
+    uint word = w[base * DW + d4];
+    for (uint k = 0; k < 4; k++) {
+        uint q = (word >> (8 * k)) & 0xFFu;
+        uint d = d4 * 4 + k;
+        uint g = d / GSZ;
+        float r = static_cast<float>(sc[base * NG + g]) * static_cast<float>(q) + static_cast<float>(bi[base * NG + g]);
+        out[((th * NS) + si) * ND + d] = static_cast<bfloat16_t>(r);
+    }
+"""
+_FUSED_KERNEL = [None]
+
+
+def _fused_dequantize_rows(parts, indices, group):
+    """``mx.dequantize(*gathered(parts, indices), group_size=group, bits=8)`` for one batch row without the packed copies.
+
+    ``parts`` are the INT8 affine arrays (uint32 words, bfloat16 scales and biases) shaped [1, H, capacity, ...]; ``indices`` is
+    [1, T, S]. The affine formula is the one MLX evaluates (a float product and sum rounded once to bfloat16; checked
+    bit-for-bit against ``mx.dequantize`` in the unit tests and on real cache rows). Returns [T, H, S, D] or None when the
+    layout is not the supported one (the caller then takes the reference path)."""
+    w, scales, biases = parts
+    if (w.ndim != 4 or w.shape[0] != 1 or indices.ndim != 3 or indices.shape[0] != 1 or w.dtype != mx.uint32
+            or scales.dtype != mx.bfloat16 or biases.dtype != mx.bfloat16 or scales.shape != biases.shape):
+        return None
+    heads, capacity, words = w.shape[1], w.shape[2], w.shape[3]
+    dim = words * 4
+    if scales.shape != (1, heads, capacity, dim // group) or dim % group:
+        return None
+    if _FUSED_KERNEL[0] is None:
+        _FUSED_KERNEL[0] = mx.fast.metal_kernel(name="flashnext_gather_dequantize8", input_names=["w", "sc", "bi", "idx"],
+                                                output_names=["out"], source=_FUSED_SOURCE)
+    queries, selected = indices.shape[1], indices.shape[2]
+    out = _FUSED_KERNEL[0](
+        inputs=[w, scales, biases, indices.astype(mx.int32)],
+        template=[("NH", heads), ("NS", selected), ("NCAP", capacity), ("DW", words), ("NG", dim // group), ("GSZ", group),
+                  ("ND", dim)],
+        grid=(words, selected, queries * heads), threadgroup=(words, 1, 1),
+        output_shapes=[(queries * heads, selected, dim)], output_dtypes=[mx.bfloat16])[0]
+    return out.reshape(queries, heads, selected, dim)
 
 
 def _unpack(value, bits, group):
@@ -110,6 +169,11 @@ class MixedPrecisionQSAKVCache(QSAKVCache):
         if recent_n == 0:
             return gather(self.keys, indices, 4), gather(self.values, indices, 4)
         at = mx.clip(indices - self.history_tokens, 0, recent_n - 1)
+        if self.history_tokens == 0 and fused_gather_enabled():
+            keys = _fused_dequantize_rows(self.recent_keys, at, self.group_size)
+            values = _fused_dequantize_rows(self.recent_values, at, self.group_size) if keys is not None else None
+            if keys is not None and values is not None:
+                return keys, values
         rk, rv = gather(self.recent_keys, at, 8), gather(self.recent_values, at, 8)
         if self.history_tokens == 0:
             return rk, rv

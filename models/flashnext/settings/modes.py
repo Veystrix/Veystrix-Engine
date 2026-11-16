@@ -112,6 +112,7 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_PREFILL_MERGE_TAIL": "0",           # a small final window runs on its own; folding it into the previous one is an opt-in below
     "FLASHNEXT_LAYER_MAJOR_SINGLE": "0",           # one-chunk prefills use the reference path; layer-major for them is an opt-in below
     "FLASHNEXT_QSA_DENSE_PREFIX": "0",             # per-query gather is the reference; the dense prefix is an explicit opt-in below
+    "FLASHNEXT_QSA_FUSED_GATHER": "0",             # INT8 rows are gathered then dequantized as separate ops; one fused kernel is an opt-in below
     "FLASHNEXT_QSA_SHARED_DENSE_KV": "0",         # leading dense queries gather a private K/V copy each; sharing one copy is an opt-in below
     "FLASHNEXT_QSA_MASKED_SPARSE": "0",            # likewise for the masked sparse path
 }
@@ -181,6 +182,11 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
     "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
     "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint; fails 1 of 24 cases of the full quality gate (tool_2: stop-or-continue near tie), see docs/performance/overnight-2026-11-16.md")
+EXPERIMENTAL["qsa-fused-gather"] = (
+    {"FLASHNEXT_QSA_FUSED_GATHER": "1"},
+    "experimental: the per-query K/V gather of the recent INT8 tier of the hybrid cache (contexts up to 8,192 tokens) runs as one "
+    "gather-and-dequantize kernel instead of six gathers plus a dequantize; the same affine arithmetic, bit-identical to "
+    "mx.dequantize (unit test and real layer outputs equal)")
 EXPERIMENTAL["qsa-shared-dense-kv"] = (
     {"FLASHNEXT_QSA_SHARED_DENSE_KV": "1"},
     "experimental: the leading queries of a prefill chunk that see every causal token share one gathered and dequantized K/V instead "
@@ -307,6 +313,8 @@ def plan_mode(mode, *, pool_gb=None, enable=(), available_gb=None, prefix_dir=No
         raise ModeError("single-chunk-layer-major needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
     if "merge-small-tail" in enable and not LAYER_MAJOR_MODES.intersection(enable):
         raise ModeError("merge-small-tail needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
+    if "qsa-fused-gather" in enable and not {"kv-tiered4"}.intersection(enable):
+        raise ModeError("qsa-fused-gather needs the hybrid tiered cache (kv-tiered4)")
     if "qsa-shared-dense-kv" in enable and not {"kv-k16v4", "kv-k8v4", "kv-tiered4", "qsa-gather"}.intersection(enable):
         raise ModeError("qsa-shared-dense-kv needs the gather QSA kernel (kv-tiered4, kv-k8v4, kv-k16v4 or qsa-gather)")
     if "qsa-fast-prefill" in enable and not {"kv-k16v4", "kv-k8v4", "kv-tiered4", "qsa-gather"}.intersection(enable):

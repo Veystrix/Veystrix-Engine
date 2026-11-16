@@ -9,7 +9,7 @@ class FlagNameTests(unittest.TestCase):
     def test_every_flag_name_exists_in_the_production_modules(self):
         from models.flashnext import (auto_reclaim, expert_io_stats, linear_state, memory_manager, pool_lifecycle,
                                       prefill, prefill_memory, prefill_scheduler, prefix_profiles, prefix_session, prefill_ring, progress,
-                                      quantized_kv, qsa_chunk, layer_major, store, expert_pool, ngram, memory_controller)
+                                      quantized_kv, qsa_chunk, layer_major, store, expert_pool, ngram, memory_controller, mixed_kv)
         known = {prefill_ring.FLAG_EXPERTS, prefill_ring.FLAG_SCRATCH, prefill.FLAG_CHUNK_TOKENS,
                  prefill.FLAG_CHUNK_POLICY, pool_lifecycle.FLAG, prefix_session.FLAG, prefix_session.FLAG_DIR,
                  prefix_session.FLAG_RAM_GB, prefix_session.FLAG_DISK_GB, prefix_session.FLAG_BOUNDARIES,
@@ -26,7 +26,7 @@ class FlagNameTests(unittest.TestCase):
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
                  prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION,
                  qsa_chunk.FLAG_DENSE_PREFIX, qsa_chunk.FLAG_MASKED_SPARSE, "FLASHNEXT_LAYER_MAJOR_SINGLE",
-                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL, expert_pool.POLICY_FLAG, qsa_chunk.FLAG_SHARED_DENSE}
+                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL, expert_pool.POLICY_FLAG, qsa_chunk.FLAG_SHARED_DENSE, mixed_kv.FLAG_FUSED_GATHER}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):

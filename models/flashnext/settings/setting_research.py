@@ -124,6 +124,7 @@ SETTINGS = (
     research("prefill-ring-scratch-later", "FLASHNEXT_PREFILL_RING_SCRATCH_LATER", parser=choice(("0", "1"), "prefill-ring-scratch-later")),
     research("qsa-masked-sparse", "FLASHNEXT_QSA_MASKED_SPARSE", parser=choice(("0", "1"), "qsa-masked-sparse")),
     research("qsa-shared-dense-kv", "FLASHNEXT_QSA_SHARED_DENSE_KV", parser=choice(("0", "1"), "qsa-shared-dense-kv")),
+    research("qsa-fused-gather", "FLASHNEXT_QSA_FUSED_GATHER", parser=choice(("0", "1"), "qsa-fused-gather")),
     research("qsa-masked-max-keys", "FLASHNEXT_QSA_MASKED_MAX_KEYS", "16384", "startup", integer, unset="16384"),
     research("qsa-masked-tile", "FLASHNEXT_QSA_MASKED_TILE", "256", "startup", integer, unset="256"),
     research("mtp-cache-limit-mb", "FLASHNEXT_MTP_CACHE_LIMIT_MB", "512", "startup", integer, unset="512"),

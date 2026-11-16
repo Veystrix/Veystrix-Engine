@@ -10,8 +10,20 @@ workload**, and ANE cannot execute the MoE experts. But the research produced
 **one concrete, bit-identical, 16 GB-relevant candidate** (expert-wise K=2 read
 sharing) and a clear inventory of what is and is not viable.
 
+## FINAL VERDICT (all research complete, 2026-11-17)
+
+**No bit-identical ANE path improves Veystrix prefill and decode on 16 GB.**
+All eight research threads are complete (see `experiments/ane/FINAL_ANSWER.md`).
+The one bit-identical candidate that survives — expert-wise K=2 read sharing —
+runs on CPU/Metal, not ANE. ANE is conclusively excluded as the speed mechanism
+by its baked weights, fp16-only numerics, ~90 µs dispatch floor, and the
+SSD-bound nature of the workload. Owner decision pending on whether to relax the
+bit-identical rule (which still yields no meaningful ANE speedup) or build the
+non-ANE K=2 candidate.
+
 ## Start here (in order)
 
+0. **`experiments/ane/FINAL_ANSWER.md`** — the definitive answer to the objective.
 1. **`experiments/ane/DECISION_SUMMARY.md`** — the synthesis: the K=2 candidate,
    the FusionML credibility downgrade, the maderix source corrections, and the
    bottom line. Read this first.

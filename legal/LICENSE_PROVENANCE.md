@@ -6,10 +6,11 @@ the owner's confirmation or a lawyer.** Audited 2026-11-10 on `development3.8` (
 **License update (2026-11-17):** this branch replaces the freeware draft with the Veystrix
 License (`LICENSE` and `legal/FREEWARE-LICENSE.txt`): free for personal use, explicitly
 including benchmarking/research, and a separate paid commercial license for business use.
-The owner's legal name is not stated anywhere in the repository (the old draft used a
-`[OWNER LEGAL NAME / TRADING NAME]` placeholder), so the new draft uses "Veystrix
-contributors" as a placeholder copyright holder. The owner must confirm the name and
-jurisdiction and have a lawyer review the text before release.
+The copyright holder for Veystrix-authored code is **Vardhanapu Kiran Vincent**,
+the sole owner of such code. This is not a claim over third-party or earlier
+MIT-licensed code, whose own notices are preserved in THIRD_PARTY_NOTICES.md and
+LICENSES/MIT-upstream.txt. The owner must confirm the jurisdiction and have a
+lawyer review the text before release.
 
 ## 1. What the repository establishes
 
@@ -57,7 +58,7 @@ Commit authorship (all refs):
 |---|---|---|---|
 | 1 | Who is the upstream author? | **Evidence points to a person other than the current owner.** 25 historical benchmark scripts under `results/flashnext/2026092*/run.sh` do `cd /Users/gioma/Developer/VEYSTRIX`, i.e. they were run from a different user account (`gioma`), and the commit identity `Gio Mantovani` merges the upstream author pull requests. The current owner's machine is `/Users/vincent`. This is an inference from the repository, not a fact the repository states. If the upstream author is a different person, the owner holds the code under the MIT grant only: it may be built on, modified and distributed inside a proprietary product with the notice kept, but it is **not** the owner's to relicense or to describe as owner-authored. | Owner confirms who the upstream author / `Gio Mantovani` is and whether that person agrees to being credited as in `THIRD_PARTY_NOTICES.md` (credit is required by the MIT license regardless). Lawyer reviews the combined-work position. Keep the notice either way. |
 | 2 | `Gio Mantovani`: under what terms did they contribute? | 9 of 10 commits merge the upstream author PRs, so this is probably the same person as the upstream author (see 1). The 1 real change is an internal research document. Contributions to a public repo that carries a license are made under that license (GitHub Terms of Service D.6), but a written confirmation is better. | Covered by item 1. The document is private and excluded from public releases either way. |
-| 3 | AI-assisted code. Branch names (`codex/...`), refs (`refs/codex/...`) and Claude Code sessions show substantial AI-assisted authorship. | Copyrightability and ownership of AI-generated material is unsettled and tool terms vary. It limits what can honestly be claimed as "owner-authored". | Lawyer review; keep human review and authorship records; do not assert exclusive authorship in marketing copy. |
+| 3 | AI-assisted code. Branch names (`codex/...`), refs (`refs/codex/...`) and Claude Code sessions show substantial AI-assisted authorship. | Copyrightability and ownership of AI-generated material is unsettled and tool terms vary. It limits what can honestly be claimed as "owner-authored". | Lawyer review; Vardhanapu Kiran Vincent is named as sole copyright holder of Veystrix-authored code in the license, subject to that review. |
 | 4 | Copied/adapted upstream code. `models/flashnext/compiled.py::_ple_call` copies the body of the upstream `Qwen4ExpPLELayer.__call__` (MLX-LM/MLX-VLM, MIT). (The Bonsai-2 Metal kernels were removed together with that backend.) | Requires the upstream copyright notice and may not be claimed as original. | Identify upstream files and add their MIT notices. Notices for MLX/MLX-LM are already in `THIRD_PARTY_NOTICES.md`. |
 | 5 | Checkpoint-supplied code. The K2-Horizon and Bonsai-2 backends (which loaded checkpoint code via `trust_remote_code`) were removed. | Resolved by removal; the remaining backends load no checkpoint-supplied code. | None. |
 | 6 | `opencv-python` wheels bundle FFmpeg (LGPL). | Bundling an LGPL library imposes relink/notice obligations. It enters through `mlx-vlm`. | Exclude `opencv-python` (and other vision-only dependencies) from the engine bundle if the shipped checkpoints are text-only, or ship the LGPL notices and relink path. |

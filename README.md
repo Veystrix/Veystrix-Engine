@@ -359,7 +359,7 @@ results/                    Per-run measurement records (one folder per run)
 
 ## License
 
-Veystrix is proprietary software, not open source as a whole. Under the [Veystrix License](LICENSE), individuals may use it free of charge for personal, non-commercial purposes — including benchmarking, performance testing, research and evaluation — while business, commercial and organizational use requires a separate paid commercial license (open an issue at https://github.com/joyboyreturns/Veystrix/issues). Code published earlier as VEYSTRIX under the MIT License keeps that license and notice (see LICENSE, LICENSES/, legal/). Models and dependencies use their own licenses. See [NOTICE](NOTICE) and [legal/THIRD_PARTY_NOTICES.md](legal/THIRD_PARTY_NOTICES.md). The Vontra checkpoint card carries the Qwen Community License 1.0; review it before use or redistribution.
+Veystrix is proprietary software, not open source as a whole. Copyright (c) 2026 Vardhanapu Kiran Vincent. Under the [Veystrix License](LICENSE), individuals may use it free of charge for personal, non-commercial purposes — including benchmarking, performance testing, research and evaluation — while business, commercial and organizational use requires a separate paid commercial license (open an issue at https://github.com/joyboyreturns/Veystrix/issues). Code published earlier as VEYSTRIX under the MIT License keeps that license and notice (see LICENSE, LICENSES/, legal/). Models and dependencies use their own licenses. See [NOTICE](NOTICE) and [legal/THIRD_PARTY_NOTICES.md](legal/THIRD_PARTY_NOTICES.md). The Vontra checkpoint card carries the Qwen Community License 1.0; review it before use or redistribution.
 
 ## Acknowledgements
 

@@ -397,6 +397,10 @@ Real 4,300-token cold prefill with the two exact Qwen kernel options (`qsa-share
 
 One hyper-connection at the prefill shape (2,048 tokens, 4 streams, 2,560 wide), bf16, measured per piece: norm 1.03 ms, down-projection 4.35 ms, div + SiLU 0.21 ms, up-projection 4.25 ms, sigmoid 1.07 ms, multiply + mean 2.20 ms, injection weights 0.76 ms (about 14 ms in all). The two projections are 61% and are GEMMs (the dense-GEMM option already covers them); the elementwise pieces a hand-written kernel could fuse (rounding after each original op, so it would stay bit-equal) are about 4.3 ms, which is at most 2 ms saved per call or about 0.4 s of a 43 s 4.3K prefill (1%). Not built.
 
+### Gather tile above 32 (cap kept at 32)
+
+With every exact option on, 4,300-token cold prefill, the tile cap temporarily raised in a local edit (reverted): tile 64 gave 41.7 / 41.6 s against 42.1 / 41.7 s for tile 32 (equal), MLX peak 6.68 against 6.66 GB; tile 128 gave 43.4 s (slower) with a 6.95 GB peak. Same output hash throughout. The cap of 32 in `qsa_chunk.gather_tile` stays: nothing is gained above it and memory grows.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Flash-Next 2,276 OK (3 skipped) and Nemotron 202 OK (8 skipped) at 13:20, after the Flash-Next `dense-gemm` commit; veystrix 961 OK (11 skipped) at 12:58 after the Nemotron dense-GEMM commit (the Flash-Next change does not touch it); Ran/OK lines read from the logs. Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

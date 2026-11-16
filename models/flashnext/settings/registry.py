@@ -1,6 +1,7 @@
 """Discover setting_*.py providers without importing MLX."""
 from __future__ import annotations
 
+import importlib
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -39,10 +40,16 @@ def get_registry(directory: Path | None = None) -> SettingRegistry:
     folder = directory or FOLDER
     # Packaged builds ship only bytecode, so no readable provider source is
     # distributed. A source checkout has only .py files and uses those.
-    compiled = sorted(folder.glob("setting_*.pyc"))
-    providers = compiled or sorted(folder.glob("setting_*.py"))
+    encrypted = sorted(folder.glob("setting_*.pyc.enc"))
     settings = []
-    for path in providers:
+    if encrypted and folder == FOLDER:
+        # Packaged builds: the import hook installed at startup decrypts these.
+        for path in encrypted:
+            name = f"models.flashnext.settings.{path.name.split('.')[0]}"
+            settings.extend(_provided(importlib.import_module(name)))
+        return SettingRegistry(settings)
+    compiled = sorted(folder.glob("setting_*.pyc"))
+    for path in (compiled or sorted(folder.glob("setting_*.py"))):
         settings.extend(_provided(_load(path)))
     for setting in settings:
         if not isinstance(setting, Setting):

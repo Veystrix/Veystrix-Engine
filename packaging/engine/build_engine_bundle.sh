@@ -89,6 +89,12 @@ find "$OUT/lib" -name '*.c' -delete
 [[ -f "$OUT/lib/models/flashnext/settings/registry.pyc" ]] || { echo "ERROR: registry missing"; exit 1; }
 [[ -z "$(find "$OUT/lib" -type f \( -name '*.py' -o -name '*.c' \) -print -quit)" ]] || { echo "ERROR: source files remain in bundle"; exit 1; }
 
+# Encrypt all compiled modules. Decompilers then see ciphertext instead of
+# bytecode; the per-build key lives in a native dylib, not in a Python file.
+echo "==> Encrypting compiled modules"
+"$PY" "$ROOT/packaging/engine/protect_engine.py" "$OUT/lib" || { echo "ERROR: bytecode protection failed"; exit 1; }
+[[ -z "$(find "$OUT/lib" -type f -name '*.pyc' -print -quit)" ]] || { echo "ERROR: unencrypted bytecode remains"; exit 1; }
+
 echo "==> License texts"
 "$PY" "$ROOT/packaging/legal/generate_legal.py" --out "$WORK/legal" --emit-texts "$OUT/licenses" >/dev/null \
   || { cp "$ROOT/legal/THIRD_PARTY_NOTICES.md" "$OUT/licenses/"; cp -R "$ROOT/LICENSES/." "$OUT/licenses/"; echo "   (generate_legal --emit-texts unavailable: copied notices only)"; }

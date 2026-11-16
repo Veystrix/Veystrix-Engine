@@ -21,13 +21,16 @@ be extracted — not to make analysis impossible.
 
 ## What it does not do
 
-- The engine ships as `.pyc`. Python bytecode decompiles easily; `.pyc` is
-  anti-clutter, **not obfuscation**. No readable source ships in the bundle:
-  settings providers are loaded from `.pyc`, and `native_read.c` is compiled
-  to a bundled `.dylib` at build time. The private git repo is what keeps the
-  editable source off GitHub.
-- A user with local access can remove the integrity check, patch the binary or
-  swap the manifest. The check catches casual changes and corrupted downloads.
+- The engine ships as **encrypted bytecode** (`.pyc.enc`). Each build generates
+  a random 256-bit key compiled into a small native dylib; a minimal import
+  hook decrypts modules in memory at load time. A decompiler now fails with
+  `bad marshal data` instead of recovering docstrings, strings and logic.
+  No readable source ships: settings providers load from encrypted bytecode,
+  and `native_read.c` is compiled to a bundled dylib. The private git repo is
+  what keeps the editable source off GitHub.
+- A user with local access can call the same key dylib, patch the import hook,
+  or remove the integrity check. Encryption stops decompilers, not a debugger.
+  It raises the cost from "unzip and disassemble" to "reverse the bootstrap".
 - No license keys, activation servers or entitlement checks are implemented.
 
 ## Real protection for a commercial product
@@ -53,10 +56,12 @@ Three layers, in order of importance:
    artifacts. This is the only thing that actually hides editable source.
 2. **No source in the bundle.** `build_engine_bundle.sh` compiles every module
    to legacy `.pyc`, precompiles `native_read.c` into
-   `native_read.bundled.dylib`, then deletes all `.py` and `.c` files and fails
-   the build if any remain. The settings registry reads `.pyc` providers first,
-   so packaged builds work without source; source checkouts still use `.py`.
-   This also removes the old runtime `xcrun clang` dependency.
+   `native_read.bundled.dylib`, deletes all `.py` and `.c` files, then encrypts
+   every `.pyc` into `.pyc.enc` with a per-build key compiled into
+   `_protect_key.dylib`. The build fails if any plaintext bytecode or source
+   remains. A tiny import hook (`_protect.py` + `sitecustomize.py`) decrypts in
+   memory; source checkouts never use it. This also removes the old runtime
+   `xcrun clang` dependency.
 3. **Behaviour is not source.** A determined user can still observe what the
    app does, dump strings from the binary and decompile bytecode. Do not put
    secrets, licence checks or valuable business logic in the client.

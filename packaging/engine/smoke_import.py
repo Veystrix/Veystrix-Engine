@@ -53,7 +53,7 @@ for banned in ("cv2", "scipy", "mlx_audio", "sounddevice", "miniaudio", "pip"):
 import mlx_vlm  # noqa: F401  (imports the package only; no model, no Metal session)
 print("imports ok")
 """
-for required in (python, lib / "models/flashnext/overnight.pyc", lib / "veystrix/cli.pyc", lib / "veystrix/session.pyc", lib / "models/flashnext/tests/bench/prefill_memory_harness.pyc", lib / "models/flashnext/tests/bench/bench_prefill_memory.pyc", lib / "models/flashnext/tests/bench/layer_gate_probe.pyc", lib / "models/nemotron35/inventory.pyc", lib / "veystrix/backends/nemotron35.pyc", lib / "veystrix/bench/telemetry.pyc", lib / "veystrix/bench/memory.pyc"):
+for required in (python, lib / "models/flashnext/overnight.pyc.enc", lib / "veystrix/cli.pyc.enc", lib / "veystrix/session.pyc.enc", lib / "models/flashnext/tests/bench/prefill_memory_harness.pyc.enc", lib / "models/flashnext/tests/bench/bench_prefill_memory.pyc.enc", lib / "models/flashnext/tests/bench/layer_gate_probe.pyc.enc", lib / "models/nemotron35/inventory.pyc.enc", lib / "veystrix/backends/nemotron35.pyc.enc", lib / "veystrix/bench/telemetry.pyc.enc", lib / "veystrix/bench/memory.pyc.enc"):
     if not required.is_file():
         sys.exit(f"mandatory bundle resource missing: {required}")
 if not os.access(python, os.X_OK):

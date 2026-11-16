@@ -45,6 +45,14 @@ class SourceHygieneTests(unittest.TestCase):
         self.assertIn("source files remain in bundle", script)
         self.assertNotIn("! -path '*/settings/setting_*.py'", script)
         self.assertIn("native_read.bundled.dylib", script)
+        self.assertIn("protect_engine.py", script)
+        self.assertIn("unencrypted bytecode remains", script)
+
+    def test_protection_script_encrypts_every_module(self):
+        script = (ROOT / "packaging" / "engine" / "protect_engine.py").read_text()
+        self.assertIn("encrypt(pyc.read_bytes(), secret)", script)
+        self.assertIn("pyc.unlink()", script)
+        self.assertIn("unencrypted bytecode remains", script)
 
 
 if __name__ == "__main__":

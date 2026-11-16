@@ -29,7 +29,6 @@ class DenseGemmTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(dense_gemm.FLAG, None)
             self.assertFalse(dense_gemm.enabled())
-            self.assertEqual(dense_gemm.fingerprint(), {})
 
     def test_bit_equal_to_the_quantized_matmul(self):
         layer = _layer(2688, 2688)

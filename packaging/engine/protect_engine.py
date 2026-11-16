@@ -54,6 +54,10 @@ def main() -> int:
         encrypted.write_bytes(encrypt(pyc.read_bytes(), secret))
         pyc.unlink()
         count += 1
+    # The bootstrap imports happen during the build and may leave caches for
+    # sitecustomize/_protect; those are plaintext and must not ship.
+    for cache in sorted(lib.rglob("__pycache__"), reverse=True):
+        shutil.rmtree(cache)
     remaining = list(lib.rglob("*.pyc"))
     if remaining:
         print(f"ERROR: unencrypted bytecode remains: {remaining[:3]}", file=sys.stderr)

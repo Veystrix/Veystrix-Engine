@@ -244,6 +244,10 @@ Raw-text prompt of 4,516 tokens (repository docs) with three planted facts at 8%
 
 `scripts/flashnext/real_run_guard.py`: when the child had already exited, `os.killpg` raised `PermissionError` on macOS after a thermal-level-2 stop (seen once, after the run had finished and written its output). `stop` now returns in that case and still re-raises if the child is alive.
 
+## Nemotron tool-call generations, fused scan on versus off (real model)
+
+Four tool-call prompts (450-454 tokens, JSON-only replies, greedy, 70 tokens). Fused scan on (default) and `VEYSTRIX_NEMOTRON_FAST_SSM=0` both produced valid JSON for all four. Three replies were identical; one differed in content: `run_shell` with `npm test -- --timeout=120000, timeout_s 180` (fused) against `timeout 120 python -m pytest tests/ -v, timeout_s 120` (stock). The stock reply is the more sensible one for this prompt, but one sample cannot separate a systematic loss from a greedy near-tie flipped by rounding. The fused scan is not bit-identical (teacher-forced KL 0.0076, top-1 agreement 0.969 against stock), and the same is true of the SDPA prefill attention that is also on by default; Qwen's rounding-level options were kept opt-in for this reason, so this default is an open question for the owner. Roll back with `VEYSTRIX_NEMOTRON_FAST_SSM=0` (about 11% of 8K prefill speed).
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

@@ -285,6 +285,16 @@ In-process, ChatML prompt of about 510 tokens with three tool definitions, greed
 
 Two attempts at a 16,000-token needle run with all six options (each started at thermal level 0) were stopped by the run guard's thermal rule (level 2 for 15 s) after 97-107 s of sustained prefill, with memory fine (floor 4.25-4.31 GiB, swap flat at 1,344 MiB). The fanless Air throttles before a 16K cold prefill (about 150 s at the 10K rate of 115 tok/s) can finish, so 16K was not measured; the guard's rule was left as is. The 10K run above did complete (109 s).
 
+## Code review of the branch (medium, against `unlimited-generation`)
+
+The automated review returned eight findings; none was a demonstrated failure. What I checked and what I did:
+
+- `merge-small-tail` lets one layer-major window grow to the window size plus the merged tail (4,096 + up to 2,048 = 6,144 tokens), so activation memory can exceed what a 4,096-token window needs, and the mid-prompt edge where the merged tail began is no longer a window end (a resume point for an interrupted prefill; the end-of-prompt snapshot is unaffected, anchors are only a preference for where a window ends). The measured peak did not rise (MLX peak 6.7 -> 6.6 GB for the 4,274-token prompt; six-option server stress memory above). The option is opt-in and off by default.
+- The Nemotron prefetch-order finding (a prefetch issued before the layer's output is evaluated could overwrite staged experts): fetched experts leave the staging area when they are taken (`mx.array` copies, or a dlpack view of an array the pool no longer owns), and real-model outputs were token-identical to the legacy order when it was adopted; `VEYSTRIX_NEMOTRON_PREFETCH_ORDER=legacy` restores the old order.
+- The scratch-ring finding (later-turn scratch pool left mapped after an exception): the later-turn option reuses the first-turn scratch lifetime (`release(state, failed)` in the prefill `finally`), and the cancel run above released it (available memory returned to 5.8-6.2 GiB, next request served).
+- The fused scan and SDPA prefill attention defaults for Nemotron are rounding-level changes that are on by default, which differs from the convention used for Qwen's rounding-level options (opt-in). I kept them on because of the measured gains and the tool-call comparison above, but this is the owner's decision; each has a rollback flag (`VEYSTRIX_NEMOTRON_FAST_SSM=0`, `VEYSTRIX_NEMOTRON_ATTENTION_PREFILL_SDPA=0`).
+- Findings about `veystrix/sampling.py`, `speculative.py`, `shared/prompt_lookup.py` and the Nemotron sampled-lookup path concern the prompt-lookup drafting experiment (off by default, no gain, recorded on 15 Nov); not changed here.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

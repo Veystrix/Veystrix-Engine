@@ -196,6 +196,19 @@ Memory and heat of these server runs (guard samples every second): minimum avail
 
 Suggested app launch: `--enable kv-tiered4 --enable short-throughput --enable later-turn-scratch-ring --enable single-chunk-layer-major --enable qsa-fast-prefill`. The first two options are exact; `qsa-fast-prefill` is rounding-level (KL 0.007-0.019 teacher-forced) and changes the cache fingerprint (existing Qwen prefix snapshots are not restored once). Evidence: `results/flashnext/*night-qwen-conv-*` (`usage.jsonl`, `guard.jsonl`).
 
+Larger turns (stress, same server, four growing requests of 14,000 characters: 4,274 tokens cold, then about 3,400-3,950 new tokens over cached histories of 4.3K, 8.2K and 11.7K tokens; 90 s cooldown between turns):
+
+| Turn prefill (new tokens) | baseline | all four options |
+|---|---|---|
+| 1 (4,274, cold) | 71.7 s (60 tok/s) | 63.4 s (67 tok/s) |
+| 2 (3,946) | 104.7 s (38 tok/s) | 36.7 s (108 tok/s) |
+| 3 (3,430) | 111.6 s (31 tok/s) | 34.2 s (100 tok/s) |
+| 4 (3,620) | 111.9 s (32 tok/s) | 37.3 s (97 tok/s) |
+
+About 3x faster per turn, but the memory margin is tighter, and this should be weighed by the owner: minimum available memory 3.18 GiB (baseline) against 2.03 GiB (all four); peak compressor 4.4 GB against 8.0 GB; swap 1,480 -> 1,528 MiB against 1,262 -> 1,640 MiB; thermal level 0 in both. All of it stays far below the app's 5,120 MiB swap ceiling and the guard's growth stop, and the ring's working-set check granted every lease, but the all-options runs lean on memory harder than the baseline runs. Where the margin matters more than the speed, `later-turn-scratch-ring` plus `single-chunk-layer-major` alone are exact and cost the least memory in the 1.5-1.8K-token runs above (minimum available 3.72 GiB).
+
+Small follow-ups (about 300 new tokens, the size of a tool result) take 23-28 s each with everything on: a few hundred tokens route to most of each layer's 512 experts, so the turn reads 45-70 GB at 3 GB/s whatever its length (the same cost as a 1,500-token turn). This is the SSD limit; only more RAM for expert caching, or fewer experts read (not lossless), would change it.
+
 ## Qwen (Flash-Next) one-chunk cold prefills: layer-major with read-ahead for 1,024-2,048 tokens (opt-in, exact)
 
 The app launches Qwen with `--enable kv-tiered4 --enable short-throughput`, i.e. the mode `layer-major-hybrid-4k`: 4,096-token layer-major windows, `FLASHNEXT_LAYER_MAJOR_MIN_TOKENS=2049`, and windows of up to 2,048 tokens executed chunk-major. So a prompt of 2,049 tokens or more already uses layer-major with read-ahead, and a prompt of up to 2,048 tokens (one chunk) takes `prefill._run_chunks`' one-span shortcut: each layer reads its routed experts and then computes, nothing overlapped. At 1,600 tokens that was 62 GB read (about 21 s of SSD time) in series with the compute, 34.8 s in all.

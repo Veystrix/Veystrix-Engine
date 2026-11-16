@@ -234,6 +234,10 @@ The 800 and 1,200 rows were measured with the `layer-major-4k` mode (not hybrid)
 
 With the six suggested flags on, a client that disconnected 10 s and 25 s into a 9,000-character prefill produced `request_cancelled` (`memory_stop: false`) in the flight log. The server then served a normal request each time (501 and 376 new tokens, 34 and 32 s, cold chunk path). Available memory returned to 5.8-6.2 GiB, swap stayed at 1.44-1.51 GB, thermal 0. The scratch ring is released on cancel.
 
+## Qwen decode: expert prefetch and decode overlap (no gain)
+
+In-process, app launch environment, 300-token prompt, 48 decode tokens, same token hash in all three: baseline 2.39 tok/s (20.1 s), `FLASHNEXT_EXPERT_PREFETCH=1` 2.38 tok/s, `FLASHNEXT_DECODE_OVERLAP=1` 2.41 tok/s. With `FLASHNEXT_PROFILE_IO=1` the baseline spent 77% of decode wall in `io_wait`; the critical read task waited 11.4 s in the 16-worker queue against 4.6 s in `pread`, which is the pool running at about 2.3 GB/s of the SSD's roughly 3 GB/s, not an idle pipeline. Each token reads about 0.95 GB (hit rate about 24% in a 349-slot pool). Decode on 16 GB is bytes-bound; only a larger resident pool (RAM) or fewer bytes would help, neither of which is available without raising memory pressure. Nothing changed.
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 193 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,257 OK (3 skipped). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

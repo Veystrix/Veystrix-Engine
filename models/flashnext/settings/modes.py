@@ -179,7 +179,7 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     {"FLASHNEXT_QSA_DENSE_PREFIX": "1", "FLASHNEXT_QSA_MASKED_SPARSE": "1"},
     "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
     "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
-    "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint")
+    "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint; fails 1 of 24 cases of the full quality gate (tool_2: stop-or-continue near tie), see docs/performance/overnight-2026-11-16.md")
 EXPERIMENTAL["s3fifo-pool"] = (
     {"FLASHNEXT_EXPERT_POOL_POLICY": "s3fifo"},
     "experimental: the decode expert pool evicts with S3-FIFO instead of LRU; the same experts and arithmetic (only which "

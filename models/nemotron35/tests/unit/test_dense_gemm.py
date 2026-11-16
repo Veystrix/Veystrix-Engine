@@ -53,6 +53,18 @@ class DenseGemmTests(unittest.TestCase):
         self.assertTrue(mx.array_equal(actual, expected).item())
         self.assertFalse(dense_gemm._bit_equal(layer))
 
+    def test_verification_does_not_advance_the_global_random_state(self):
+        layer = _layer(2688, 1024)
+        mx.random.seed(7)
+        expected = mx.random.normal((4,))
+        mx.random.seed(7)
+        from models.shared import dense_gemm as shared
+        shared._verdicts.clear()
+        dense_gemm._bit_equal(layer)
+        actual = mx.random.normal((4,))
+        mx.eval(expected, actual)
+        self.assertTrue(mx.array_equal(actual, expected).item())
+
     def test_small_row_counts_use_the_stock_path(self):
         layer = _layer(2688, 2688)
         x = mx.ones((1, 4, 2688), dtype=mx.bfloat16)

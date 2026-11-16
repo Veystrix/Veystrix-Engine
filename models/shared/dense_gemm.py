@@ -50,7 +50,8 @@ def _bit_equal(self):
         inputs = self.scales.shape[-1] * self.group_size
         verdict = True
         for rows in _VERIFY_ROWS:
-            x = (mx.random.normal((1, rows, inputs)) * 0.5).astype(mx.bfloat16)
+            # An explicit key: the check must not advance the global random state that seeded sampling depends on.
+            x = (mx.random.normal((1, rows, inputs), key=mx.random.key(rows)) * 0.5).astype(mx.bfloat16)
             quantized = mx.quantized_matmul(x, self.weight, self.scales, self.biases, transpose=True,
                                             group_size=self.group_size, bits=self.bits)
             dense = x @ mx.dequantize(self.weight, self.scales, self.biases, group_size=self.group_size, bits=self.bits).T

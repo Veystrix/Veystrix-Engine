@@ -37,8 +37,12 @@ def _provided(module: ModuleType) -> list[Setting]:
 
 def get_registry(directory: Path | None = None) -> SettingRegistry:
     folder = directory or FOLDER
+    # Packaged builds ship only bytecode, so no readable provider source is
+    # distributed. A source checkout has only .py files and uses those.
+    compiled = sorted(folder.glob("setting_*.pyc"))
+    providers = compiled or sorted(folder.glob("setting_*.py"))
     settings = []
-    for path in sorted(folder.glob("setting_*.py")):
+    for path in providers:
         settings.extend(_provided(_load(path)))
     for setting in settings:
         if not isinstance(setting, Setting):

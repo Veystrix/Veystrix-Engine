@@ -22,8 +22,10 @@ be extracted — not to make analysis impossible.
 ## What it does not do
 
 - The engine ships as `.pyc`. Python bytecode decompiles easily; `.pyc` is
-  anti-clutter, **not obfuscation**. Five settings modules and `native_read.c`
-  remain as source because the loader reads them that way.
+  anti-clutter, **not obfuscation**. No readable source ships in the bundle:
+  settings providers are loaded from `.pyc`, and `native_read.c` is compiled
+  to a bundled `.dylib` at build time. The private git repo is what keeps the
+  editable source off GitHub.
 - A user with local access can remove the integrity check, patch the binary or
   swap the manifest. The check catches casual changes and corrupted downloads.
 - No license keys, activation servers or entitlement checks are implemented.
@@ -42,6 +44,22 @@ be extracted — not to make analysis impossible.
 4. **Legal**: keep MIT notices for upstream code (see
    `legal/COMMERCIALIZATION_READINESS.md`); use a license that forbids
    redistribution and reverse engineering where enforceable.
+
+## Keeping source out of the download
+
+Three layers, in order of importance:
+
+1. **Private source repo.** Keep `Veystrix-Core` private; publish only release
+   artifacts. This is the only thing that actually hides editable source.
+2. **No source in the bundle.** `build_engine_bundle.sh` compiles every module
+   to legacy `.pyc`, precompiles `native_read.c` into
+   `native_read.bundled.dylib`, then deletes all `.py` and `.c` files and fails
+   the build if any remain. The settings registry reads `.pyc` providers first,
+   so packaged builds work without source; source checkouts still use `.py`.
+   This also removes the old runtime `xcrun clang` dependency.
+3. **Behaviour is not source.** A determined user can still observe what the
+   app does, dump strings from the binary and decompile bytecode. Do not put
+   secrets, licence checks or valuable business logic in the client.
 
 ## Publishing
 

@@ -9,7 +9,9 @@ one table of reads with a few numpy operations and ``native_read.c`` performs
 them with the GIL released, on a user-interactive concurrent queue. The
 destinations and bytes are unchanged.
 
-The library is built once per source digest into ``~/.cache/flashnext/native``.
+Packaged builds ship a precompiled ``native_read.bundled.dylib`` so no C source
+or compiler is needed on the user's Mac. Source checkouts build once per source
+digest into ``~/.cache/flashnext/native``.
 """
 from __future__ import annotations
 
@@ -30,6 +32,9 @@ READ_DTYPE = np.dtype([
 ])
 _LIB = [None]
 _LOCK = threading.Lock()
+# Packaged builds ship this precompiled library; no C source or compiler is
+# needed on the user's Mac. Source checkouts still build from native_read.c.
+BUNDLED_LIBRARY = Path(__file__).with_name("native_read.bundled.dylib")
 
 
 def _library() -> ctypes.CDLL:
@@ -39,7 +44,16 @@ def _library() -> ctypes.CDLL:
         return _LIB[0]
 
 
+def _open_library(library: Path) -> ctypes.CDLL:
+    handle = ctypes.CDLL(str(library))
+    handle.flashnext_batch_pread.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32]
+    handle.flashnext_batch_pread.restype = ctypes.c_int
+    return handle
+
+
 def _load_library() -> ctypes.CDLL:
+    if BUNDLED_LIBRARY.is_file():
+        return _open_library(BUNDLED_LIBRARY)
     source = Path(__file__).with_name("native_read.c")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     directory = Path(os.environ.get("VEYSTRIX_NATIVE_CACHE", "~/.cache/flashnext/native")).expanduser()
@@ -55,10 +69,7 @@ def _load_library() -> ctypes.CDLL:
             if result.returncode != 0:
                 raise RuntimeError(f"native_read build failed: {result.stderr.strip()}")
             partial.replace(library)
-    handle = ctypes.CDLL(str(library))
-    handle.flashnext_batch_pread.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int32]
-    handle.flashnext_batch_pread.restype = ctypes.c_int
-    return handle
+    return _open_library(library)
 
 
 class Batch:

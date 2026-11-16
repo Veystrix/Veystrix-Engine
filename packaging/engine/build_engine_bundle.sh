@@ -73,11 +73,21 @@ cp "$ROOT/veystrix/bench/"{__init__.py,telemetry.py,memory.py,provenance.py} "$O
 mkdir -p "$OUT/lib/models/flashnext/tests/bench"
 cp "$ROOT/models/flashnext/tests/__init__.py" "$OUT/lib/models/flashnext/tests/"
 cp "$ROOT/models/flashnext/tests/bench/"{__init__.py,prefill_memory_harness.py,bench_prefill_memory.py,layer_gate_probe.py} "$OUT/lib/models/flashnext/tests/bench/"
-# Compile next to the source (-b = legacy .pyc location, importable without the .py), then drop the .py files.
-# The settings registry discovers setting_*.py by globbing, so those stay as source.
+# Precompile the native helper. Packaged builds then need no C source and no
+# compiler on the user's Mac (a normal macOS install has no xcrun/clang).
+echo "==> Precompiling native_read.dylib"
+SRCDIR="$ROOT/models/flashnext"
+xcrun clang -O2 -dynamiclib -arch "$(uname -m)" "$SRCDIR/native_read.c" \
+  -o "$OUT/lib/models/flashnext/native_read.bundled.dylib"
+[[ -f "$OUT/lib/models/flashnext/native_read.bundled.dylib" ]] || { echo "ERROR: native dylib missing"; exit 1; }
+
+# Compile next to the source (-b = legacy .pyc location, importable without the .py), then drop every .py file.
+# The settings registry now globs setting_*.pyc first, so no provider source is shipped.
 "$PY" -m compileall -q -b -j 0 "$OUT/lib"
-find "$OUT/lib" -name '*.py' ! -path '*/settings/setting_*.py' -delete
+find "$OUT/lib" -name '*.py' -delete
+find "$OUT/lib" -name '*.c' -delete
 [[ -f "$OUT/lib/models/flashnext/settings/registry.pyc" ]] || { echo "ERROR: registry missing"; exit 1; }
+[[ -z "$(find "$OUT/lib" -type f \( -name '*.py' -o -name '*.c' \) -print -quit)" ]] || { echo "ERROR: source files remain in bundle"; exit 1; }
 
 echo "==> License texts"
 "$PY" "$ROOT/packaging/legal/generate_legal.py" --out "$WORK/legal" --emit-texts "$OUT/licenses" >/dev/null \

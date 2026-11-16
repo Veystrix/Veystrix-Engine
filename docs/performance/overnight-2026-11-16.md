@@ -261,7 +261,7 @@ The decode expert pool's replacement policy only changes which experts stay resi
 | cost-aware | 2.45, 153.2 GB | not repeated |
 | least-stale | 2.43, 153.5 GB | not repeated |
 
-S3-FIFO gives +5% decode speed and 5% fewer bytes read, reproducibly (alternating order). `--enable s3fifo-pool` sets `FLASHNEXT_EXPERT_POOL_POLICY=s3fifo`; default stays `lru` (the off value is in `EXPERIMENTAL_OFF`, test added). Not measured through the server yet, and the gain is for decode-bound output, so a conversation that mostly generates a few tokens will see less.
+S3-FIFO gives +5% decode speed and 5% fewer bytes read, reproducibly (alternating order). `--enable s3fifo-pool` sets `FLASHNEXT_EXPERT_POOL_POLICY=s3fifo`; default stays `lru` (the off value is in `EXPERIMENTAL_OFF`, test added). Through the real server with the six prefill options on (same prompt, 160 new tokens, prefix cache not hit, so each request includes a prefill of about 28-30 s; sampling is not greedy there, so texts differ): lru 93.8 and 95.0 s, s3fifo 89.8 s and (a reply that ended at 78 tokens) 60.2 s. Subtracting the prefill, that is about 2.4 tok/s for lru and 2.6-2.7 tok/s for s3fifo, consistent with the in-process +5-10%; it is a rough figure for that reason. The gain is for decode-bound output, so a conversation that mostly generates a few tokens will see less.
 
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 

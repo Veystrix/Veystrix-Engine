@@ -1,5 +1,27 @@
 # Changelog
 
+## Veystrix 1.0 (public release candidate)
+
+First public release. The model lineup is unchanged: Qwen 3.8 Flash-Next is the
+default and NVIDIA Nemotron 3.5 Lightning is experimental. This version marks
+the distribution and protection work, not a model swap.
+
+- **Source protection:** no editable source ships in the DMG; engine modules are
+  compiled to bytecode and encrypted with a key bound to runtime integrity
+  signals. Decompilers see ciphertext.
+- **Safety and integrity:** the app pins 218 bundled files and refuses to start
+  the engine when they change; the release binary has its symbols stripped.
+- **App:** persistent tab/composer state, encrypted chat history, MTP validation
+  in the checkpoint panel, a decode-explanation panel, and a Check for Updates
+  button in the sidebar footer (needs a signed Sparkle feed to find releases).
+- **Quality:** the Linux CI fast lane, full Nemotron unit coverage, fuzz-proof
+  checkpoint parsing and a GPU-free byte-math oracle.
+- **Build guardrails:** `make artifacts` verifies every protection on the built
+  app; no DMG is published without it.
+
+Internally the version is `1.0.0` (major.minor.patch) so Sparkle keeps a strictly
+increasing build number; the public name drops the trailing `.0`.
+
 ## Veystrix 3.8.1 (development, `qwen3.8-flash-next`)
 
 Not released. No hardware validation was done for these changes: no model was loaded.

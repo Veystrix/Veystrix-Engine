@@ -14,6 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _title(tag: str) -> str:
+    return _load("release_title", ROOT / "scripts" / "release" / "release_title.py").release_title(tag)
+
+
 def _load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -237,6 +241,31 @@ class EngineBundleClosureTests(unittest.TestCase):
                     if exists and as_file not in kept and as_package not in kept:
                         missing.append(f"{relative} imports {target} at load, which the bundle removes")
         self.assertEqual(missing, [])
+
+
+class ReleaseTitleTests(unittest.TestCase):
+    def test_public_name_drops_a_trailing_zero_patch(self):
+        self.assertEqual(_title("v1.0.0"), "Veystrix 1.0")
+        self.assertEqual(_title("v1.2.0"), "Veystrix 1.2")
+
+    def test_nonzero_patch_is_kept(self):
+        self.assertEqual(_title("v1.0.1"), "Veystrix 1.0.1")
+        self.assertEqual(_title("v2.3.4"), "Veystrix 2.3.4")
+
+    def test_project_version_matches_a_release_tag(self):
+        import tomllib
+        version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+        self.assertEqual(version, "1.0.0")
+        self.assertEqual(_title("v" + version), "Veystrix 1.0")
+
+    def test_build_number_is_strictly_increasing_from_major_minor_patch(self):
+        output = subprocess.run(
+            ["bash", "-c", 'source packaging/macos/common.sh; echo "$SHORT_VERSION|$BUILD_NUMBER"'],
+            cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(output, "1.0.0|1000001")
+
+    def test_changelog_names_the_public_release(self):
+        self.assertIn("## Veystrix 1.0", (ROOT / "CHANGELOG.md").read_text())
 
 
 if __name__ == "__main__":

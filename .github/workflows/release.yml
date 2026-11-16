@@ -151,6 +151,7 @@ jobs:
               echo
             fi
             cat ../docs/release/RELEASE_NOTES_TEMPLATE.md; } > notes.md
-          gh release create "$GITHUB_REF_NAME" -R joyboyreturns/Veystrix --title "Veystrix ${GITHUB_REF_NAME#v}" \
+          TITLE="$(python3 scripts/release/release_title.py "$GITHUB_REF_NAME")"
+          gh release create "$GITHUB_REF_NAME" -R joyboyreturns/Veystrix --title "$TITLE" \
             --notes-file notes.md --draft Veystrix-*.dmg Veystrix-*.zip SHA256SUMS.txt BUILD-INFO.txt
           echo "Draft release created in joyboyreturns/Veystrix. Review it, publish it, then commit updates/appcast.xml (if produced) to the public repo."

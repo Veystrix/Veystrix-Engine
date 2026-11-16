@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veystrix"
-version = "3.8.1.dev0"
+version = "1.0.0"
 description = "Veystrix: local inference engine for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.12"

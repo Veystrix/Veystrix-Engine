@@ -3,6 +3,14 @@
 Status: **audit of what the repository shows. Not legal advice. Items marked OPEN need
 the owner's confirmation or a lawyer.** Audited 2026-11-10 on `development3.8` (`a36840a`).
 
+**License update (2026-11-17):** this branch replaces the freeware draft with the Veystrix
+License (`LICENSE` and `legal/FREEWARE-LICENSE.txt`): free for personal use, explicitly
+including benchmarking/research, and a separate paid commercial license for business use.
+The owner's legal name is not stated anywhere in the repository (the old draft used a
+`[OWNER LEGAL NAME / TRADING NAME]` placeholder), so the new draft uses "Veystrix
+contributors" as a placeholder copyright holder. The owner must confirm the name and
+jurisdiction and have a lawyer review the text before release.
+
 ## 1. What the repository establishes
 
 | Fact | Evidence |
@@ -38,8 +46,10 @@ Commit authorship (all refs):
    * the Swift application, packaging and release tooling written new for Veystrix;
    * the Veystrix name, logo and icons (trademark/branding, no MIT grant covers them).
    It cannot be claimed as exclusively owned: the the upstream author code (OPEN 1), MLX / MLX-LM derived passages, Sparkle, and every dependency.
-3. **The source of the proprietary binary is still partly MIT.** The freeware license therefore
-   says so (section 6 and 12 of `legal/FREEWARE-LICENSE.txt`) and ships `THIRD_PARTY_NOTICES.md`.
+3. **The source of the proprietary binary is still partly MIT.** The Veystrix License therefore
+   says so (section 6 and 13 of `LICENSE` / `legal/FREEWARE-LICENSE.txt`) and ships
+   `THIRD_PARTY_NOTICES.md`. The Veystrix License applies only to Veystrix-owned code and
+   does not override the MIT or other third-party licenses.
 
 ## 3. OPEN items for the owner / a lawyer
 

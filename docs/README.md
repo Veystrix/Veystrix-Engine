@@ -41,6 +41,7 @@ collect runtime-specific correctness and experiment constraints.
 | [`hardware/MEMORY_SUPPORT.md`](hardware/MEMORY_SUPPORT.md) | Supported unified-memory tiers and pool caps |
 | [`measurement-standard.md`](measurement-standard.md) | Shared live-test and JSONL evidence rules |
 | [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) | Using the engine from other devices over Tailscale |
+| [`LICENSE`](../LICENSE) | Veystrix License: free for personal use (incl. benchmarking/research); paid commercial license required for business use |
 | [`results/flashnext/`](../results/flashnext/) | Retained Flash-Next records |
 | [`flashnext/graphics/`](flashnext/graphics/) | Flash-Next trace graphics and plots |
 | [`MLX/`](MLX/) | MLX Metal backend source notes; reference material, not workflow instructions |

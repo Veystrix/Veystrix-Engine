@@ -1,10 +1,11 @@
 # Veystrix Core
 
-> **Private repository (`joyboyreturns/Veystrix-Core`).** Veystrix is proprietary freeware. This
+> **Private repository (`joyboyreturns/Veystrix-Core`).** Veystrix is proprietary software. This
 > repository holds the engine, the macOS app, internal documentation and the full development
 > history. The public home (README, releases, update feed, license) is
-> [`joyboyreturns/Veystrix`](https://github.com/joyboyreturns/Veystrix). See
-> [legal/LICENSE_PROVENANCE.md](legal/LICENSE_PROVENANCE.md) for licensing status.
+> [`joyboyreturns/Veystrix`](https://github.com/joyboyreturns/Veystrix). The [Veystrix License](LICENSE)
+> is free for personal use (including benchmarking and research) and requires a paid commercial
+> license for business use. See [legal/LICENSE_PROVENANCE.md](legal/LICENSE_PROVENANCE.md) for licensing status.
 
 Veystrix streams sparse Mixture-of-Experts language models from SSD on
 low-memory Apple Silicon Macs. The primary runtime keeps the dense model
@@ -346,7 +347,7 @@ apps/macos/Veystrix/        Native SwiftUI app (VeystrixKit logic + UI + Sparkle
 packaging/                  engine bundle, macOS app/DMG/ZIP/appcast scripts, legal generators
 integrations/hermes/        Hermes Agent profile configurator and offline mock server
 integrations/pi/            pi agent extension pointer (canonical source: veystrix/pi_extension.py)
-legal/, LICENSES/           freeware license draft, provenance, SBOM, third-party notices
+legal/, LICENSES/           Veystrix License (draft), provenance, SBOM, third-party notices
 scripts/security/           secret scan and public-exposure audit
 veystrix/                    Shared chat, commands, settings, tools, and test engine
 tests/                      Project live-test terminal
@@ -358,10 +359,7 @@ results/                    Per-run measurement records (one folder per run)
 
 ## License
 
-Veystrix is proprietary freeware; it is not open source as a whole. Code published earlier as VEYSTRIX under the MIT License keeps that license and notice (see LICENSE, LICENSES/, legal/). Models and dependencies use their
-own licenses. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The Vontra
-checkpoint card carries the Qwen Community License 1.0; review it before
-use or redistribution.
+Veystrix is proprietary software, not open source as a whole. Under the [Veystrix License](LICENSE), individuals may use it free of charge for personal, non-commercial purposes — including benchmarking, performance testing, research and evaluation — while business, commercial and organizational use requires a separate paid commercial license (open an issue at https://github.com/joyboyreturns/Veystrix/issues). Code published earlier as VEYSTRIX under the MIT License keeps that license and notice (see LICENSE, LICENSES/, legal/). Models and dependencies use their own licenses. See [NOTICE](NOTICE) and [legal/THIRD_PARTY_NOTICES.md](legal/THIRD_PARTY_NOTICES.md). The Vontra checkpoint card carries the Qwen Community License 1.0; review it before use or redistribution.
 
 ## Acknowledgements
 

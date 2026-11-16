@@ -1,8 +1,10 @@
 # Third-party notices
 
-Veystrix is proprietary freeware (see LICENSE). It contains, links to or was derived from the
-third-party and earlier open-source works below. Each keeps its own license. Nothing in the
-Veystrix license reduces your rights under them.
+Veystrix is proprietary software under the Veystrix License (see LICENSE), which is free for
+personal use and requires a paid license for business/commercial use. It contains, links to or
+was derived from the third-party and earlier open-source works below. Each keeps its own license.
+The Veystrix License does not apply to them, does not reduce your rights under them, and does not
+weaken or contradict their terms.
 
 _Generated 2026-11-10. Full license texts of the Python packages ship in the app bundle under_
 _`Contents/Resources/Licenses/`._

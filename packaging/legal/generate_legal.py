@@ -149,9 +149,9 @@ def write_sbom(rows: list[dict], out: Path, stamp: str, root_version: str) -> No
         "downloadLocation": "NOASSERTION",
         "filesAnalyzed": False,
         "licenseConcluded": "NOASSERTION",
-        "licenseDeclared": "LicenseRef-Veystrix-Freeware-Draft",
+        "licenseDeclared": "LicenseRef-Veystrix",
         "copyrightText": "NOASSERTION",
-        "comment": "Proprietary freeware (draft). Contains MIT-licensed code published earlier under the MIT license; see LICENSES/MIT-upstream.txt.",
+        "comment": "Proprietary software under the Veystrix License (draft): free for personal use incl. benchmarking; paid commercial license required for business use. Contains MIT-licensed code published earlier under the MIT license; see LICENSES/MIT-upstream.txt.",
     }]
     rels = []
     for i, r in enumerate(rows):
@@ -183,8 +183,8 @@ def write_sbom(rows: list[dict], out: Path, stamp: str, root_version: str) -> No
         "documentNamespace": f"https://github.com/joyboyreturns/Veystrix/sbom/{root_version}/{stamp}",
         "creationInfo": {"created": stamp + "T00:00:00Z", "creators": ["Tool: veystrix-generate-legal"]},
         "hasExtractedLicensingInfos": [{
-            "licenseId": "LicenseRef-Veystrix-Freeware-Draft",
-            "name": "Veystrix Freeware License (draft v0.1)",
+            "licenseId": "LicenseRef-Veystrix",
+            "name": "Veystrix License (draft v0.2)",
             "extractedText": (ROOT / "legal" / "FREEWARE-LICENSE.txt").read_text(),
         }],
         "packages": packages,
@@ -199,9 +199,11 @@ def write_notices(rows: list[dict], out: Path, stamp: str, public_out: Path | No
     body = [
         "# Third-party notices",
         "",
-        "Veystrix is proprietary freeware (see LICENSE). It contains, links to or was derived from the",
-        "third-party and earlier open-source works below. Each keeps its own license. Nothing in the",
-        "Veystrix license reduces your rights under them.",
+        "Veystrix is proprietary software under the Veystrix License (see LICENSE), which is free for",
+        "personal use and requires a paid license for business/commercial use. It contains, links to or",
+        "was derived from the third-party and earlier open-source works below. Each keeps its own license.",
+        "The Veystrix License does not apply to them, does not reduce your rights under them, and does not",
+        "weaken or contradict their terms.",
         "",
         f"_Generated {stamp}. Full license texts of the Python packages ship in the app bundle under_",
         "_`Contents/Resources/Licenses/`._",

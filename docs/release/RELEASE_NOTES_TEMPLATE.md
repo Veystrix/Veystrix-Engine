@@ -4,7 +4,7 @@
 Verify with `shasum -a 256 -c SHA256SUMS.txt`. Requires an Apple-silicon Mac (macOS 26.2 or later, 16 GB unified memory
 recommended) and a model checkpoint you supply; **no model is included and none is downloaded**.
 
-Veystrix is proprietary freeware, not open source. See LICENSE and THIRD_PARTY_NOTICES.md in the DMG.
+Veystrix is proprietary software, not open source. It is free for personal use (including benchmarking) and requires a paid commercial license for business use. See LICENSE and THIRD_PARTY_NOTICES.md in the DMG.
 
 ### What changed
 (fill in from CHANGELOG.md)

@@ -8,9 +8,9 @@ version = "1.0.0"
 description = "Veystrix: local inference engine for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.12"
-# Proprietary freeware. The combined work still contains MIT-licensed code, whose notice must stay:
-# see LICENSE, LICENSES/ and legal/. Not open source as a whole.
-license = "LicenseRef-Veystrix-Freeware-Draft"
+# Veystrix License: free for personal use (incl. benchmarking/research); paid commercial license for business use.
+# The combined work still contains MIT-licensed code, whose notice must stay: see LICENSE, LICENSES/ and legal/.
+license = "LicenseRef-Veystrix"
 license-files = ["LICENSE", "NOTICE", "LICENSES/*", "legal/FREEWARE-LICENSE.txt", "legal/THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Veystrix" }]
 classifiers = [

@@ -21,7 +21,8 @@ the public-repo token. Nothing here is simulated.
    `VEYSTRIX_DEVID_P12_BASE64`, `VEYSTRIX_DEVID_P12_PASSWORD`, `VEYSTRIX_SIGN_IDENTITY`, `VEYSTRIX_NOTARY_APPLE_ID`,
    `VEYSTRIX_NOTARY_TEAM_ID`, `VEYSTRIX_NOTARY_PASSWORD`, `VEYSTRIX_SPARKLE_PRIVATE_KEY`,
    `VEYSTRIX_SPARKLE_PUBLIC_KEY`, `PUBLIC_RELEASES_TOKEN`.
-6. Complete the bracketed fields in `legal/FREEWARE-LICENSE.txt` and get it reviewed.
+6. Confirm the bracketed fields in the Veystrix License (`LICENSE`, `legal/FREEWARE-LICENSE.txt`) —
+   in particular the owner's legal name and jurisdiction — and have it reviewed by a lawyer.
 
 ## In-app "Check for Updates"
 

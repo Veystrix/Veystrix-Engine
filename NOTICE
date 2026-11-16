@@ -2,6 +2,15 @@ VEYSTRIX
 
 This repository does not include model weights.
 
+Licensing
+---------
+The Veystrix License (see LICENSE and legal/FREEWARE-LICENSE.txt) grants a free,
+perpetual, non-transferable license to individuals for personal, non-commercial
+use, including benchmarking, performance testing, research and evaluation.
+Business, commercial and organizational use requires a separate paid commercial
+license; contact https://github.com/joyboyreturns/Veystrix/issues. The license
+does not apply to third-party components, which keep their own licenses.
+
 Copyright and license provenance
 --------------------------------
 Parts of this software derive from code published under the MIT license. That license and its

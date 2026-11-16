@@ -10,12 +10,14 @@ import os
 import struct
 import tempfile
 import unittest
+from dataclasses import replace
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 from models.flashnext import preflight as P
 from models.flashnext.checkpoint_policy import VONTRA_4BIT_MTP_IDENTITY
+from veystrix import model_identity
 
 SHA = {"model-00001-of-00003.safetensors": "a" * 64, "model-00002-of-00003.safetensors": "b" * 64,
        "model-00003-of-00003.safetensors": "c" * 64}
@@ -600,6 +602,47 @@ class KnowledgeTests(unittest.TestCase):
     def test_the_module_imports_no_mlx(self):
         text = Path(P.__file__).read_text()
         self.assertEqual([l for l in text.splitlines() if l.startswith(("import mlx", "from mlx"))], [])
+
+
+class ProfileDataTests(unittest.TestCase):
+    def test_default_profile_matches_the_validated_baseline(self):
+        self.assertEqual(P.PROFILE["num_hidden_layers"], 48)
+        self.assertEqual(P.PROFILE["num_experts"], 512)
+        self.assertEqual(P.PROFILE["num_experts_per_tok"], 10)
+        self.assertEqual(P.PROFILE["vocab_size"], 248320)
+        self.assertEqual(P.QUANT, {"bits": 4, "group_size": 32, "mode": "affine"})
+        self.assertEqual(P.LAYER_TYPE_COUNTS, {"linear_attention": 36, "full_attention": 12})
+        self.assertEqual(P.RESIDENT_EXPERTS_POLICY, 8)
+        self.assertEqual(P.DEFAULT_MANIFEST, "qwen3.8-flash-next-mlx-4bit-mtp.json")
+
+    def test_profile_model_types_are_overridden_from_identity(self):
+        future = replace(model_identity.FLASHNEXT,
+                         model_type="qwen4_new", text_model_type="qwen4_new_text")
+        with mock.patch.object(P.model_identity, "FLASHNEXT", future):
+            profile = P.load_profile()
+        self.assertEqual(profile["model_type"], "qwen4_new")
+        self.assertEqual(profile["text_model_type"], "qwen4_new_text")
+        self.assertEqual(profile["num_experts"], 512)  # architecture still from data
+
+    def test_compat_gate_follows_identity_model_types(self):
+        future = replace(model_identity.FLASHNEXT,
+                         model_types=frozenset({"qwen4_new", "qwen4_new_text"}))
+        with mock.patch.object(P.model_identity, "FLASHNEXT", future):
+            ok = P.describe_checkpoint_dict({"model_type": "qwen4_new"})
+            legacy = P.describe_checkpoint_dict({"model_type": "qwen4_exp"})
+        self.assertTrue(ok["compatible"])
+        self.assertFalse(legacy["compatible"])
+
+    def test_load_profile_accepts_an_explicit_data_file(self):
+        payload = {"profile": {"num_hidden_layers": 80, "num_experts": 1024},
+                   "quant": {"bits": 8, "group_size": 64, "mode": "affine"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "successor.json"
+            path.write_text(json.dumps(payload))
+            profile = P.load_profile(str(path))
+        self.assertEqual(profile["num_hidden_layers"], 80)
+        self.assertEqual(profile["num_experts"], 1024)
+        self.assertEqual(profile["model_type"], model_identity.FLASHNEXT.model_type)
 
 
 if __name__ == "__main__":

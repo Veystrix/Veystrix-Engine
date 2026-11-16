@@ -24,6 +24,11 @@ class ModelIdentity:
     context_limit: int
     checkpoint_alias: str = ""
     checkpoint_directory: str = ""
+    # Distinct roles of the top-level and text-config model_type. Subsets of
+    # model_types; kept explicit so consumers that need the distinction (the
+    # preflight profile) do not have to guess from an unordered set.
+    model_type: str = ""
+    text_model_type: str = ""
 
 
 FLASHNEXT = ModelIdentity(
@@ -35,6 +40,8 @@ FLASHNEXT = ModelIdentity(
     context_limit=262_144,
     checkpoint_alias="vontra-mtp",
     checkpoint_directory="Qwen3.8-Flash-Next-MLX-4bit-MTP",
+    model_type="qwen4_exp",
+    text_model_type="qwen4_exp_text",
 )
 
 NEMOTRON = ModelIdentity(
@@ -44,6 +51,7 @@ NEMOTRON = ModelIdentity(
     served_id="veystrix-nemotron35-lightning",
     download_repo="mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit",
     context_limit=1_048_576,
+    model_type="nemotron_h",
 )
 
 IDENTITIES: dict[str, ModelIdentity] = {

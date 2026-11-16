@@ -36,29 +36,61 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from veystrix import model_identity
+
 from .checkpoint_compat import MTP_PREFIX, MTP_SIDECAR_NAME, validate_mtp_structure
 
 PASS, WARN, FAIL, INFO, SKIP = "PASS", "WARN", "FAIL", "INFO", "SKIP"
 READY, INCOMPLETE, INCOMPATIBLE, MISSING = "READY", "INCOMPLETE", "INCOMPATIBLE", "MISSING"
 
 MANIFEST_DIR = Path(__file__).with_name("preflight_manifests")
-DEFAULT_MANIFEST = "qwen3.8-flash-next-mlx-4bit-mtp.json"
+PROFILE_DIR = Path(__file__).with_name("preflight_profiles")
+DEFAULT_PROFILE = "flashnext.json"
 HEADER_LIMIT = 100 * 1024 * 1024        # the repo's own bound for a safetensors header
+
+
+def _json(path: Path):
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _profile_data(name_or_path=None) -> dict:
+    """Read a validated-profile data file by name, path, or the default."""
+    path = Path(name_or_path) if name_or_path else PROFILE_DIR / DEFAULT_PROFILE
+    if not path.is_file() and name_or_path:
+        path = PROFILE_DIR / str(name_or_path)
+    return _json(path) or {}
+
+
+def load_profile(name_or_path=None) -> dict:
+    """Build a PROFILE-shaped dict from a profile data file.
+
+    ``model_type``/``text_model_type`` are overwritten from the shared identity
+    descriptor so the preflight gates and checkpoint discovery cannot drift.
+    """
+    identity = model_identity.FLASHNEXT
+    profile = dict(_profile_data(name_or_path)["profile"])
+    profile["model_type"] = identity.model_type
+    profile["text_model_type"] = identity.text_model_type
+    return profile
+
+
+_PROFILE_DATA = _profile_data()
+DEFAULT_MANIFEST = _PROFILE_DATA["default_manifest"]
 
 # The validated checkpoint (Vontra/TensorFold Qwen3.8-Flash-Next-MLX-4bit-MTP).
 # A mismatch in any of these is reported as FAIL: the runtime might still load a
 # different checkpoint, but it is not what the memory plans, ring sizes and
-# recorded results were made for.
-PROFILE = {
-    "model_type": "qwen4_exp", "text_model_type": "qwen4_exp_text",
-    "hidden_size": 2560, "num_hidden_layers": 48, "num_experts": 512,
-    "num_experts_per_tok": 10, "moe_intermediate_size": 640,
-    "shared_expert_intermediate_size": 640, "vocab_size": 248320,
-    "mtp_num_hidden_layers": 1,
-}
-QUANT = {"bits": 4, "group_size": 32, "mode": "affine"}
-LAYER_TYPE_COUNTS = {"linear_attention": 36, "full_attention": 12}
-RESIDENT_EXPERTS_POLICY = 8             # applies only if the content identity matches
+# recorded results were made for. Architecture/quant data lives in
+# preflight_profiles/flashnext.json; model types come from the identity
+# descriptor so onboarding a successor is a data-file change, not a code edit.
+PROFILE = load_profile()
+QUANT = _PROFILE_DATA["quant"]
+LAYER_TYPE_COUNTS = _PROFILE_DATA["layer_type_counts"]
+RESIDENT_EXPERTS_POLICY = _PROFILE_DATA["resident_experts_policy"]          # applies only if the content identity matches
 
 # Tensor families, derived from the real index (36 linear-attention and 12
 # full-attention layers have identical sets). "WSB" is a quantized triplet
@@ -139,14 +171,6 @@ class Report:
         return "\n".join(lines)
 
 
-def _json(path: Path):
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
 def load_manifest(name_or_path=None) -> dict | None:
     path = Path(name_or_path) if name_or_path else MANIFEST_DIR / DEFAULT_MANIFEST
     if not path.is_file() and name_or_path:
@@ -209,9 +233,10 @@ def _check_config(report: Report, config: dict | None, profile: dict | None) -> 
         return {}
     text = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
     caps = describe_checkpoint_dict(config)
+    needed = " / ".join(sorted(model_identity.FLASHNEXT.model_types))
     report.add("model type", PASS if caps["compatible"] else FAIL,
                f"{config.get('model_type')} / {text.get('model_type')}"
-               + ("" if caps["compatible"] else " (runtime needs qwen4_exp / qwen4_exp_text)"))
+               + ("" if caps["compatible"] else f" (runtime needs {needed})"))
     quant = config.get("quantization")
     if not isinstance(quant, dict):
         report.add("quantization", FAIL, "config has no quantization block")
@@ -272,7 +297,7 @@ def _check_config(report: Report, config: dict | None, profile: dict | None) -> 
 def describe_checkpoint_dict(config: dict) -> dict:
     text = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
     types = {config.get("model_type"), text.get("model_type")}
-    return {"compatible": bool({"qwen4_exp", "qwen4_exp_text"} & {t for t in types if t})}
+    return {"compatible": bool(model_identity.FLASHNEXT.model_types & {t for t in types if t})}
 
 
 def _slab_stride(group_size):
@@ -598,7 +623,7 @@ def resolve_target(target: str | None) -> str:
     return str(model_root() / DEFAULT_DIRECTORY)
 
 
-DEFAULT_DIRECTORY = "Qwen3.8-Flash-Next-MLX-4bit-MTP"
+DEFAULT_DIRECTORY = model_identity.FLASHNEXT.checkpoint_directory
 
 
 def main(argv=None) -> int:

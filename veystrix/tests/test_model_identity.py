@@ -13,6 +13,8 @@ class ModelIdentityTests(unittest.TestCase):
         self.assertEqual(q.context_limit, 262_144)
         self.assertEqual(q.checkpoint_alias, "vontra-mtp")
         self.assertEqual(q.checkpoint_directory, "Qwen3.8-Flash-Next-MLX-4bit-MTP")
+        self.assertEqual(q.model_type, "qwen4_exp")
+        self.assertEqual(q.text_model_type, "qwen4_exp_text")
 
     def test_nemotron_identity_matches_the_current_baseline(self):
         n = mi.NEMOTRON
@@ -33,6 +35,12 @@ class ModelIdentityTests(unittest.TestCase):
         self.assertEqual(mi.for_family("not-a-model"), mi.UNKNOWN)
         self.assertEqual(mi.context_limit("not-a-model"), 32_768)
         self.assertEqual(mi.model_types("not-a-model"), frozenset())
+
+    def test_explicit_model_types_are_subsets_of_the_gate(self):
+        for identity in mi.IDENTITIES.values():
+            for value in (identity.model_type, identity.text_model_type):
+                if value:
+                    self.assertIn(value, identity.model_types)
 
     def test_identities_are_immutable(self):
         with self.assertRaises(Exception):

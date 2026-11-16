@@ -38,6 +38,12 @@ class DocsHygieneTests(unittest.TestCase):
         self.assertIn("988", text)
         self.assertIn("2,289", text)
 
+    def test_release_process_explains_the_update_button_limitation(self):
+        text = (DOCS / "release" / "RELEASE_PROCESS.md").read_text()
+        self.assertIn("In-app \"Check for Updates\"", text)
+        self.assertIn("appcast.xml", text)
+        self.assertIn("does not exist yet", text)
+
     def test_historical_performance_handoffs_are_marked(self):
         for name in ("handoff-2026-11-14.md", "inference-blueprint-handoff.md",
                      "overnight-2026-11-16.md"):

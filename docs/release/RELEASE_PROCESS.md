@@ -23,6 +23,22 @@ the public-repo token. Nothing here is simulated.
    `VEYSTRIX_SPARKLE_PUBLIC_KEY`, `PUBLIC_RELEASES_TOKEN`.
 6. Complete the bracketed fields in `legal/FREEWARE-LICENSE.txt` and get it reviewed.
 
+## In-app "Check for Updates"
+
+The sidebar footer and Settings both call the existing Sparkle updater. It is
+enabled only when the build has `SUPublicEDKey` and an https `SUFeedURL`; the
+app never installs anything unless the archive passes the EdDSA signature and
+is strictly newer than the running build. A custom "download the latest GitHub
+release and replace myself" updater was deliberately **not** used: it would
+bypass signature verification and self-replace a running, signed app.
+
+**Current limitation:** the feed
+`https://raw.githubusercontent.com/joyboyreturns/Veystrix/main/updates/appcast.xml`
+does not exist yet, and the Sparkle private key is not available in this
+environment. Until step 5 below is completed for a real release, the button is
+present but reports that no update is available. This is a release-publishing
+blocker, not an app bug.
+
 ## Each release
 
 1. Bump `version` in `pyproject.toml` and update `CHANGELOG.md`; regenerate notices from the *bundle's* environment:

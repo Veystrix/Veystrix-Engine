@@ -43,7 +43,7 @@ struct ContentView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 170, ideal: 200)
-            .safeAreaInset(edge: .bottom) { SidebarStatus() }
+            .safeAreaInset(edge: .bottom) { SidebarStatus().environmentObject(model.updates) }
         } detail: {
             switch selection.value ?? .dashboard {
             case .dashboard: DashboardView()
@@ -74,10 +74,25 @@ struct ContentView: View {
 
 struct SidebarStatus: View {
     @EnvironmentObject var engine: EngineController
+    @EnvironmentObject var updates: UpdateController
+
     var body: some View {
-        HStack(spacing: 8) {
-            StatusBadge(state: engine.state)
-            Spacer()
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                StatusBadge(state: engine.state)
+                Spacer()
+            }
+            Button {
+                updates.checkForUpdates()
+            } label: {
+                Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!updates.canCheckForUpdates)
+            .help(updates.summary)
+            .accessibilityLabel("Check for Updates")
         }
         .padding(10)
         .background(.bar)

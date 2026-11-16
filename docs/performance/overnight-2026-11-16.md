@@ -359,7 +359,7 @@ The per-query attention loop evaluates each tile before building the next, so th
 
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
-Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,275 OK (3 skipped) (final rerun at 11:20 after the `qsa-fused-gather` commits; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
+Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,276 OK (3 skipped) (Flash-Next rerun at 12:12 after the `qsa-tile-pipeline` commit, Nemotron and veystrix at 11:20 after the `qsa-fused-gather` commits; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
 
 ## What is left (levers, not done)
 

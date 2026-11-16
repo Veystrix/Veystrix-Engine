@@ -144,9 +144,23 @@ def fused_sdpa_supported() -> bool:
     """Whether the GPU can launch a 1024-thread fused-SDPA threadgroup."""
     if _FUSED_SDPA_SUPPORTED[0] is None:
         try:
+            # Mirror the real kernel's threadgroup memory and simdgroup use: Metal's per-pipeline
+            # thread limit depends on resource usage, so a trivial kernel would wrongly report support.
             probe = mx.fast.metal_kernel(
                 name="flashnext_sdpa_threadgroup_probe", input_names=["x"], output_names=["out"],
-                source="uint i = thread_position_in_grid.x; out[i] = x[i];")
+                source="""
+                threadgroup float outputs[32 * 32];
+                threadgroup float max_scores[32];
+                threadgroup float sum_exp_scores[32];
+                uint i = thread_position_in_grid.x;
+                uint g = simdgroup_index_in_threadgroup;
+                uint l = thread_index_in_simdgroup;
+                outputs[l * 32 + g] = static_cast<float>(x[i]);
+                max_scores[g] = 0.0f;
+                sum_exp_scores[g] = 1.0f;
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                out[i] = static_cast<float>(outputs[l * 32 + g] + max_scores[l] + sum_exp_scores[l]);
+                """)
             result = probe(
                 inputs=[mx.zeros((_FUSED_SDPA_THREADS,), mx.float32)],
                 output_shapes=[(_FUSED_SDPA_THREADS,)], output_dtypes=[mx.float32],

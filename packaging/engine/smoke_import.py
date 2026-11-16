@@ -40,11 +40,16 @@ assert planned[2:5] == [sys.executable, "-u", "-m"] and "veystrix.session" in pl
 assert "/tmp/model with spaces" in planned, planned
 from models.flashnext.settings.registry import get_registry
 assert len(get_registry().settings) > 0 if hasattr(get_registry(), "settings") else True
-try:
-    import cv2
-    raise SystemExit("opencv (LGPL FFmpeg) must not be in the bundle")
-except ImportError:
-    pass
+# Text-only engine: these are pulled in transitively but no shipped runtime module imports them.
+# opencv also carries an LGPL FFmpeg build. When adding a model that needs one of them, update
+# this list together with the removal list in build_engine_bundle.sh.
+for banned in ("cv2", "scipy", "mlx_audio", "sounddevice", "miniaudio", "pip"):
+    try:
+        importlib.import_module(banned)
+    except ImportError:
+        pass
+    else:
+        raise SystemExit(f"{banned} must not be in the bundle")
 import mlx_vlm  # noqa: F401  (imports the package only; no model, no Metal session)
 print("imports ok")
 """

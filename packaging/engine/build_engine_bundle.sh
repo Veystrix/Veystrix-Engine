@@ -39,7 +39,19 @@ PYEOF
 # opencv arrives transitively (mlx-vlm). Its wheels carry an LGPL FFmpeg build, so it is removed from the bundle and
 # the smoke test asserts it is gone. Features that need it (video input) are unavailable in the packaged app.
 "$PY" -m pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python >/dev/null 2>&1 || true
-rm -rf "$OUT"/python/lib/python3.12/site-packages/cv2
+SP="$OUT/python/lib/python3.12/site-packages"
+rm -rf "$SP/cv2"
+# Text-only engine: mlx-vlm pulls in an audio stack (mlx-audio -> scipy, sounddevice, miniaudio)
+# that no shipped runtime module imports. Drop it here; when adding a model that needs audio or
+# SciPy, add its package back to this list and to smoke_import.py's import closure.
+"$PY" -m pip uninstall -y scipy mlx-audio sounddevice miniaudio >/dev/null 2>&1 || true
+rm -rf "$SP"/{scipy,mlx_audio,_sounddevice.py,_sounddevice_data,miniaudio.py,_miniaudio.abi3.so} \
+       "$SP"/{scipy-*,mlx_audio-*,sounddevice-*,miniaudio-*}.dist-info 2>/dev/null || true
+# C/Python headers and cmake files are build-time only; the compiled extensions link the dylibs.
+rm -rf "$SP/mlx/include" "$SP/mlx/lib/cmake"
+# Bytecode caches are only regenerated when PYTHONDONTWRITEBYTECODE is unset. LaunchPlan and the
+# smoke test both set it, so the caches shipped by pip are dead weight in the bundle.
+find "$SP" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 # The engine never opens a window: drop Tcl/Tk, IDLE and the stdlib test suite (smaller bundle, fewer files to sign).
 rm -rf "$OUT"/python/lib/python3.12/{test,idlelib,tkinter,turtledemo,turtle.py} "$OUT"/python/lib/python3.12/lib-dynload/_tkinter*.so \
        "$OUT"/python/lib/{tcl*,tk*,itcl*,thread*,Tix*,sqlite3*} "$OUT"/python/bin/{idle*,2to3*,pydoc*} 2>/dev/null || true
@@ -71,8 +83,26 @@ echo "==> License texts"
 "$PY" "$ROOT/packaging/legal/generate_legal.py" --out "$WORK/legal" --emit-texts "$OUT/licenses" >/dev/null \
   || { cp "$ROOT/legal/THIRD_PARTY_NOTICES.md" "$OUT/licenses/"; cp -R "$ROOT/LICENSES/." "$OUT/licenses/"; echo "   (generate_legal --emit-texts unavailable: copied notices only)"; }
 
+echo "==> Manifest and final trim"
+# List what actually ships, using metadata rather than pip so pip can be removed before the smoke test.
+{
+  echo "Veystrix engine bundle, built $(date -u +%FT%TZ)"
+  echo "runtime: $PBS_FILE"
+  "$PY" - <<'PYEOF'
+import importlib.metadata as md
+skipped = {"pip", "setuptools", "wheel"}
+for dist in sorted(md.distributions(), key=lambda d: (d.metadata.get("Name") or "").lower()):
+    name = dist.metadata.get("Name") or ""
+    if name.lower() not in skipped:
+        print(f"{name}=={dist.version}")
+PYEOF
+} > "$OUT/BUNDLE-MANIFEST.txt"
+# pip/setuptools/wheel are needed only to assemble the bundle and for the source-checkout `setup`
+# command, which cannot run from a bundled engine. Remove them before the smoke test checks they are gone.
+"$PY" -m pip uninstall -y pip setuptools wheel >/dev/null 2>&1 || true
+rm -rf "$SP"/{pip,setuptools,wheel,pip-*,setuptools-*,wheel-*} 2>/dev/null || true
+
 echo "==> Smoke test (imports only, no model)"
 "$PY" "$HERE/smoke_import.py" "$OUT"
 
-( cd "$OUT" && { echo "Veystrix engine bundle, built $(date -u +%FT%TZ)"; echo "runtime: $PBS_FILE"; "$PY" -m pip freeze | sort; } > BUNDLE-MANIFEST.txt )
 echo "==> Bundle ready: $OUT ($(du -sh "$OUT" | cut -f1)). Sign nested Mach-O files with packaging/macos/sign_app.sh."

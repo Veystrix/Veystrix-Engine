@@ -59,6 +59,7 @@ FLAG_PREFETCH = "FLASHNEXT_PREFILL_LAYER_PREFETCH"      # opt-in: read layer l+1
 FLAG_INNER_SNAPSHOTS = "FLASHNEXT_PREFILL_INNER_SNAPSHOTS"  # "1" (default): snapshot chunk edges inside a window; "0": cut windows there
 FLAG_TAIL_CHUNK = "FLASHNEXT_PREFILL_TAIL_CHUNK"        # "1" (default): a trailing tiny chunk runs chunk-major after the last window
 FLAG_MIN_TOKENS = "FLASHNEXT_LAYER_MAJOR_MIN_TOKENS"    # smaller uncached prefills use the chunk-major path
+FLAG_MERGE_TAIL = "FLASHNEXT_PREFILL_MERGE_TAIL"                  # opt-in: a final window of at most this many tokens joins the window before it (0: off)
 FLAG_ROUTE_UNION = "FLASHNEXT_PREFILL_ROUTE_UNION"      # opt-in: each streamed layer reads only the experts its window routes
 UNION_SUFFIX = "/union-v1"
 DEFAULT_MIN_TOKENS = 4096
@@ -178,7 +179,23 @@ def hybrid_enabled() -> bool:
 
 # ---------------------------------------------------------------------------------------------------------------- planning
 
-def plan_windows(spans, offset: int, window: int, required=(), anchors=()):
+def merge_tail_tokens() -> int:
+    """Tokens a final window may have and still be folded into the previous one (``FLASHNEXT_PREFILL_MERGE_TAIL``, 0 = off).
+
+    Every window reads each layer's whole expert set once whatever its size (about 80 GB for Qwen, 25 s of SSD time), and a
+    small window run chunk-major still reads the union of the experts its few tokens route to (about 45 GB for 180 tokens). The
+    previous window already holds those experts, so a small remainder costs only its compute when it joins that window."""
+    raw = os.environ.get(FLAG_MERGE_TAIL, "0") or "0"
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{FLAG_MERGE_TAIL} must be an integer") from None
+    if value < 0:
+        raise ValueError(f"{FLAG_MERGE_TAIL} must not be negative")
+    return value
+
+
+def plan_windows(spans, offset: int, window: int, required=(), anchors=(), merge_tail: int = 0):
     """Group chunk ``spans`` (relative ``(start, end)`` pairs covering the suffix) into windows of whole chunks.
 
     A window holds at most ``window`` tokens unless a single chunk is larger. It ends at a ``required`` position (the
@@ -207,6 +224,11 @@ def plan_windows(spans, offset: int, window: int, required=(), anchors=()):
                 stop = nice[-1]
         windows.append(spans[index:stop + 1])
         index = stop + 1
+    tokens = lambda group: group[-1][1] - group[0][0]
+    while (merge_tail and len(windows) > 1 and tokens(windows[-1]) <= merge_tail
+           and offset + windows[-2][-1][1] not in set(required)):          # never across a required (system-prompt) boundary
+        last = windows.pop()
+        windows[-1] = windows[-1] + last
     return windows
 
 

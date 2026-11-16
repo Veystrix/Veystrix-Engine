@@ -588,7 +588,8 @@ def _run_layer_major(language, ids, cache, sampler, boundaries, on_boundary, off
     absolute_end = offset + total
     inner = layer_major.inner_snapshots_enabled()
     windows = layer_major.plan_windows(spans, offset, layer_major.window_tokens(), required=() if inner else required,
-                                       anchors=tuple(anchors if anchors is not None else boundaries))
+                                       anchors=tuple(anchors if anchors is not None else boundaries),
+                                       merge_tail=layer_major.merge_tail_tokens())
     if trace is not None:
         trace.planned_edges = [offset + e for _, e in spans[:-1]]
         trace.order = layer_major.identity()

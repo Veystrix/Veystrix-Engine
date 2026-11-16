@@ -73,6 +73,33 @@ class WindowPlanTests(unittest.TestCase):
         self.assertEqual([len(w) for w in windows], [4, 4, 2])
         self.assertEqual([s for w in windows for s in w], spans)
 
+    def test_a_small_final_window_joins_the_previous_one_only_when_asked(self):
+        spans = spans_of([2048, 2048, 178])
+        self.assertEqual([len(w) for w in layer_major.plan_windows(spans, 0, 4096)], [2, 1])           # default: unchanged
+        merged = layer_major.plan_windows(spans, 0, 4096, merge_tail=2048)
+        self.assertEqual([len(w) for w in merged], [3])
+        self.assertEqual([s for w in merged for s in w], spans)
+        self.assertEqual([len(w) for w in layer_major.plan_windows(spans_of([2048] * 4 + [100]), 0, 4096, merge_tail=2048)], [2, 3])
+        self.assertEqual([len(w) for w in layer_major.plan_windows(spans_of([2048] * 3), 0, 4096, merge_tail=2048)], [3])   # a 2,048-token remainder is still small enough
+        self.assertEqual([len(w) for w in layer_major.plan_windows(spans_of([2048] * 3), 0, 4096, merge_tail=2047)], [2, 1])   # one more token than allowed
+        self.assertEqual([len(w) for w in layer_major.plan_windows(spans_of([2048, 2048, 4000]), 0, 4096, merge_tail=2048)], [2, 1])
+
+    def test_a_merge_never_crosses_a_required_boundary(self):
+        spans = spans_of([2048, 2048, 178])
+        windows = layer_major.plan_windows(spans, 0, 4096, required=(4096,), merge_tail=2048)
+        self.assertEqual([len(w) for w in windows], [2, 1])
+        windows = layer_major.plan_windows(spans, 1000, 4096, required=(1000 + 4096,), merge_tail=2048)
+        self.assertEqual([len(w) for w in windows], [2, 1])
+
+    def test_merge_tail_setting_is_parsed_strictly(self):
+        self.assertEqual(layer_major.merge_tail_tokens(), 0)
+        with mock.patch.dict(os.environ, {layer_major.FLAG_MERGE_TAIL: "2048"}):
+            self.assertEqual(layer_major.merge_tail_tokens(), 2048)
+        for bad in ("-1", "x"):
+            with mock.patch.dict(os.environ, {layer_major.FLAG_MERGE_TAIL: bad}):
+                with self.assertRaises(ValueError):
+                    layer_major.merge_tail_tokens()
+
     def test_a_chunk_larger_than_the_window_still_runs_alone(self):
         windows = layer_major.plan_windows(spans_of([3000, 3000]), 0, 1024)
         self.assertEqual([len(w) for w in windows], [1, 1])
@@ -424,6 +451,19 @@ class PrefillIntegrationTests(unittest.TestCase):
         self.assertEqual([row["execution"] for row in trace_h.layers], ["layer"])
         self.assertEqual(token_h, want_token)
         self.assertEqual(cache_bits(cache_h), cache_bits(want_cache))
+
+    def test_a_merged_small_final_window_stays_exact_and_runs_as_one_window(self):
+        prompt = self.ids[:300]                                          # 64-token chunks: 4 x 64 + 44
+        want_token, want_cache, _, _ = self.run_prefill("chunk", prompt=prompt)
+        token, cache, _, trace = self.run_prefill("layer", window=128, prompt=prompt)
+        self.assertGreater(len(trace.windows), 2)
+        with mock.patch.dict(os.environ, {layer_major.FLAG_MERGE_TAIL: "128"}):
+            token_m, cache_m, _, trace_m = self.run_prefill("layer", window=128, prompt=prompt)
+        self.assertLess(len(trace_m.windows), len(trace.windows))
+        self.assertEqual(trace_m.windows[-1][1], 300)
+        self.assertEqual(token_m, want_token)
+        self.assertEqual(cache_bits(cache_m), cache_bits(want_cache))
+        self.assertEqual(token, want_token)
 
     def test_trailing_tiny_chunk_runs_chunk_major_after_the_window_and_stays_exact(self):
         prompt = self.ids[:456]                                          # seven 64-token chunks and a tail of 8 tokens

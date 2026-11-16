@@ -26,7 +26,7 @@ class FlagNameTests(unittest.TestCase):
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
                  prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION,
                  qsa_chunk.FLAG_DENSE_PREFIX, qsa_chunk.FLAG_MASKED_SPARSE, "FLASHNEXT_LAYER_MAJOR_SINGLE",
-                 prefill_ring.FLAG_SCRATCH_LATER}
+                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):

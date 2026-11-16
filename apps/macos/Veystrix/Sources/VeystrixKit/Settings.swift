@@ -125,10 +125,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var nemotronCheckpointPath: String = ""
     public var decodePool: DecodePool = .none
     public var swapLimitGiB: Int = 5
-    public var flashNextKVCache: FlashNextKVCache = .bf16
+    // The exact-speed profile (on by default) requires the tiered4 hybrid KV;
+    // keeping the selector in sync makes the UI match what the engine runs.
+    public var flashNextKVCache: FlashNextKVCache = .tiered4
     public var flashNextSpeed: Bool = false
     /// Curated bit-identical exact-speed set (24/24 quality gate); independent of the older speed toggle.
-    public var flashNextExactSpeed: Bool = false
+    public var flashNextExactSpeed: Bool = true
     /// Experimental: 128-token prefill chunks with a reused expert scratch ring and uncached prefill reads, which keeps
     /// more memory free on a 16 GB Mac while a prompt is read. Off by default; excludes the speed profile.
     public var flashNextBoundedPrefill: Bool = false

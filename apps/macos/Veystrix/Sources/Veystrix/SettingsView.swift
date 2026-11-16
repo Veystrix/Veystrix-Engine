@@ -27,7 +27,7 @@ struct SettingsView: View {
                 Text("Uses 4K prefill windows and buffered reads when the decode pool is available. Restart to apply.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Qwen exact speed (bit-identical, 24/24 quality gate)", isOn: $model.settings.flashNextExactSpeed)
-                Text("A curated set of measured optimisations: about 14-36% faster prefill and 5% faster decode in paired runs, with identical tokens. Works on any Mac size. Restart to apply.")
+                Text("On by default: a curated set of measured optimisations, about 14-36% faster prefill and 5% faster decode in paired runs with identical tokens. Works on any Mac size. Turn it off for the reference path. Restart to apply.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Qwen low-memory prefill for 16 GB Macs (experimental)", isOn: $model.settings.flashNextBoundedPrefill)
                     .disabled(model.settings.flashNextSpeed)

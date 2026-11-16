@@ -1,6 +1,8 @@
 # Exact speed profile (both models)
 
-A single app toggle, **"Qwen exact speed (bit-identical, 24/24 quality gate)"**, enables the measured optimisations that were validated *together* on the real 16 GB M4 checkpoint. They are size-independent, so the same set works on larger Macs. Nothing here changes precision, routing, tokens or the OS/swap safety guards.
+A single app toggle, **"Qwen exact speed (bit-identical, 24/24 quality gate)"**, enables the measured optimisations that were validated *together* on the real 16 GB M4 checkpoint. It is **on by default** on the `neural-engine` branch; the older "faster prefill and decode (experimental)" toggle (`short-throughput`) is unchanged and stays off. They are size-independent, so the same set works on larger Macs. Nothing here changes precision, routing, tokens or the OS/swap safety guards.
+
+Because the profile requires the tiered4 hybrid KV cache, the app's KV selector also defaults to **Tiered INT4 / INT8** so the UI matches what the engine runs.
 
 ## What it enables
 

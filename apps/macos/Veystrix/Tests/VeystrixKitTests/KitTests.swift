@@ -293,8 +293,9 @@ private func tempDir() -> URL {
 
     @Test func exactSpeedToggleIsIndependentAndPersists() throws {
         var s = AppSettings()
-        #expect(!s.flashNextExactSpeed)
-        s.flashNextExactSpeed = true
+        #expect(s.flashNextExactSpeed)                 // on by default
+        #expect(s.flashNextKVCache == .tiered4)        // matches the engine's exact-speed profile
+        s.flashNextExactSpeed = true                    // explicit rollback-off tested below
         s.checkpointPath = "/tmp/ckpt"
         let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(s))
         #expect(decoded.flashNextExactSpeed)
@@ -303,6 +304,12 @@ private func tempDir() -> URL {
                                        fileExists: { _ in true }, isExecutable: { _ in true })
         #expect(plan.arguments.contains("--flashnext-exact-speed"))
         #expect(plan.environment["VEYSTRIX_NEMOTRON_DENSE_GEMM"] == "1")
+
+        s.flashNextExactSpeed = false
+        let off = try LaunchPlan.make(settings: s, checkpoint: c, source: .developer(repoRoot: URL(fileURLWithPath: "/r")), apiKey: nil,
+                                      fileExists: { _ in true }, isExecutable: { _ in true })
+        #expect(!off.arguments.contains("--flashnext-exact-speed"))
+        #expect(off.environment["VEYSTRIX_NEMOTRON_DENSE_GEMM"] == "0")
     }
 
 @Suite struct SettingsTests {

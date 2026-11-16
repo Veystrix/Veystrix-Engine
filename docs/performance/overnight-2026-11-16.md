@@ -281,6 +281,10 @@ In-process, ChatML prompt of about 510 tokens with three tool definitions, greed
 
 `FLASHNEXT_EXPERT_POOL_GB=2` after the mode was applied gave the same 2.58 tok/s and 144.5 GB read as the app's 1.07 GB pool (the planner clamps the request; memory floor 3.08 GiB); a 3 GB request was stopped by the guard's 3 GiB available-memory floor (2.59 GiB) 42 s in. So a larger decode pool is bounded by RAM here, as the earlier admission work found; no setting was changed.
 
+## 16K cold prefill with the six options: not measured (thermal stop, twice)
+
+Two attempts at a 16,000-token needle run with all six options (each started at thermal level 0) were stopped by the run guard's thermal rule (level 2 for 15 s) after 97-107 s of sustained prefill, with memory fine (floor 4.25-4.31 GiB, swap flat at 1,344 MiB). The fanless Air throttles before a 16K cold prefill (about 150 s at the 10K rate of 115 tok/s) can finish, so 16K was not measured; the guard's rule was left as is. The 10K run above did complete (109 s).
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

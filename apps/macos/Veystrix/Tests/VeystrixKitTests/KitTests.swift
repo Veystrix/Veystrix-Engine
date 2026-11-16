@@ -284,6 +284,13 @@ private func tempDir() -> URL {
 }
 
 // MARK: settings
+    @Test func decodePoolOffersValidatedAndLargerTierOptions() {
+        #expect(DecodePool.allCases.map(\.rawValue) == [0, 1, 2, 3, 4, 6, 8, 12])
+        #expect(DecodePool.twoGB.title.contains("validated"))
+        #expect(DecodePool.twelveGB.explanation.contains("memory tier"))
+        #expect(DecodePool(rawValue: 12) == .twelveGB)
+    }
+
 @Suite struct SettingsTests {
     @Test func defaultsAreSafe() {
         let s = AppSettings()

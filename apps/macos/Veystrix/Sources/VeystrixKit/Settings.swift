@@ -1,22 +1,31 @@
 import Foundation
 
 /// How much of the model's expert cache to keep in memory during decode.
-/// The engine accepts 0, 1 or 2 GB; anything larger is refused by the engine itself.
+/// The engine allows larger pools on Macs with more unified memory; the 2 GB
+/// baseline is the only size validated on a 16 GB Mac.
 public enum DecodePool: Int, Codable, CaseIterable, Sendable, Identifiable {
-    case none = 0, oneGB = 1, twoGB = 2
+    case none = 0, oneGB = 1, twoGB = 2, threeGB = 3, fourGB = 4
+    case sixGB = 6, eightGB = 8, twelveGB = 12
     public var id: Int { rawValue }
     public var title: String {
         switch self {
         case .none: return "No decode pool (safest)"
         case .oneGB: return "1 GB pool (engine warns)"
-        case .twoGB: return "2 GB pool"
+        case .twoGB: return "2 GB pool (validated)"
+        case .threeGB: return "3 GB pool (24 GB Macs)"
+        case .fourGB: return "4 GB pool (32 GB Macs)"
+        case .sixGB: return "6 GB pool (64 GB Macs)"
+        case .eightGB: return "8 GB pool (96 GB Macs)"
+        case .twelveGB: return "12 GB pool (128 GB Macs)"
         }
     }
     public var explanation: String {
         switch self {
         case .none: return "Reads experts straight from the SSD. Lowest memory use. This is the supervised launcher's default."
         case .oneGB: return "A small pool. The engine allows it with a warning because its hit rate is low."
-        case .twoGB: return "Keeps about 2 GB of recently used experts. Needs more free memory; if the engine cannot allocate it, it starts without a pool."
+        case .twoGB: return "Keeps about 2 GB of recently used experts. This is the only size validated on a 16 GB Mac; if the engine cannot allocate it, it starts without a pool."
+        case .threeGB, .fourGB, .sixGB, .eightGB, .twelveGB:
+            return "Larger pool for a Mac with more unified memory. It is capped by the engine to the machine's memory tier and still needs free memory at the first decode. Larger tiers are not hardware-validated yet."
         }
     }
 }

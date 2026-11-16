@@ -21,7 +21,7 @@ struct SettingsView: View {
                     ForEach(DecodePool.allCases) { Text($0.title).tag($0) }
                 }
                 Text(model.settings.decodePool.explanation).font(.callout).foregroundStyle(.secondary)
-                Text("Nemotron sizes its own pool: none on a Mac whose memory cannot hold all of its experts, where a pool measured slower than the system file cache.")
+                Text("Nemotron sizes its own pool by available memory: none on a Mac whose memory cannot hold all of its experts, where a pool measured slower than the system file cache. Larger Macs may keep more experts resident.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Qwen faster prefill and decode (experimental)", isOn: $model.settings.flashNextSpeed)
                 Text("Uses 4K prefill windows and buffered reads when the decode pool is available. Restart to apply.")

@@ -30,6 +30,17 @@ INT8_ATTENTION_SCRATCH_BYTES = 384 * 2**20
 AUTO_POOL_HEADROOM = int(1.25 * GIB)   # and always leaves this much of the budget unplanned
 
 
+def auto_pool_max(total_bytes: int) -> int:
+    """Auto-pool ceiling for this machine's memory tier (GiB).
+
+    The 16 GB baseline keeps AUTO_POOL_MAX. Larger machines may keep more
+    experts resident; the swap-based reductions below still apply.
+    """
+    from veystrix.memory_tiers import tier_for
+    tier = tier_for(total_bytes)
+    return round(tier.nemotron_pool_cap_gb * GIB)
+
+
 def swap_refuse_bytes() -> int:
     if memory_policy.is_absolute_swap_policy():
         return int(memory_policy.absolute_swap_ceiling_mib() * 2 ** 20)
@@ -157,7 +168,7 @@ def make_plan(config: dict, machine: Machine, *, dense_bytes: int, context_token
         room = limit - base - AUTO_POOL_HEADROOM
         # Swap already in use means the machine is short of memory right now (measured: a 4 GiB pool plus a long
         # prefill pushed swap from 0.8 to 2.4 GiB): size the pool down instead of adding to the pressure.
-        cap = AUTO_POOL_MAX if machine.swap_used < GIB else GIB if machine.swap_used < 2 * GIB else GIB // 4
+        cap = auto_pool_max(machine.total) if machine.swap_used < GIB else GIB if machine.swap_used < 2 * GIB else GIB // 4
         pool_bytes = max(0, min(cap, room)) // (64 * 2**20) * (64 * 2**20)
     if swap_only:
         return Plan(context_tokens, chunk_tokens, pool_bytes, build(pool_bytes, chunk_tokens), limit)

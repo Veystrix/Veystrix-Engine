@@ -11,6 +11,22 @@ GB = 10**9
 POLICY = "VEYSTRIX_MEMORY_POLICY"
 POOL_STEPS = (2 * GIB, GIB, GIB // 2, 0)
 GROW_MARGIN = GIB
+
+
+def pool_steps(cap: int, physical_bytes: int | None = None) -> tuple[int, ...]:
+    """Descending candidate pool sizes. The 16 GB baseline keeps POOL_STEPS exactly.
+
+    Larger tiers add one step at their cap so the elastic planner can actually
+    use the larger pool the UI allowed; safety headroom checks still apply.
+    """
+    from veystrix.memory_tiers import tier_for
+    if physical_bytes is None or tier_for(physical_bytes).name == "16 GB":
+        return POOL_STEPS
+    tier_cap = min(cap, round(tier_for(physical_bytes).pool_cap_gb * 1_000_000_000))
+    if tier_cap <= POOL_STEPS[0]:
+        return POOL_STEPS
+    return (tier_cap, *POOL_STEPS)
+
 GROW_COOLDOWN_SECONDS = 120
 KV_BYTES_PER_TOKEN = 64 * 1024
 DECODE_SLACK = GIB // 2
@@ -52,13 +68,18 @@ class MemoryBudget:
 
 
 def plan(*, available, pressure, resident, state, prefix, pending_tokens, prefill_scratch,
-         verification_width, existing_pool, cap, previous, last_change, now):
-    """Choose optional pool capacity. Already-resident bytes are reported separately."""
+         verification_width, existing_pool, cap, previous, last_change, now, physical_bytes=None):
+    """Choose optional pool capacity. Already-resident bytes are reported separately.
+
+    ``physical_bytes`` only widens the candidate steps on larger tiers; all
+    headroom, pressure and cooldown rules are unchanged.
+    """
     workspace = min(8, max(0, verification_width)) * 10 * UNION_BYTES_PER_ROUTE
     state_growth = max(0, pending_tokens) * KV_BYTES_PER_TOKEN
     slack = DECODE_SLACK if not prefill_scratch else 0
     unreserved = available + existing_pool - state_growth - prefill_scratch - workspace - slack
-    size = next(step for step in POOL_STEPS if step <= max(0, min(cap, unreserved)))
+    size = next(step for step in pool_steps(cap, physical_bytes)
+                if step <= max(0, min(cap, unreserved)))
     if pressure >= 2:
         size = 0
     if previous is not None and size > previous:
@@ -117,6 +138,7 @@ def apply(store, *, phase, tokens, chunk, ring, verification_width, resident, ca
         state=cache_bytes(cache), prefix=prefix_store.usage()["ram_bytes"] if prefix_store else 0,
         pending_tokens=tokens, prefill_scratch=scratch, verification_width=verification_width,
         existing_pool=existing, cap=requested_cap(), previous=previous, last_change=changed, now=now,
+        physical_bytes=os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"),
     )
     # The mmap is rounded down to whole slots. Compare against the configured
     # size recorded by this planner, so a warm pool is retained across turns.

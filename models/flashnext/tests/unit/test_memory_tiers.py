@@ -37,6 +37,27 @@ class HigherMemoryPoolTests(unittest.TestCase):
         with self.assertRaises(modes.ModeError):
             modes.choose_pool_gb("13", physical_bytes=128 * GIB)
 
+    def test_planner_steps_are_unchanged_on_the_baseline(self):
+        self.assertEqual(memory_budget.pool_steps(6 * GIB, 16 * GIB), memory_budget.POOL_STEPS)
+
+    def test_planner_can_reach_a_larger_pool_on_a_larger_machine(self):
+        cap = 12_000_000_000  # decimal GB, as in --pool-gb
+        steps = memory_budget.pool_steps(cap, 128 * GIB)
+        self.assertEqual(steps[0], cap)
+        self.assertEqual(steps[1:], memory_budget.POOL_STEPS)
+        row = memory_budget.plan(
+            available=20 * GIB, pressure=1, resident=3 * GIB, state=0, prefix=0,
+            pending_tokens=0, prefill_scratch=0, verification_width=0, existing_pool=0,
+            cap=cap, previous=None, last_change=0, now=200, physical_bytes=128 * GIB)
+        self.assertEqual(row.expert_pool_bytes, cap)
+
+    def test_nemotron_auto_cap_follows_the_tier(self):
+        from models.nemotron35 import admission
+        from veystrix.memory_tiers import GIB as TIER_GIB
+
+        self.assertEqual(admission.auto_pool_max(16 * TIER_GIB), admission.AUTO_POOL_MAX)
+        self.assertGreater(admission.auto_pool_max(128 * TIER_GIB), admission.AUTO_POOL_MAX)
+
     def test_start_gate_is_unchanged(self):
         gb, reason = modes.choose_pool_gb("auto", available_gb=8.0, physical_bytes=128 * GIB)
         self.assertEqual(gb, 0.0)

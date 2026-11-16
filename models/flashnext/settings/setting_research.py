@@ -127,6 +127,7 @@ SETTINGS = (
     research("qsa-fused-gather", "FLASHNEXT_QSA_FUSED_GATHER", parser=choice(("0", "1"), "qsa-fused-gather")),
     research("qsa-tile-pipeline", "FLASHNEXT_QSA_TILE_PIPELINE", parser=choice(("0", "1"), "qsa-tile-pipeline")),
     research("dense-gemm", "FLASHNEXT_DENSE_GEMM", parser=choice(("0", "1"), "dense-gemm")),
+    research("qsa-fused-sdpa", "FLASHNEXT_QSA_FUSED_SDPA", parser=choice(("0", "1"), "qsa-fused-sdpa")),
     research("qsa-masked-max-keys", "FLASHNEXT_QSA_MASKED_MAX_KEYS", "16384", "startup", integer, unset="16384"),
     research("qsa-masked-tile", "FLASHNEXT_QSA_MASKED_TILE", "256", "startup", integer, unset="256"),
     research("mtp-cache-limit-mb", "FLASHNEXT_MTP_CACHE_LIMIT_MB", "512", "startup", integer, unset="512"),

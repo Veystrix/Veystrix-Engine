@@ -112,6 +112,7 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_PREFILL_MERGE_TAIL": "0",           # a small final window runs on its own; folding it into the previous one is an opt-in below
     "FLASHNEXT_LAYER_MAJOR_SINGLE": "0",           # one-chunk prefills use the reference path; layer-major for them is an opt-in below
     "FLASHNEXT_QSA_DENSE_PREFIX": "0",             # per-query gather is the reference; the dense prefix is an explicit opt-in below
+    "FLASHNEXT_QSA_FUSED_SDPA": "0",              # sparse query tiles gather K/V rows, then attend; one kernel that does both is an opt-in below
     "FLASHNEXT_DENSE_GEMM": "0",                   # large 4-bit projections use the quantized kernel; the dense-GEMM path (bit-equal per verified shape) is an opt-in below
     "FLASHNEXT_QSA_TILE_PIPELINE": "0",            # each query tile is evaluated before the next is built; queueing the next one is an opt-in below
     "FLASHNEXT_QSA_FUSED_GATHER": "0",             # INT8 rows are gathered then dequantized as separate ops; one fused kernel is an opt-in below
@@ -184,6 +185,12 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
     "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
     "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint; fails 1 of 24 cases of the full quality gate (tool_2: stop-or-continue near tie), see docs/performance/overnight-2026-11-16.md")
+EXPERIMENTAL["qsa-fused-sdpa"] = (
+    {"FLASHNEXT_QSA_FUSED_SDPA": "1"},
+    "the sparse per-query attention of a prefill chunk gathers, dequantizes and attends in one kernel (MLX's single-pass SDPA "
+    "kernel with its K/V loads replaced by the INT8 / INT4 row dequantization), so the bfloat16 K/V copies are never written; "
+    "bit-identical to the gather + mx.fast.scaled_dot_product_attention path (checked over head dimensions 128 and 256, one to 32 "
+    "query rows, one to 2,052 keys, both cache layouts)")
 EXPERIMENTAL["dense-gemm"] = (
     {"FLASHNEXT_DENSE_GEMM": "1"},
     "prefill-sized 4-bit projections (at least 384 rows) are dequantized to a transient array and run as a dense GEMM, about 8% "
@@ -325,6 +332,8 @@ def plan_mode(mode, *, pool_gb=None, enable=(), available_gb=None, prefix_dir=No
         raise ModeError("single-chunk-layer-major needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
     if "merge-small-tail" in enable and not LAYER_MAJOR_MODES.intersection(enable):
         raise ModeError("merge-small-tail needs a layer-major mode (layer-major, layer-major-4k or layer-major-hybrid-4k)")
+    if "qsa-fused-sdpa" in enable and "kv-tiered4" not in enable:
+        raise ModeError("qsa-fused-sdpa needs the tiered INT4/INT8 KV cache (kv-tiered4)")
     if "qsa-tile-pipeline" in enable and not {"kv-k16v4", "kv-k8v4", "kv-tiered4", "qsa-gather"}.intersection(enable):
         raise ModeError("qsa-tile-pipeline needs the gather QSA kernel (kv-tiered4, kv-k8v4, kv-k16v4 or qsa-gather)")
     if "qsa-fused-gather" in enable and not {"kv-tiered4"}.intersection(enable):

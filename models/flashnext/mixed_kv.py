@@ -121,6 +121,192 @@ def _fused_dequantize_two_tier(old, recent, indices, history, group):
     return out.reshape(queries, heads, selected, dim)
 
 
+FLAG_FUSED_SDPA = "FLASHNEXT_QSA_FUSED_SDPA"   # opt-in: one kernel gathers, dequantizes and attends (bit-identical to gather + MLX SDPA)
+
+
+def fused_sdpa_enabled() -> bool:
+    value = os.environ.get(FLAG_FUSED_SDPA, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_FUSED_SDPA} must be 0 or 1")
+    return value == "1"
+
+
+# MLX's single-pass ``sdpa_vector`` kernel (mlx/backend/metal/kernels/sdpa_vector.h) with its K and V loads replaced by the
+# gather and the affine dequantization of the cache rows. Same thread mapping, same per-thread order of operations, same
+# simd reductions and the same final cross-simdgroup reduction, so the result is bit-identical to gathering bfloat16 K/V
+# and calling ``mx.fast.scaled_dot_product_attention`` whenever MLX picks that single-pass kernel (checked bit for bit for
+# one to 32 query rows and one to 2,052 keys, head dimension 256, 24 query heads, 2 key/value heads, boolean mask).
+_FUSED_SDPA_SOURCE = """
+    constexpr int BN = 32;
+    constexpr int BD = 32;
+    typedef float U;
+    uint3 tid = threadgroup_position_in_grid;
+    uint simd_gid = simdgroup_index_in_threadgroup;
+    uint simd_lid = thread_index_in_simdgroup;
+    threadgroup U outputs[BN * BD];
+    threadgroup U max_scores[BN];
+    threadgroup U sum_exp_scores[BN];
+    // One threadgroup per (query row, key/value head, group of HG query heads): it dequantizes each selected row once for the HG
+    // heads. Every head keeps MLX's per-head order of operations.
+    int hg = tid.x % NHG;
+    int kvh = (tid.x / NHG) % HKV;
+    int row_t = tid.x / (NHG * HKV);
+    int qbh0 = row_t * HQ + kvh * GQ + hg * HG;
+    U qv[HG][QPT];
+    U o[HG][QPT];
+    U max_score[HG];
+    U sum_exp_score[HG];
+    for (int h = 0; h < HG; h++) {
+        auto qp = &q[0] + (qbh0 + h) * ND + simd_lid * QPT;
+        for (int i = 0; i < QPT; i++) {
+            qv[h][i] = static_cast<U>(scale[0]) * static_cast<U>(qp[i]);
+            o[h][i] = 0;
+        }
+        max_score[h] = -3.4028234663852886e+38f;
+        sum_exp_score[h] = 0;
+    }
+    int d0 = simd_lid * QPT;
+    for (int i = simd_gid; i < NS; i += BN) {
+        if (mask[row_t * NS + i]) {
+            int row = idx[row_t * NS + i];
+            U kf[QPT];
+            U vf[QPT];
+            if (row < HIST) {
+                uint base = (uint)kvh * NCAPO + (uint)row;
+                uint kword = ko_w[base * DWO + d0 / 8];
+                uint vword = vo_w[base * DWO + d0 / 8];
+                uint shift = (d0 % 8) * 4;
+                for (int j = 0; j < QPT; j++) {
+                    uint g = (d0 + j) / GSZ;
+                    uint kq = (kword >> (shift + 4 * j)) & 0xFu;
+                    uint vq = (vword >> (shift + 4 * j)) & 0xFu;
+                    float kr = static_cast<float>(ko_s[base * NG + g]) * static_cast<float>(kq) + static_cast<float>(ko_b[base * NG + g]);
+                    float vr = static_cast<float>(vo_s[base * NG + g]) * static_cast<float>(vq) + static_cast<float>(vo_b[base * NG + g]);
+                    kf[j] = static_cast<float>(static_cast<bfloat16_t>(kr));
+                    vf[j] = static_cast<float>(static_cast<bfloat16_t>(vr));
+                }
+            } else {
+                uint base = (uint)kvh * NCAPR + (uint)(row - HIST);
+                for (int w4 = 0; w4 < QPT / 4; w4++) {
+                    uint kword = kr_w[base * DWR + d0 / 4 + w4];
+                    uint vword = vr_w[base * DWR + d0 / 4 + w4];
+                    for (int k = 0; k < 4; k++) {
+                        int j = w4 * 4 + k;
+                        uint g = (d0 + j) / GSZ;
+                        uint kq = (kword >> (8 * k)) & 0xFFu;
+                        uint vq = (vword >> (8 * k)) & 0xFFu;
+                        float kr = static_cast<float>(kr_s[base * NG + g]) * static_cast<float>(kq) + static_cast<float>(kr_b[base * NG + g]);
+                        float vr = static_cast<float>(vr_s[base * NG + g]) * static_cast<float>(vq) + static_cast<float>(vr_b[base * NG + g]);
+                        kf[j] = static_cast<float>(static_cast<bfloat16_t>(kr));
+                        vf[j] = static_cast<float>(static_cast<bfloat16_t>(vr));
+                    }
+                }
+            }
+            for (int h = 0; h < HG; h++) {
+                U score = 0;
+                for (int j = 0; j < QPT; j++) {
+                    score += qv[h][j] * kf[j];
+                }
+                score = simd_sum(score);
+                U new_max = max(max_score[h], score);
+                U factor = fast::exp(max_score[h] - new_max);
+                U exp_score = fast::exp(score - new_max);
+                max_score[h] = new_max;
+                sum_exp_score[h] = sum_exp_score[h] * factor + exp_score;
+                for (int j = 0; j < QPT; j++) {
+                    o[h][j] = o[h][j] * factor + exp_score * vf[j];
+                }
+            }
+        }
+    }
+    for (int h = 0; h < HG; h++) {
+        if (simd_lid == 0) {
+            max_scores[simd_gid] = max_score[h];
+            sum_exp_scores[simd_gid] = sum_exp_score[h];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        U ms = max_scores[simd_lid];
+        U new_max = simd_max(ms);
+        U factor = fast::exp(ms - new_max);
+        U total = simd_sum(sum_exp_scores[simd_lid] * factor);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (int i = 0; i < QPT; i++) {
+            outputs[simd_lid * BD + simd_gid] = o[h][i];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            U r = simd_sum(outputs[simd_gid * BD + simd_lid] * factor);
+            r = total == 0 ? r : (r / total);
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (simd_lid == 0) {
+                out[(qbh0 + h) * ND + simd_gid * QPT + i] = static_cast<bfloat16_t>(r);
+            }
+        }
+    }
+"""
+_FUSED_SDPA_KERNEL = [None]
+_FUSED_SDPA_NAMES = ["q", "ko_w", "ko_s", "ko_b", "vo_w", "vo_s", "vo_b", "kr_w", "kr_s", "kr_b", "vr_w", "vr_s", "vr_b",
+                     "idx", "mask", "scale"]
+
+
+def fused_sdpa_selected(cache, queries, indices, valid, scale):
+    """Attention of ``queries`` [T, Hq, 1, D] over the cache rows ``indices`` [1, T, S] (boolean ``valid`` [T, 1, 1, S]) in one
+    kernel, bit-identical to ``gather_selected`` followed by ``mx.fast.scaled_dot_product_attention``. Returns [T, Hq, 1, D], or
+    None when the cache layout, the shapes or the flag are not the supported ones (the caller then takes the reference path)."""
+    if not fused_sdpa_enabled() or cache.mode != "tiered4" or not isinstance(cache.recent_keys, tuple):
+        return None
+    recent_n = cache.offset - cache.history_tokens
+    history = int(cache.history_tokens)
+    if recent_n <= 0 or (history and (not isinstance(cache.keys, tuple) or not isinstance(cache.values, tuple))):
+        return None
+    kr, vr = cache.recent_keys, cache.recent_values
+    group = cache.group_size
+    wr = kr[0]
+    if (wr.ndim != 4 or wr.shape[0] != 1 or indices.ndim != 3 or indices.shape[0] != 1 or wr.dtype != mx.uint32
+            or queries.ndim != 4 or queries.shape[2] != 1 or queries.dtype != mx.bfloat16 or valid.dtype != mx.bool_):
+        return None
+    kv_heads, cap_recent, words_recent = wr.shape[1], wr.shape[2], wr.shape[3]
+    dim = words_recent * 4
+    tiles, selected = indices.shape[1], indices.shape[2]
+    q_heads = queries.shape[1]
+    if (dim not in (128, 256) or dim % group or queries.shape[0] != tiles or queries.shape[3] != dim or q_heads % kv_heads
+            or tiles > 32 or selected < 1 or valid.shape != (tiles, 1, 1, selected) or vr[0].shape != wr.shape
+            or any(a.dtype != mx.bfloat16 for a in (kr[1], kr[2], vr[1], vr[2]))
+            or kr[1].shape != (1, kv_heads, cap_recent, dim // group) or vr[1].shape != kr[1].shape
+            or kr[2].shape != kr[1].shape or vr[2].shape != kr[1].shape):
+        return None
+    if history:
+        ko, vo = cache.keys, cache.values
+        wo = ko[0]
+        words_old, cap_old = wo.shape[3], wo.shape[2]
+        if (wo.ndim != 4 or wo.dtype != mx.uint32 or words_old * 8 != dim or wo.shape[1] != kv_heads or vo[0].shape != wo.shape
+                or any(a.dtype != mx.bfloat16 for a in (ko[1], ko[2], vo[1], vo[2]))
+                or ko[1].shape != (1, kv_heads, cap_old, dim // group) or vo[1].shape != ko[1].shape
+                or ko[2].shape != ko[1].shape or vo[2].shape != ko[1].shape):
+            return None
+        at = indices
+    else:
+        ko, vo = kr, vr
+        words_old, cap_old = words_recent, cap_recent
+        at = mx.clip(indices, 0, recent_n - 1)
+    # Query heads that share one dequantization of a key/value row. Two is the fastest on the M4 (one head redoes the dequantization
+    # for every head, three or more spill registers and run several times slower); the bits do not depend on it.
+    heads_per_group = int(os.environ.get("FLASHNEXT_QSA_FUSED_SDPA_HEADS", "2" if (q_heads // kv_heads) % 2 == 0 else "1"))
+    if heads_per_group < 1 or (q_heads // kv_heads) % heads_per_group:
+        return None
+    if _FUSED_SDPA_KERNEL[0] is None:
+        _FUSED_SDPA_KERNEL[0] = mx.fast.metal_kernel(
+            name="flashnext_fused_sdpa", input_names=_FUSED_SDPA_NAMES, output_names=["out"], source=_FUSED_SDPA_SOURCE)
+    out = _FUSED_SDPA_KERNEL[0](
+        inputs=[queries, ko[0], ko[1], ko[2], vo[0], vo[1], vo[2], kr[0], kr[1], kr[2], vr[0], vr[1], vr[2],
+                at.astype(mx.int32), valid, mx.array([scale], dtype=mx.float32)],
+        template=[("HQ", q_heads), ("HKV", kv_heads), ("GQ", q_heads // kv_heads), ("HG", heads_per_group),
+                  ("NHG", (q_heads // kv_heads) // heads_per_group), ("ND", dim), ("QPT", dim // 32), ("NS", selected),
+                  ("NCAPO", cap_old), ("NCAPR", cap_recent), ("DWO", words_old), ("DWR", words_recent),
+                  ("NG", dim // group), ("GSZ", group), ("HIST", history)],
+        grid=(tiles * kv_heads * ((q_heads // kv_heads) // heads_per_group) * 1024, 1, 1), threadgroup=(1024, 1, 1),
+        output_shapes=[(tiles * q_heads, dim)], output_dtypes=[mx.bfloat16])[0]
+    return out.reshape(tiles, q_heads, 1, dim)
+
+
 def _fused_dequantize_rows(parts, indices, group):
     """``mx.dequantize(*gathered(parts, indices), group_size=group, bits=8)`` for one batch row without the packed copies.
 

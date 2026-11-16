@@ -299,12 +299,17 @@ def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
         end = min(start + tile_size, length)
         indices, valid = _selected_indices(self.indexer, index_query, pooled,
                                            key_len, past, blocks, start, end)
-        k, v = _gather_kv(keys, values, cache, indices)
         q = queries[:, :, start:end].transpose(0, 2, 1, 3).reshape(
             batch * (end - start), heads, 1, dim)
-        out = mx.fast.scaled_dot_product_attention(
-            q, k, v, scale=self.scale,
-            mask=valid.reshape(batch * (end - start), 1, 1, -1))
+        valid = valid.reshape(batch * (end - start), 1, 1, -1)
+        out = None
+        if hasattr(cache, "gather_selected"):
+            from .mixed_kv import fused_sdpa_selected
+            # One kernel that gathers, dequantizes and attends (opt-in; bit-identical to the two steps below).
+            out = fused_sdpa_selected(cache, q, indices, valid, self.scale)
+        if out is None:
+            k, v = _gather_kv(keys, values, cache, indices)
+            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=valid)
         # Realize each tile now. A lazy graph over all tiles retains every
         # gathered KV and indexer score allocation until the final evaluation.
         if start == first and not first and hasattr(cache, "gather_selected"):

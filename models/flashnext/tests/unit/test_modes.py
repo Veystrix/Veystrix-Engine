@@ -26,7 +26,7 @@ class FlagNameTests(unittest.TestCase):
                  memory_controller.FLAG_SWAP_CEILING_MARGIN, "FLASHNEXT_WATCHDOG_MEMORY", prefill_memory.FLAG_CACHE_MB,
                  prefill_ring.FLAG_MIN_TOKENS, layer_major.FLAG_MIN_TOKENS, layer_major.FLAG_ROUTE_UNION,
                  qsa_chunk.FLAG_DENSE_PREFIX, qsa_chunk.FLAG_MASKED_SPARSE, "FLASHNEXT_LAYER_MAJOR_SINGLE",
-                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL, expert_pool.POLICY_FLAG, qsa_chunk.FLAG_SHARED_DENSE, mixed_kv.FLAG_FUSED_GATHER, qsa_chunk.FLAG_TILE_PIPELINE, "FLASHNEXT_DENSE_GEMM"}
+                 prefill_ring.FLAG_SCRATCH_LATER, layer_major.FLAG_MERGE_TAIL, expert_pool.POLICY_FLAG, qsa_chunk.FLAG_SHARED_DENSE, mixed_kv.FLAG_FUSED_GATHER, qsa_chunk.FLAG_TILE_PIPELINE, "FLASHNEXT_DENSE_GEMM", mixed_kv.FLAG_FUSED_SDPA}
         self.assertLessEqual(M.OWNED, known)
 
     def test_agentic_prefill_matches_the_real_model_f2br_condition(self):

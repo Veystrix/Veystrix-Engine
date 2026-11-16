@@ -185,6 +185,35 @@ class GatherTests(unittest.TestCase):
                 self.assertEqual(a.shape, e.shape)
                 self.assertTrue(mx.array_equal(a, e).item(), (group, scale))
 
+    def test_fused_sdpa_is_bit_identical_to_gather_then_sdpa(self):
+        import itertools
+        from models.flashnext import mixed_kv
+        for dim, heads_q, group, scale, two_tier in itertools.product((128, 256), (4, 24), (32, 64), (0.01, 100.0), (False, True)):
+            mx.random.seed(dim + heads_q + group)
+            cache = MixedPrecisionQSAKVCache("tiered4", group, 256 if two_tier else 8192)
+            for length in ((700, 600) if two_tier else (700,)):
+                k = (mx.random.normal((1, 2, length, dim)) * scale).astype(mx.bfloat16)
+                v = (mx.random.normal((1, 2, length, dim)) * scale + 3 * scale).astype(mx.bfloat16)
+                cache.update_and_fetch(k, v)
+            self.assertEqual(cache.history_tokens > 0, two_tier)
+            for tiles, selected in ((1, 37), (9, 53), (32, 120), (3, 1)):
+                idx = mx.sort(mx.random.randint(0, cache.offset, (1, tiles, selected)), axis=-1)
+                valid = mx.random.uniform(shape=(tiles, 1, 1, selected)) > 0.2
+                q = (mx.random.normal((tiles, heads_q, 1, dim)) * 0.5).astype(mx.bfloat16)
+                with patch.dict(os.environ, {mixed_kv.FLAG_FUSED_SDPA: "0"}):
+                    self.assertIsNone(mixed_kv.fused_sdpa_selected(cache, q, idx, valid, dim ** -0.5))
+                keys, values = cache.gather_selected(idx)
+                expected = mx.fast.scaled_dot_product_attention(q, keys, values, scale=dim ** -0.5, mask=valid)
+                with patch.dict(os.environ, {mixed_kv.FLAG_FUSED_SDPA: "1"}):
+                    actual = mixed_kv.fused_sdpa_selected(cache, q, idx, valid, dim ** -0.5)
+                self.assertIsNotNone(actual)
+                mx.eval(expected, actual)
+                self.assertEqual(actual.shape, expected.shape)
+                self.assertTrue(mx.array_equal(actual, expected).item(), (dim, heads_q, group, scale, two_tier, tiles, selected))
+        with patch.dict(os.environ, {mixed_kv.FLAG_FUSED_SDPA: "2"}):
+            with self.assertRaises(ValueError):
+                mixed_kv.fused_sdpa_enabled()
+
     def test_tile_pipeline_is_bit_identical(self):
         model = build_model()
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpAttention

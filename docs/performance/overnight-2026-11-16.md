@@ -267,6 +267,10 @@ S3-FIFO gives +5% decode speed and 5% fewer bytes read, reproducibly (alternatin
 
 With `s3fifo` on and the same 300-token prompt / 120 decode tokens: `FLASHNEXT_IO_WORKERS` 6, 8, 16, 24 and 32 all gave 2.55-2.57 tok/s (the app already uses 8). The decode read path is saturating the SSD at any of these counts. `pool-buffered-fill` also gave nothing in this setup (2.45 and 2.48 tok/s alone, 2.61 with `s3fifo` against 2.62 for `s3fifo` alone), unlike the +13-30% recorded on 14 Nov, so its gain depends on page-cache state and is not reproduced here.
 
+## Qwen decode pool: a real route trace, and why the offline S3-FIFO tuning did not hold
+
+A real decode trace (300 tokens after a 300-token prompt, 48 streamed layers x 10 experts = 480 experts per token, 14,400 calls) shows why LRU is poor here: the pool holds 349 slots but one token needs 480, so an LRU pool cycles and never hits (replayed hit rate 0.0%); the 349 most frequent experts cover only 22% of accesses. Replaying it offline, S3-FIFO as built hits 11.5%, and a ghost queue of 2x the slots 20.8% (frequency/recency variants and ratio sweeps 8-21%). On the real model the longer ghost was not better: 200 decode tokens, ghost 1x 2.62 / 2.64 tok/s (211.9 / 210.5 GB read), 2x 2.57 / 2.58 (216.4 / 216.0), 3x 2.54 (219.1). So the replay over-predicts for this change (it does not model the prefill-seeded pool or the read path), and the shipped `s3fifo` (ghost 1x) stays as the option. The code change was reverted. The trace is in the session scratchpad only (not committed).
+
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
 Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.

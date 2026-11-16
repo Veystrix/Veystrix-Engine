@@ -53,8 +53,26 @@ def main() -> int:
     if manifest.is_file():
         import json
         data = json.loads(manifest.read_text())
-        check("integrity manifest pins files", len(data.get("files", {})) > 100,
-              f"{len(data.get('files', {}))} files pinned")
+        pinned = data.get("files", {})
+        check("integrity manifest pins files", len(pinned) > 100, f"{len(pinned)} files pinned")
+        # Recompute exactly as the app does, so a manifest that disagrees with
+        # the signed bundle fails here rather than blocking launch on a user Mac.
+        prefixes = ("engine/lib/", "Info.plist", "VERSION", "LICENSE.txt", "THIRD_PARTY_NOTICES.md")
+        excluded_names = {"BundleIntegrity.json", "BUILD-CHANNEL"}
+        excluded_suffixes = (".dylib", ".so")
+        actual: dict[str, str] = {}
+        for path in RESOURCES.rglob("*"):
+            rel = path.relative_to(RESOURCES).as_posix()
+            if rel in excluded_names or rel.endswith(excluded_suffixes):
+                continue
+            if not any(rel == p or rel.startswith(p) for p in prefixes):
+                continue
+            if path.is_file() and not path.is_symlink():
+                actual[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        mismatched = [name for name, digest in actual.items() if pinned.get(name) != digest]
+        unexpected = [name for name in actual if name not in pinned]
+        check("integrity manifest matches signed bundle", not mismatched and not unexpected,
+              f"{len(mismatched)} changed, {len(unexpected)} extra: {(mismatched + unexpected)[:4]}")
     else:
         check("integrity manifest exists", False)
 

@@ -34,7 +34,11 @@ public enum BundleIntegrity {
     /// (Sparkle, the embedded Python runtime) are signed after this manifest
     /// is generated, so hashing them here would create false tamper reports.
     public static let protectedPrefixes = ["engine/lib/", "Info.plist", "VERSION", "LICENSE.txt",
-                                           "THIRD_PARTY_NOTICES.md", "BUILD-CHANNEL"]
+                                           "THIRD_PARTY_NOTICES.md"]
+    // Signing writes BUILD-CHANNEL and re-signs Mach-O files after the manifest
+    // is generated. Pinning them would make every signed app look tampered.
+    private static let excludedNames: Set<String> = ["BUILD-CHANNEL"]
+    private static let excludedSuffixes = [".dylib", ".so"]
 
     public static func sha256(_ data: Data) -> String {
         let digest = SHA256.hash(data: data)
@@ -74,7 +78,9 @@ public enum BundleIntegrity {
     }
 
     private static func isProtected(_ relative: String) -> Bool {
-        relative != manifestName && protectedPrefixes.contains { relative == $0 || relative.hasPrefix($0) }
+        relative != manifestName && !excludedNames.contains(relative)
+            && !excludedSuffixes.contains { relative.hasSuffix($0) }
+            && protectedPrefixes.contains { relative == $0 || relative.hasPrefix($0) }
     }
 
     private static func relativePath(_ url: URL, under root: URL) -> String? {

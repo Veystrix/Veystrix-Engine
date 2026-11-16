@@ -87,6 +87,19 @@ private func tempDir() -> URL {
         }
     }
 
+    @Test func signedFilesAreExcludedFromTheManifest() throws {
+        try withResources { res in
+            try Data("channel".utf8).write(to: res.appendingPathComponent("BUILD-CHANNEL"))
+            try Data("dylib".utf8).write(to: res.appendingPathComponent("engine/lib/_protect_key.dylib"))
+            let manifest = try BundleIntegrity.createManifest(resources: res)
+            #expect(manifest.files["BUILD-CHANNEL"] == nil)
+            #expect(manifest.files["engine/lib/_protect_key.dylib"] == nil)
+            #expect(BundleIntegrity.verify(resources: res) == .notBundled)
+            try BundleIntegrity.writeManifest(resources: res)
+            #expect(BundleIntegrity.verify(resources: res) == .intact)
+        }
+    }
+
     @Test func addedAndRemovedFilesAreDetected() throws {
         try withResources { res in
             try BundleIntegrity.writeManifest(resources: res)

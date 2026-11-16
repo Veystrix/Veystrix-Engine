@@ -66,19 +66,24 @@ if [[ -n "$ENGINE_DIR" ]]; then
   "$APP/Contents/Resources/engine/python/bin/python3" "$ROOT/packaging/engine/smoke_import.py" "$APP/Contents/Resources/engine" || die "embedded engine validation failed"
 fi
 # Integrity manifest: pin the bundled code/resources so the app can detect a
-# modified install. Generated BEFORE signing (signing changes binary bytes);
-# the checker only hashes signed-stable files. No secrets go in this manifest.
+# modified install. Generated BEFORE signing, so it must exclude every file
+# that sign_app.sh writes or re-signs afterwards (BUILD-CHANNEL and Mach-O
+# dylibs). Otherwise the app sees those files as changed and refuses to start.
 "$ROOT/.venv/bin/python" - "$APP/Contents/Resources" <<'PYEOF' || die "could not write integrity manifest"
 import json, sys
 from pathlib import Path
 import hashlib
 resources = Path(sys.argv[1])
-prefixes = ("engine/lib/", "Info.plist", "VERSION", "LICENSE.txt",
-            "THIRD_PARTY_NOTICES.md", "BUILD-CHANNEL")
+prefixes = ("engine/lib/", "Info.plist", "VERSION", "LICENSE.txt", "THIRD_PARTY_NOTICES.md")
+# Keep in sync with VeystrixKit/BundleIntegrity.swift and scripts/verify_artifacts.py.
+excluded_names = {"BundleIntegrity.json", "BUILD-CHANNEL"}
+excluded_suffixes = (".dylib", ".so")
 files = {}
 for path in resources.rglob("*"):
     rel = path.relative_to(resources).as_posix()
-    if rel == "BundleIntegrity.json" or not any(rel == p or rel.startswith(p) for p in prefixes):
+    if rel in excluded_names or rel.endswith(excluded_suffixes):
+        continue
+    if not any(rel == p or rel.startswith(p) for p in prefixes):
         continue
     if path.is_file() and not path.is_symlink():
         files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()

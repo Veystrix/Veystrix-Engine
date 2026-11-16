@@ -112,6 +112,7 @@ EXPERIMENTAL_OFF = {
     "FLASHNEXT_PREFILL_MERGE_TAIL": "0",           # a small final window runs on its own; folding it into the previous one is an opt-in below
     "FLASHNEXT_LAYER_MAJOR_SINGLE": "0",           # one-chunk prefills use the reference path; layer-major for them is an opt-in below
     "FLASHNEXT_QSA_DENSE_PREFIX": "0",             # per-query gather is the reference; the dense prefix is an explicit opt-in below
+    "FLASHNEXT_DENSE_GEMM": "0",                   # large 4-bit projections use the quantized kernel; the dense-GEMM path (bit-equal per verified shape) is an opt-in below
     "FLASHNEXT_QSA_TILE_PIPELINE": "0",            # each query tile is evaluated before the next is built; queueing the next one is an opt-in below
     "FLASHNEXT_QSA_FUSED_GATHER": "0",             # INT8 rows are gathered then dequantized as separate ops; one fused kernel is an opt-in below
     "FLASHNEXT_QSA_SHARED_DENSE_KV": "0",         # leading dense queries gather a private K/V copy each; sharing one copy is an opt-in below
@@ -183,6 +184,11 @@ EXPERIMENTAL["qsa-fast-prefill"] = (
     "experimental: gather-mode QSA attention for prefill chunks as one causal SDPA (queries that see every token) and one masked "
     "SDPA per query tile (sparse queries, histories up to 16,384 keys). Same selected tokens and dequantized values, different "
     "SDPA reduction order; real 4K/8K prefill 1.3-1.4x, teacher-forced KL 0.007-0.019; changes the cache fingerprint; fails 1 of 24 cases of the full quality gate (tool_2: stop-or-continue near tie), see docs/performance/overnight-2026-11-16.md")
+EXPERIMENTAL["dense-gemm"] = (
+    {"FLASHNEXT_DENSE_GEMM": "1"},
+    "prefill-sized 4-bit projections (at least 384 rows) are dequantized to a transient array and run as a dense GEMM, about 8% "
+    "faster than the quantized kernel on the real shapes; used only for shapes verified bit-equal to the quantized matmul on the "
+    "layer's own weights, so the output is identical; the weights stay the checkpoint's 4-bit values")
 EXPERIMENTAL["qsa-tile-pipeline"] = (
     {"FLASHNEXT_QSA_TILE_PIPELINE": "1"},
     "experimental: the per-query attention tiles of a prefill chunk are queued asynchronously (at most two in flight) so the host "

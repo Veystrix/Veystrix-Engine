@@ -56,7 +56,7 @@ class DenseGemmTests(unittest.TestCase):
     def test_small_row_counts_use_the_stock_path(self):
         layer = _layer(2688, 2688)
         x = mx.ones((1, 4, 2688), dtype=mx.bfloat16)
-        with patch.dict(os.environ, {dense_gemm.FLAG: "1"}), patch.object(dense_gemm.mx, "dequantize") as dequantize:
+        with patch.dict(os.environ, {dense_gemm.FLAG: "1"}), patch("mlx.core.dequantize") as dequantize:
             layer(x)
         dequantize.assert_not_called()
 

@@ -140,6 +140,8 @@ def load_streaming(
     apply_compile_glue()
     apply_compile_gdn()
     apply_linear_state()
+    from models.shared import dense_gemm
+    dense_gemm.install(dense_gemm.FLASHNEXT_FLAG)    # opt-in (FLASHNEXT_DENSE_GEMM=1): bit-equal dense GEMM for large prefill projections
     apply_quantized_kv()
     from . import compiled
 

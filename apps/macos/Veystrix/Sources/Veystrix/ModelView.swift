@@ -6,7 +6,7 @@ struct ModelView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: EngineController
 
-    private let qwenModelURL = URL(string: "https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP")!
+    private let qwenModelURL = URL(string: "https://huggingface.co/" + ModelIdentity.flashNext.downloadRepo)!
     private let nemotronModelURL = URL(string: "https://huggingface.co/mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit")!
 
     private var isNemotron: Bool { model.settings.selectedModel == .nemotron35 }
@@ -29,7 +29,7 @@ struct ModelView: View {
     private var contextPresets: [(String, Int)] {
         isNemotron
             ? [("64K", 65_536), ("256K", 262_144), ("1M", 1_048_576)]
-            : [("32K", 32_768), ("128K", 131_072), ("256K", 262_144)]
+            : [("32K", 32_768), ("128K", 131_072), ("256K", ModelIdentity.flashNext.contextLimit)]
     }
 
     var body: some View {

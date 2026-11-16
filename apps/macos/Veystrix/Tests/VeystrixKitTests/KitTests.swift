@@ -23,6 +23,27 @@ private func tempDir() -> URL {
     return u
 }
 
+// MARK: model identity (single source of truth)
+@Suite struct ModelIdentityTests {
+    @Test func flashNextIdentityMatchesTheBaseline() {
+        let id = ModelIdentity.flashNext
+        #expect(id.title == "Qwen 3.8 Flash-Next")
+        #expect(id.modelTypes == ["qwen4_exp", "qwen4_exp_text"])
+        #expect(id.servedID == "veystrix-flashnext")
+        #expect(id.contextLimit == 262_144)
+        #expect(id.downloadRepo == "Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP")
+    }
+    @Test func familyDelegatesToIdentity() {
+        #expect(ModelFamily.flashnext.title == ModelIdentity.flashNext.title)
+        #expect(ModelFamily.flashnext.modelTypes == ModelIdentity.flashNext.modelTypes)
+        #expect(ModelFamily.nemotron35.identity.servedID == ModelIdentity.nemotron.servedID)
+    }
+    @Test func contextAndHarnessDefaultsFollowIdentity() {
+        #expect(AppSettings().flashNextContextTokens == ModelIdentity.flashNext.contextLimit)
+        #expect(HarnessProfiles.defaultModelID == ModelIdentity.flashNext.servedID)
+    }
+}
+
 // MARK: checkpoint validation (never reads weights)
 @Suite struct CheckpointTests {
     @Test func completeCheckpointIsCompatible() throws {

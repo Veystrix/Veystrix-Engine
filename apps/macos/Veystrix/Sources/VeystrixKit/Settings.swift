@@ -26,17 +26,14 @@ public enum ModelFamily: String, Codable, CaseIterable, Sendable, Identifiable {
     case flashnext
     case nemotron35 = "nemotron35-lightning"
     public var id: String { rawValue }
-    public var title: String {
-        switch self {
-        case .flashnext: return "Qwen 3.8 Flash-Next"
-        case .nemotron35: return "NVIDIA Nemotron 3.5 Lightning (experimental)"
-        }
-    }
+    public var title: String { identity.title }
     /// Engine architectures (`model_type`) this family accepts.
-    public var modelTypes: Set<String> {
+    public var modelTypes: Set<String> { identity.modelTypes }
+    /// The shared identity for this family.
+    public var identity: ModelIdentity.Family {
         switch self {
-        case .flashnext: return ["qwen4_exp", "qwen4_exp_text"]
-        case .nemotron35: return ["nemotron_h"]
+        case .flashnext: return ModelIdentity.flashNext
+        case .nemotron35: return ModelIdentity.nemotron
         }
     }
 }
@@ -137,7 +134,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var cacheQuotaGB: Int = 80
     public var nemotronContextTokens: Int = 1_048_576
     /// Configured server window for Qwen Flash-Next. The engine still lowers it to what memory admits.
-    public var flashNextContextTokens: Int = 262_144
+    public var flashNextContextTokens: Int = ModelIdentity.flashNext.contextLimit
     /// Empty selects the default shared cache folder.
     public var cacheDirectory: String = ""
     /// Ask for confirmation before the model is loaded. The model is never loaded when the app opens.
@@ -169,7 +166,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     /// The largest window this build offers for the selected model's KV format.
     public var activeContextLimit: Int {
-        selectedModel == .nemotron35 ? nemotronKVCache.contextLimit : 262_144
+        selectedModel == .nemotron35 ? nemotronKVCache.contextLimit : ModelIdentity.flashNext.contextLimit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -208,7 +205,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         s.nemotronContextTokens = try c.decodeIfPresent(Int.self, forKey: .nemotronContextTokens) ?? s.nemotronContextTokens
         s.nemotronContextTokens = min(max(1, s.nemotronContextTokens), s.nemotronKVCache.contextLimit)
         s.flashNextContextTokens = try c.decodeIfPresent(Int.self, forKey: .flashNextContextTokens) ?? s.flashNextContextTokens
-        s.flashNextContextTokens = min(max(1, s.flashNextContextTokens), 262_144)
+        s.flashNextContextTokens = min(max(1, s.flashNextContextTokens), ModelIdentity.flashNext.contextLimit)
         s.cacheDirectory = try c.decodeIfPresent(String.self, forKey: .cacheDirectory) ?? s.cacheDirectory
         s.confirmBeforeLoading = try c.decodeIfPresent(Bool.self, forKey: .confirmBeforeLoading) ?? s.confirmBeforeLoading
         s.requireAPIKey = try c.decodeIfPresent(Bool.self, forKey: .requireAPIKey) ?? s.requireAPIKey

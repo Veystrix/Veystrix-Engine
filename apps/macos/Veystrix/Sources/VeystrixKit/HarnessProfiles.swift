@@ -23,7 +23,7 @@ public struct HarnessSnippet: Equatable, Sendable {
 /// `GET /v1/models`; the defaults below match what the engine serves for the Flash-Next runtime.
 public enum HarnessProfiles {
     /// The id the engine serves for the Flash-Next runtime (`veystrix-<model>`).
-    public static let defaultModelID = "veystrix-flashnext"
+    public static let defaultModelID = ModelIdentity.flashNext.servedID
     public static let defaultKeyEnv = "VEYSTRIX_API_KEY"
 
     public static func snippet(for harness: Harness, port: Int, modelID: String = defaultModelID,
@@ -34,7 +34,7 @@ public enum HarnessProfiles {
         let resolvedModelContext = modelContext ?? suggestedClientContext.map { max(1, $0 - 4096) }
         switch harness {
         case .hermes:
-            let hermesContext = max(resolvedModelContext ?? 262144, 65536)
+            let hermesContext = max(resolvedModelContext ?? ModelIdentity.flashNext.contextLimit, 65536)
             return HarnessSnippet(
                 harness: harness,
                 whereToPutIt: "A dedicated Hermes profile (for example ~/.hermes/profiles/veystrix/config.yaml). Run: HERMES_HOME=~/.hermes/profiles/veystrix hermes",
@@ -55,7 +55,7 @@ public enum HarnessProfiles {
                     "context_length must be at least 64,000 for Hermes and no larger than the engine's configured limit.",
                 ])
         case .qwenCode:
-            let qwenContext = resolvedModelContext ?? 262144
+            let qwenContext = resolvedModelContext ?? ModelIdentity.flashNext.contextLimit
             return HarnessSnippet(
                 harness: harness,
                 whereToPutIt: "~/.qwen/settings.json (merge with your existing settings; keep other providers)",
@@ -119,7 +119,7 @@ public enum HarnessProfiles {
                     "Trim the harness's tool set as in the engine's DSH patch files to keep requests small.",
                 ])
         case .openCode:
-            let ocWindow = resolvedModelContext ?? 262144
+            let ocWindow = resolvedModelContext ?? ModelIdentity.flashNext.contextLimit
             return HarnessSnippet(
                 harness: harness,
                 whereToPutIt: "~/.config/opencode/opencode.json (merge with your existing config; keep other providers)",
@@ -148,7 +148,7 @@ public enum HarnessProfiles {
                     "Refresh Harness Models writes this provider for you (with a backup); this card shows the same values.",
                 ])
         case .pi:
-            let piWindow = resolvedModelContext ?? 262144
+            let piWindow = resolvedModelContext ?? ModelIdentity.flashNext.contextLimit
             return HarnessSnippet(
                 harness: harness,
                 whereToPutIt: "~/.pi/agent/extensions/veystrix.ts (installed and updated by Refresh Harness Models)",
@@ -166,7 +166,7 @@ public enum HarnessProfiles {
                     "maxTokens comes from the engine's own output ceiling instead of a 4096-token default, so generation runs uncapped up to remaining context.",
                 ])
         case .kimiCode:
-            let kimiContext = resolvedModelContext ?? 262144
+            let kimiContext = resolvedModelContext ?? ModelIdentity.flashNext.contextLimit
             return HarnessSnippet(
                 harness: harness,
                 whereToPutIt: "~/.kimi-code/config.toml (merge with your existing config; default_model is never touched)",

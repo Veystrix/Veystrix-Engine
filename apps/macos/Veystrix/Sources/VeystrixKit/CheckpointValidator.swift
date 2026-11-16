@@ -125,8 +125,10 @@ public enum CheckpointValidator {
     public static let licenseNotice = """
     Veystrix does not include a model and does not download one. A checkpoint is licensed by its publisher, \
     not by Veystrix. Read that license before you download, use, modify or share the checkpoint. \
-    Supported by this build: the Qwen3.8 Flash-Next family in MLX 4-bit format (architecture qwen4_exp), and, \
-    experimentally, NVIDIA Nemotron 3.5 Lightning in the mlx-community affine 4-bit conversion (architecture \
-    nemotron_h; NVIDIA Open Model / OpenMDW 1.1 license). The engine verifies the Nemotron layout before it loads.
+    Supported by this build: the Qwen3.8 Flash-Next family in MLX 4-bit format \
+    (architecture \(ModelIdentity.flashNext.modelTypes.sorted().joined(separator: " / "))), and, \
+    experimentally, NVIDIA Nemotron 3.5 Lightning in the mlx-community affine 4-bit conversion \
+    (architecture \(ModelIdentity.nemotron.modelTypes.sorted().joined(separator: " / ")); \
+    NVIDIA Open Model / OpenMDW 1.1 license). The engine verifies the Nemotron layout before it loads.
     """
 }

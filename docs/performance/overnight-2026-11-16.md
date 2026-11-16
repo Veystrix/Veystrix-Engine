@@ -240,7 +240,7 @@ In-process, app launch environment, 300-token prompt, 48 decode tokens, same tok
 
 ## Test status at the end of this work (branch `overnight-speed-2026-11-16`)
 
-Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 193 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,257 OK (3 skipped). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
+Unit suites, run by a separate verification agent and spot-checked (final lines read from the logs): Nemotron 197 tests OK (8 skipped), veystrix 961 OK (11 skipped), Flash-Next 2,271 OK (3 skipped) (rerun at 06:50 after the merge-small-tail commit; Ran/OK lines read from the logs). Nothing is pushed. New session identity for Nemotron (`attention_prefill: sdpa`): existing Nemotron prefix snapshots are not restored once after the upgrade. The wired-limit sysctl was deliberately not changed.
 
 ## What is left (levers, not done)
 

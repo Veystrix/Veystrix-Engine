@@ -6,6 +6,9 @@ struct ModelView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: EngineController
 
+    private let qwenModelURL = URL(string: "https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP")!
+    private let nemotronModelURL = URL(string: "https://huggingface.co/mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit")!
+
     var body: some View {
         Form {
             Section("Model") {
@@ -24,6 +27,14 @@ struct ModelView: View {
                      : "The default model. Each model keeps its own folder; switching never changes the other one.")
                     .font(.callout).foregroundStyle(.secondary)
                 Text("Only one model is loaded at a time. Model switches are initiated here.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Section("Supported models") {
+                Text("Only these two models are supported in this release. Other model families are refused.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Link("Qwen 3.8 Flash-Next — MLX 4-bit MTP", destination: qwenModelURL)
+                Link("NVIDIA Nemotron 3.5 Lightning — MLX 4-bit", destination: nemotronModelURL)
+                Text("Veystrix does not download models. Use hf download with the repository name from the link, then choose the downloaded folder under Model folder.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if model.settings.selectedModel == .flashnext {
@@ -72,7 +83,7 @@ struct ModelView: View {
             }
             Section("Compatibility and license") {
                 Text(CheckpointValidator.licenseNotice).font(.callout)
-                Text("Veystrix never downloads a model. Obtain a checkpoint from its publisher, and read its license first.")
+                Text("See Supported models above for the two checkpoints this release accepts.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

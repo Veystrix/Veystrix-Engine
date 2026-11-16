@@ -1,5 +1,7 @@
 # Veystrix inference blueprint handoff
 
+> **Historical record.** Work moved to `main` on 2026-11-16; the branch names and paths below describe the state at the time. See the [documentation index](../README.md) for current status.
+
 The work is in the current checkout on `unlimited-generation`. The original
 research blueprint is the user attachment; [baseline notes](inference-blueprint-baseline.md)
 record the local checkpoint geometry and earlier exactness runs. This file is

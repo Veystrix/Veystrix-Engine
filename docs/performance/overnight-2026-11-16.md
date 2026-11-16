@@ -1,5 +1,7 @@
 # Overnight speed work, 16 November 2026
 
+> **Historical record.** Measurements below are retained as evidence; the experiments have since been folded into `main`. See the [documentation index](../README.md) for current status.
+
 Branch `overnight-speed-2026-11-16` (from `unlimited-generation` at f9a9713). The owner was away for ten hours and asked for continuous experiments on prefill and decode speed with two fixed rules: the weights stay 4-bit, and quality comes before speed. Nothing here lowers precision, prunes experts, drops tokens or changes the routed experts. A change that is not bit-identical is opt-in and carries a measured quality check.
 
 ## Summary for the owner (read this first)

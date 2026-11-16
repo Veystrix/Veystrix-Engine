@@ -1,6 +1,6 @@
 # Documentation
 
-> **Status (updated 2026-11-10):** the CHAT and AGENTIC modes (`--mode chat|agentic`, supervised `./serve.sh`) are in this repository (branch `qwen3.8-flash-next`). See the [mode and agentic validation guide](flashnext/agentic-validation.md) for tested CHAT behavior and the AGENTIC acceptance checks; real-checkpoint harness runs are still unverified. Release, packaging and security guides: [release process](release/RELEASE_PROCESS.md), [free channel](release/FREE_CHANNEL.md), [validation status](release/VALIDATION.md), [packaging](packaging/PACKAGING.md), [security audit](security/SECURITY_AUDIT_2026-11-10.md), [manual launch](MANUAL_LAUNCH.md).
+> **Status (updated 2026-11-16):** two models are supported — Qwen 3.8 Flash-Next (the default) and NVIDIA Nemotron 3.5 Lightning (experimental). CHAT and AGENTIC modes (`--mode chat|agentic`, supervised `./serve.sh`) are in the repository; see the [mode and agentic validation guide](flashnext/agentic-validation.md) for tested CHAT behavior and the AGENTIC acceptance checks. Unit suites on `main`: 973 shared, 2,281 Flash-Next, 203 Nemotron; the macOS app has 71 Swift logic tests in CI. Real-checkpoint harness runs remain owner-validated, not claimed here. Model decisions are recorded in the [ADR log](decisions/README.md). Release, packaging and security guides: [release process](release/RELEASE_PROCESS.md), [free channel](release/FREE_CHANNEL.md), [validation status](release/VALIDATION.md), [packaging](packaging/PACKAGING.md), [security audit](security/SECURITY_AUDIT_2026-11-10.md), [manual launch](MANUAL_LAUNCH.md).
 
 Use the component handoff before changing code or running a benchmark. Read
 the research record when you need prior measurements or rejected approaches.
@@ -35,6 +35,7 @@ collect runtime-specific correctness and experiment constraints.
 
 | Path | Purpose |
 |---|---|
+| [`decisions/README.md`](decisions/README.md) | Architecture decision record (ADR) log for model and runtime decisions |
 | [`measurement-standard.md`](measurement-standard.md) | Shared live-test and JSONL evidence rules |
 | [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) | Using the engine from other devices over Tailscale |
 | [`results/flashnext/`](../results/flashnext/) | Retained Flash-Next records |

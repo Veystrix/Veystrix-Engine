@@ -25,6 +25,7 @@ private struct ChatConversation: Codable, Identifiable {
     @Published private var draftError: String?
     @Published private var tasks: [UUID: Task<Void, Never>] = [:]
     private let file = Paths().applicationSupport.appendingPathComponent("chat-history.json")
+    private let cipherKey = ChatHistoryCipher.loadOrCreateKey()
 
     var error: String? {
         get { selection.map { errors[$0] } ?? draftError }
@@ -48,16 +49,30 @@ private struct ChatConversation: Codable, Identifiable {
     }()
 
     init() {
-        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([ChatConversation].self, from: data) {
+        if let saved = load() {
             conversations = saved
             selection = saved.first?.id
+        } else if let data = try? Data(contentsOf: file),
+                  let legacy = try? JSONDecoder().decode([ChatConversation].self, from: data) {
+            // One-time migration from the old plaintext format.
+            conversations = legacy
+            selection = legacy.first?.id
+            save(for: selection ?? UUID())
         }
+    }
+
+    private func load() -> [ChatConversation]? {
+        guard let envelope = try? Data(contentsOf: file),
+              let data = try? ChatHistoryCipher.open(envelope, key: cipherKey),
+              let saved = try? JSONDecoder().decode([ChatConversation].self, from: data) else { return nil }
+        return saved
     }
 
     func save(for id: UUID) {
         do {
             try Paths().ensureDirectories()
-            let data = try JSONEncoder().encode(conversations)
+            let plaintext = try JSONEncoder().encode(conversations)
+            let data = try ChatHistoryCipher.seal(plaintext, key: cipherKey)
             try data.write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         } catch { errors[id] = "Could not save chat history: \(error.localizedDescription)" }

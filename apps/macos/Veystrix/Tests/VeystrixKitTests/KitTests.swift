@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 @testable import VeystrixKit
 
 // MARK: helpers
@@ -46,6 +47,41 @@ private func tempDir() -> URL {
             #expect(PersistedState("count", default: 7, defaults: defaults).value == 7)
             defaults.set(Data("not json".utf8), forKey: "count")
             #expect(PersistedState("count", default: 7, defaults: defaults).value == 7)
+        }
+    }
+}
+
+// MARK: encrypted chat history
+@Suite struct ChatHistoryCipherTests {
+    @Test func roundTripHidesThePlaintext() throws {
+        let key = SymmetricKey(size: .bits256)
+        let secret = Data("a private prompt with tokens".utf8)
+        let sealed = try ChatHistoryCipher.seal(secret, key: key)
+        #expect(try ChatHistoryCipher.open(sealed, key: key) == secret)
+        #expect(!String(data: sealed, encoding: .utf8)!.contains("private prompt"))
+    }
+
+    @Test func tamperingIsRejected() throws {
+        let key = SymmetricKey(size: .bits256)
+        let sealed = try ChatHistoryCipher.seal(Data("secret".utf8), key: key)
+        var envelope = try JSONDecoder().decode(ChatHistoryCipher.Envelope.self, from: sealed)
+        envelope.payload[envelope.payload.count - 1] ^= 0x01
+        let tampered = try JSONEncoder().encode(envelope)
+        #expect(throws: (any Error).self) { try ChatHistoryCipher.open(tampered, key: key) }
+    }
+
+    @Test func aDifferentKeyCannotOpenIt() throws {
+        let sealed = try ChatHistoryCipher.seal(Data("secret".utf8), key: SymmetricKey(size: .bits256))
+        #expect(throws: (any Error).self) {
+            try ChatHistoryCipher.open(sealed, key: SymmetricKey(size: .bits256))
+        }
+    }
+
+    @Test func anUnknownFormatVersionIsRejected() throws {
+        let key = SymmetricKey(size: .bits256)
+        let envelope = ChatHistoryCipher.Envelope(version: 99, payload: Data())
+        #expect(throws: ChatHistoryCipher.CipherError.self) {
+            try ChatHistoryCipher.open(try JSONEncoder().encode(envelope), key: key)
         }
     }
 }

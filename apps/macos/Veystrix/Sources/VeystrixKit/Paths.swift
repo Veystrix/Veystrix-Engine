@@ -12,6 +12,8 @@ public struct Paths: Sendable {
     public var applicationSupport: URL { home.appendingPathComponent("Library/Application Support/Veystrix", isDirectory: true) }
     public var settingsFile: URL { applicationSupport.appendingPathComponent("settings.json") }
     public var apiKeyFile: URL { applicationSupport.appendingPathComponent("local-api-key") }
+    /// Fallback for the chat-history encryption key when the Keychain is unavailable.
+    public var chatKeyFile: URL { applicationSupport.appendingPathComponent("chat-history-key") }
     public var logsDirectory: URL { home.appendingPathComponent("Library/Logs/Veystrix", isDirectory: true) }
     public var appLogFile: URL { logsDirectory.appendingPathComponent("veystrix-app.log") }
     public var engineLogFile: URL { logsDirectory.appendingPathComponent("veystrix-engine.log") }

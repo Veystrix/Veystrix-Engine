@@ -1,0 +1,26 @@
+{
+ "date": "2026-11-17T02:26:08",
+ "rows": 2048,
+ "modes": {
+  "fp16": {
+   "placement": {
+    "main:ios18.cast4": "MLNeuralEngineComputeDevice",
+    "main:ios18.matmul5": "MLNeuralEngineComputeDevice",
+    "main:ios18.cast7": "MLNeuralEngineComputeDevice"
+   },
+   "p50_ms": 6.329,
+   "max_abs_diff": 0.004034996032714844,
+   "mean_abs_diff": 0.0002730581327341497
+  },
+  "int8": {
+   "placement": {
+    "main:ios18.cast4": "MLNeuralEngineComputeDevice",
+    "main:ios18.matmul5": "MLNeuralEngineComputeDevice",
+    "main:ios18.cast7": "MLNeuralEngineComputeDevice"
+   },
+   "p50_ms": 5.241,
+   "max_abs_diff": 0.12570977210998535,
+   "mean_abs_diff": 0.009305523708462715
+  }
+ }
+}

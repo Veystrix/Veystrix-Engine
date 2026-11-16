@@ -12,7 +12,10 @@ import sys
 from pathlib import Path
 
 # The hook reads the env at import time, so import it before the backend.
-import ane_nemotron_hook  # noqa: F401
+if os.environ.get("ANE_HOOK") == "int8":
+    import ane_nemotron_hook_int8  # noqa: F401
+else:
+    import ane_nemotron_hook  # noqa: F401
 
 from veystrix.bench import qualification
 

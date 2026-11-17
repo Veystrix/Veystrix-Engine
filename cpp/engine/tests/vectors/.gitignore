@@ -1,0 +1,7 @@
+# Parity vectors are generated artifacts (tools/gen_vectors.py), not source.
+# case0 flat files (backward compat with the first parity test):
+*.npy
+meta.json
+# case directories:
+case*/
+cases.json

@@ -33,7 +33,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 2 | #7 | MLX command-buffer limits | Free config | decode | +11.9–13.7% | digest (source bit-identical) | PENDING |
 | 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
 | 4 | #10 | `async_eval` one-step-ahead | Free config | decode | +50% at 4-bit | digest | PENDING |
-| 5 | #5 | Correctly sized pinned expert cache | Cache | decode | 4.39 tok/s already shown on 16 GB (Nemotron) | digest + no thrash | PENDING |
+| 5 | #5 | Correctly sized pinned expert cache | Cache | decode | **A/B measured:** Nemotron 2→4 GB is a resolved REGRESSION (−1.61 tok/s, +0.86 s TTFT) | digest identical | 2 GB retained; 4 GB rejected |
 | 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode+prefill | **A/B measured:** TTFT −0.69 s (resolved), decode unresolved | digest identical | PARTIAL — flag off |
 | 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | +20% decode, 9× fewer read-ops | digest | PENDING |
 | 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
@@ -114,6 +114,14 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 ---
 
 ## Phase 2 — Cache sizing (Step 5)
+
+**Step 5 A/B — MEASURED 2026-11-17 (guarded, clean, digest identical).** Saved at
+`results/nemotron35/20261117-144030-performance-v2-pool-compare-manual/`. Nemotron 2 GB → 4 GB:
+decode **6.8 → 5.19 tok/s (resolved, median −1.61 vs band 0.15)**; TTFT **5.70 → 6.60 s
+(resolved, +0.86 vs band 0.12)**; footprint +2.14 GB (resolved). Physical read bytes unresolved.
+**Bigger cache is a clear regression on this 16 GB M4** — memory pressure/compressor dominates
+(compressor peak 1991 → 5276 MB), matching the reference's 8 GB-cache thrash. Keep 2 GB.
+Do not retry larger pools on 16 GB; a smaller pool (1 vs 2 GB) is the only untested direction.
 
 ### Step 5 — Method #5: Correctly sized pinned expert cache
 - **Premise:** a cache helps only when its pool is ≥⅓ of total expert bytes. At 11% coverage a model regressed −64%; at 71% coverage another gained +216%. On 16 GB, a few GB is the realistic ceiling; 8 GB thrashed (Nemotron, 4 GB = 4.39 tok/s).

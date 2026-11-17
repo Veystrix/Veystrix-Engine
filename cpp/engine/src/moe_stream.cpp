@@ -7,7 +7,6 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -16,6 +15,7 @@
 #include <unistd.h>
 
 #include "io_pager.hpp"
+#include "slot_plan.hpp"
 
 namespace mx = mlx::core;
 namespace veystrix::engine {
@@ -264,50 +264,25 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
   size_t K = route_ids.size() / T;
   if (T * K != route_ids.size()) throw std::runtime_error("bad route shape");
 
-  // Distinct experts needed by this step.
-  std::unordered_set<int32_t> needed(route_ids.begin(), route_ids.end());
+  // Single source of truth for slot bookkeeping. plan_slots performs the LRU
+  // eviction (mutating slot_expert/free_slots) and returns the exact slot plan.
+  // The old code counted misses by searching a flattened [expert, slot, ...]
+  // list and derived (expert, slot) from read offsets across all 9 tensors;
+  // both are gone. See cpp/engine/src/slot_plan.hpp.
+  SlotStep step = plan_slots(route_ids, s.slot_expert, s.slot_refcount,
+                             s.slot_lastused, s.free_slots, s.num_slots);
 
-  // Resident set (expert -> slot) and the caller's free-slot list.
+  // Pairs for plan_remap come from the POST-eviction resident state. Slot_expert
+  // is now authoritative: evicted experts are -1, so they cannot be "resident".
   std::vector<int32_t> pairs;
   for (int slot = 0; slot < s.num_slots; ++slot)
     if (s.slot_expert[slot] >= 0) {
       pairs.push_back(s.slot_expert[slot]);
       pairs.push_back(slot);
     }
-  // Count experts in `needed` that are not already resident.
-  size_t misses = 0;
-  for (int32_t e : needed) {
-    bool found = false;
-    for (size_t i = 0; i + 1 < pairs.size(); i += 2)
-      if (pairs[i] == e) { found = true; break; }
-    if (!found) ++misses;
-  }
-
-  // Evict LRU slots (never a slot whose refcount > 0 or that this route needs)
-  // until there are enough free slots for the misses. Fail closed otherwise.
-  if (misses > s.free_slots.size()) {
-    std::vector<int> candidates;
-    for (int slot = 0; slot < s.num_slots; ++slot) {
-      if (s.slot_expert[slot] < 0 || s.slot_refcount[slot] > 0) continue;
-      if (needed.count(s.slot_expert[slot])) continue;  // needed this step
-      candidates.push_back(slot);
-    }
-    std::sort(candidates.begin(), candidates.end(), [&](int a, int b) {
-      return s.slot_lastused[a] < s.slot_lastused[b];
-    });
-    for (int slot : candidates) {
-      if (misses <= s.free_slots.size()) break;
-      s.slot_expert[slot] = -1;
-      s.free_slots.push_back(slot);
-    }
-  }
-  if (misses > s.free_slots.size())
-    throw std::runtime_error("slot pool exhausted; refusing partial remap");
-
   std::vector<int32_t> free_snapshot = s.free_slots;
 
-  // One plan per tensor geometry; all must agree on the slot mapping. Collect
-  // the batched reads across all nine tensors into a single pager call.
+  // One plan per tensor geometry; all must agree with the shared planner.
   std::vector<veystrix::PagerRead> all_reads;
   std::vector<int32_t> slots;
   for (int i = 0; i < Impl::kTensors; ++i) {
@@ -315,40 +290,28 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
         route_ids, pairs, free_snapshot, s.shard_fd,
         s.tensor_off[i], s.t[i].row_bytes,
         s.buf[i].get(), s.t[i].row_bytes);
-    if (i == 0) {
-      slots = plan.slots;
-    } else if (plan.slots != slots) {
+    if (i == 0) slots = plan.slots;
+    else if (plan.slots != slots)
       throw std::runtime_error("inconsistent slot plan across tensors");
-    }
+    if (plan.slots != step.slots)
+      throw std::runtime_error("plan_remap slot plan disagrees with plan_slots");
+    if (plan.reads.size() != step.miss_e.size())
+      throw std::runtime_error("plan_remap read count disagrees with plan_slots");
     for (auto& read : plan.reads) all_reads.push_back(read);
   }
-  if (std::find(slots.begin(), slots.end(), -1) != slots.end())
-    throw std::runtime_error("fail-closed: plan_remap returned slot -1");
+  // Fail-closed range check: no -1, no out-of-range slot may reach gather_qmm.
+  for (int32_t slot : slots)
+    if (slot < 0 || slot >= s.num_slots)
+      throw std::runtime_error("fail-closed: slot out of range");
 
-  // Pin every slot used this step; release only after mx::eval (below),
-  // i.e. after all command buffers reading those buffers have completed.
+  // Commit miss assignments from the planner (NOT from read offsets).
   std::vector<int32_t> used = slots;
   std::sort(used.begin(), used.end());
   used.erase(std::unique(used.begin(), used.end()), used.end());
-  std::vector<int32_t> misses_experts;
-  std::vector<int32_t> misses_slots;
-  {
-    // Derive the (deduped) missed experts from the first tensor's reads.
-    int64_t off0 = s.tensor_off[0], rb0 = s.t[0].row_bytes;
-    uint8_t* base0 = s.buf[0].get();
-    for (const auto& read : all_reads) {
-      if (read.offset < off0 || (read.offset - off0) % rb0 != 0) continue;
-      int32_t e = static_cast<int32_t>((read.offset - off0) / rb0);
-      int32_t slot = static_cast<int32_t>(
-          (reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(read.dst)) - base0) / rb0);
-      misses_experts.push_back(e);
-      misses_slots.push_back(slot);
-    }
-  }
   for (int32_t slot : used) ++s.slot_refcount[slot];
-  for (size_t i = 0; i < misses_experts.size(); ++i) {
-    s.slot_expert[misses_slots[i]] = misses_experts[i];
-    auto it = std::find(s.free_slots.begin(), s.free_slots.end(), misses_slots[i]);
+  for (size_t i = 0; i < step.miss_e.size(); ++i) {
+    s.slot_expert[step.miss_s[i]] = step.miss_e[i];
+    auto it = std::find(s.free_slots.begin(), s.free_slots.end(), step.miss_s[i]);
     if (it != s.free_slots.end()) s.free_slots.erase(it);
   }
 
@@ -357,6 +320,20 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
     int errors = veystrix::run_batched_reads(all_reads, s.read_width);
     if (errors != 0)
       throw std::runtime_error("pager batched read failed: " + std::to_string(errors));
+  }
+
+  // Debug verifier (single early-return branch when disabled).
+  if (verify_slots_enabled()) {
+    std::vector<int32_t> fds(Impl::kTensors, s.shard_fd);
+    std::vector<int64_t> row_bytes(Impl::kTensors);
+    std::vector<uint8_t*> bufs(Impl::kTensors);
+    for (int i = 0; i < Impl::kTensors; ++i) {
+      row_bytes[i] = s.t[i].row_bytes;
+      bufs[i] = s.buf[i].get();
+    }
+    verify_slot_fill(true, route_ids, slots, s.slot_expert,
+                     step.miss_e, step.miss_s, fds, s.tensor_off,
+                     row_bytes, bufs);
   }
 
   // Wrap the slot buffers as mx arrays (bf16 scales/biases are a byte reinterpret).
@@ -380,7 +357,7 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
   for (int32_t slot : used) --s.slot_refcount[slot];
   for (int32_t slot : used) s.slot_lastused[slot] = ++s.tick;
 
-  return StreamForwardResult{out, slots, misses_experts};
+  return StreamForwardResult{out, slots, step.miss_e};
 }
 
 mx::array moe_stream_forward(const std::string& checkpoint_dir, int layer,

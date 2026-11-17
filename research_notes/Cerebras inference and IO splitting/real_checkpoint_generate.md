@@ -60,6 +60,7 @@ xcrun clang++ -std=c++20 -O2 -I"$MLXROOT/include" -Icpp/engine/src -Icpp/decode/
   cpp/engine/src/gdn_layer.cpp cpp/engine/src/qsa.cpp cpp/engine/src/qsa_full.cpp \
   cpp/engine/src/rope_fused.cpp cpp/engine/src/prefill.cpp cpp/engine/src/decoder.cpp \
   cpp/engine/src/decoder_full.cpp cpp/engine/src/expert_store.cpp cpp/engine/src/moe_stream.cpp \
+  cpp/engine/src/slot_plan.cpp cpp/engine/src/cross_shard_moe.cpp \
   cpp/decode/src/io_pager.cpp /tmp/native_read.o \
   cpp/engine/tools/real_checkpoint_generate.cpp \
   -L"$MLXROOT/lib" -lmlx -Wl,-rpath,"$(pwd)/$MLXROOT/lib" -o /tmp/real_gen

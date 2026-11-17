@@ -44,6 +44,14 @@ mixed full-attention path in `decoder_full` is bit-exact at loop level but its
 QSA indexer needs a prepopulated cache, so "from-scratch zeroed cache"
 generation uses the all-linear path — documented in native_generate.md).
 
+## Update 2026-11-17 (parity gaps closed): 18/18 ctests pass
+
+- `parity_gaps` — quantized shared expert (Q4 projection for shared gate/up/down)
+  and indexer-None dense attention fallback, both bit-exact vs real modules.
+- Remaining (documented, not faked): fused-Metal RoPE ~1 ULP vs eager; 3-D
+  MRoPE vector; quantized KV cache; prefill S>1; swap native_generate's npy
+  load for expert_store real-checkpoint loading; server wrapper.
+
 ## Update 2026-11-17 (full loop + I/O): 16/16 ctests pass
 
 - `moe_stream` — expert weights loaded from the REAL checkpoint via native

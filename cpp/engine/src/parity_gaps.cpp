@@ -53,18 +53,15 @@ mx::array moe_block_shared_quantized(
   mx::array routed = moe_block(x, route, scores, routed_weights);
 
   int tokens = static_cast<int>(x.shape(0));
-  mx::array s;
-  if (config.shared_quantized) {
-    mx::array r0 = zero_route(tokens);
-    s = shared_q4_glu(x, shared_q4_weights, r0, config);
-  } else {
-    // Dense fallback. In this mode the caller supplies dequantized dense
-    // gate/up/down weights through the same ExpertWeights struct (weight is
-    // then a dense [out, in] array; scales/biases are ignored).
-    s = shared_dense_glu(x, shared_q4_weights.gate.weight,
-                         shared_q4_weights.up.weight,
-                         shared_q4_weights.down.weight);
-  }
+  // Dense fallback: the caller supplies dequantized dense gate/up/down weights
+  // through the same ExpertWeights struct (weight is then a dense [out, in]
+  // array; scales/biases are ignored).
+  mx::array s = config.shared_quantized
+                    ? shared_q4_glu(x, shared_q4_weights,
+                                    zero_route(tokens), config)
+                    : shared_dense_glu(x, shared_q4_weights.gate.weight,
+                                       shared_q4_weights.up.weight,
+                                       shared_q4_weights.down.weight);
 
   // adaptive_topk._moe_call / Qwen3_5MoeSparseMoeBlock.__call__:
   //   return routed + sigmoid(shared_expert_gate(x)) * shared_expert(x)
@@ -146,16 +143,14 @@ mx::array full_attention_dense_fallback(const mx::array& x,
   // see mlx_vlm/models/base.py::create_attention_mask), so MLX fused SDPA is
   // called with no mask at all. For S > 1 the production mask is "causal".
   const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
-  mx::array out;
-  if (S == 1) {
-    out = mx::fast::scaled_dot_product_attention(
-        q, *cache.keys, *cache.values, scale, /*mask_mode=*/"",
-        /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
-  } else {
-    out = mx::fast::scaled_dot_product_attention(
-        q, *cache.keys, *cache.values, scale, /*mask_mode=*/"causal",
-        /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
-  }
+  mx::array out =
+      (S == 1)
+          ? mx::fast::scaled_dot_product_attention(
+                q, *cache.keys, *cache.values, scale, /*mask_mode=*/"",
+                /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt)
+          : mx::fast::scaled_dot_product_attention(
+                q, *cache.keys, *cache.values, scale, /*mask_mode=*/"causal",
+                /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
 
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}),
                     mx::Shape{B, S, Hq * D});

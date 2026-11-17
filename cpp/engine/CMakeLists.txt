@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/parity_gaps.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -51,6 +51,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Remaining parity gaps (quantized shared expert + indexer-None fallback).
+add_executable(test_parity_gaps tests/test_parity_gaps.cpp)
+target_include_directories(test_parity_gaps PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_parity_gaps PRIVATE veystrix_engine)
+set_target_properties(test_parity_gaps PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Decisive: standalone C++ end-to-end token generation (no Python in loop).
@@ -181,6 +188,10 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full/meta.json")
   add_test(NAME decoder_full COMMAND test_decoder_full
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_parity_gaps/meta.json")
+  add_test(NAME parity_gaps COMMAND test_parity_gaps
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_parity_gaps")
 endif()
 # End-to-end C++ generation vs Python (token ids + logit digests); runner script.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_native_generate/config.txt")

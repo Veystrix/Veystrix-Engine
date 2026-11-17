@@ -85,6 +85,12 @@ mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
                                 int top_k, float renorm_blend,
                                 const ExpertWeights& w);
 
+// Nemotron-style relu2 MoE block (no SwiGLU gate): up projection -> relu2 ->
+// down projection -> score combine. Mirrors streamed_experts._gather / _expert.
+mx::array moe_block_relu2(const mx::array& x, const mx::array& route,
+                          const mx::array& scores, const Q4Projection& up,
+                          const Q4Projection& down);
+
 // RMSNorm with the production one-centered convention (patch_rmsnorm.py):
 //   y = x.f32 * rsqrt(mean(x.f32^2, -1, keepdims) + eps) * weight.f32
 // `weight` is the checkpoint gain (float32; one-centered means no +1).

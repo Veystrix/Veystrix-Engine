@@ -30,6 +30,12 @@ target_link_libraries(test_engine_parity PRIVATE veystrix_engine)
 set_target_properties(test_engine_parity PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Nemotron relu2 MoE parity.
+add_executable(test_relu2_parity tests/test_relu2_parity.cpp)
+target_link_libraries(test_relu2_parity PRIVATE veystrix_engine)
+set_target_properties(test_relu2_parity PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # End-to-end native layer load (no Python feeding weights).
 add_executable(test_native_layer tests/test_native_layer.cpp)
 target_link_libraries(test_native_layer PRIVATE veystrix_engine)
@@ -40,6 +46,8 @@ enable_testing()
 add_test(NAME engine_smoke COMMAND test_engine_smoke)
 add_test(NAME engine_parity COMMAND test_engine_parity
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
+add_test(NAME engine_relu2 COMMAND test_relu2_parity
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/case3_nemotron_relu2")
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
   add_test(NAME engine_parity_real COMMAND test_engine_parity

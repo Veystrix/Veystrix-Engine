@@ -75,6 +75,19 @@ mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
   return moe_block(x, r.indices, r.scores, w);
 }
 
+mx::array moe_block_relu2(const mx::array& x, const mx::array& route,
+                          const mx::array& scores, const Q4Projection& up,
+                          const Q4Projection& down) {
+  // Nemotron relu2 MLP: y = W_down . relu2(W_up . x). Single up projection,
+  // no SwiGLU gate. Scales/biases are Q4 affine (G64 for Lightning).
+  mx::array x4 = mx::expand_dims(x, std::vector<int>{-2, -3});
+  mx::array u = q4_projection(x4, up, route, 64, 4);
+  mx::array a = mx::square(mx::maximum(u, mx::array(0.0f)));  // relu2
+  mx::array d = q4_projection(a, down, route, 64, 4);
+  d = mx::squeeze(d, -2);
+  return weighted_combine(d, scores);
+}
+
 mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps) {
   // Mirrors patch_rmsnorm._rms_norm (one-centered, non-compiled path):
   // f32 cast, rsqrt(mean(square)+eps), multiply by f32 gain, cast back.

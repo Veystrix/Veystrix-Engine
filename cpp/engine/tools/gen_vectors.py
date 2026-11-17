@@ -62,6 +62,39 @@ def save(path, arr):
     mx.save(str(path), arr)
 
 
+def emit_relu2_case(out: Path, name: str, E, H, I, G, K, T, seed):
+    """Nemotron-style relu2 MoE (single up projection, no SwiGLU gate)."""
+    rng = np.random.default_rng(seed)
+    d = out / name
+    d.mkdir(parents=True, exist_ok=True)
+    logits = mx.array(rng.normal(size=(T, E)).astype(np.float32))
+    gates = mx.softmax(logits, axis=-1, precise=True)
+    inds = mx.argpartition(gates, kth=-K, axis=-1)[..., -K:]
+    scores = mx.take_along_axis(gates, inds, axis=-1)
+    scores = scores / scores.sum(axis=-1, keepdims=True)
+    route = mx.array(np.asarray(inds).astype(np.uint32))
+    x = mx.array(rng.normal(size=(T, H)).astype(np.float32) * 0.3)
+    up_w, up_s, up_b = make_projection(E, I, H, G, rng)
+    dn_w, dn_s, dn_b = make_projection(E, H, I, G, rng)
+    x4 = mx.expand_dims(x, (-2, -3))
+    u = mx.gather_qmm(x4, up_w, up_s, up_b, rhs_indices=route, transpose=True,
+                      group_size=G, bits=4, mode="affine")
+    a = mx.square(mx.maximum(u, mx.array(0.0)))  # relu2 (same op order as C++)
+    dn = mx.gather_qmm(a, dn_w, dn_s, dn_b, rhs_indices=route, transpose=True,
+                       group_size=G, bits=4, mode="affine")
+    dn = mx.squeeze(dn, axis=-2)
+    expected = (dn * scores[..., None]).sum(axis=-2)
+    arrays = {"x": x, "route": route, "scores": scores,
+              "up_w": up_w, "up_s": up_s, "up_b": up_b,
+              "dn_w": dn_w, "dn_s": dn_s, "dn_b": dn_b, "expected": expected}
+    for k, v in arrays.items():
+        save(d / f"{k}.npy", v)
+    meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,
+            "activation": "relu2"}
+    (d / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
 def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     rng = np.random.default_rng(seed)
     d = out / name
@@ -117,6 +150,7 @@ def main():
         case("case1_qwen_g32", 12, 2560, 640, 32, 10, 1, 77),
         case("case2_nemotron_g64", 8, 2688, 1856, 64, 6, 1, 99),
     ]
+    relu2 = emit_relu2_case(out, "case3_nemotron_relu2", 16, 2688, 1856, 64, 6, 1, 555)
     (out / "cases.json").write_text(json.dumps(cases, indent=2) + "\n")
     # Backward-compatible flat vectors for the existing flat parity test (case0).
     for f in (out / "case0_g32_small").glob("*.npy"):

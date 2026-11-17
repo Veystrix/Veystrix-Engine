@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/moe_stream.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -51,6 +51,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Mixed-layer decoder loop (GDN + full attn + shared expert) bit-exact parity.
+add_executable(test_decoder_full tests/test_decoder_full.cpp)
+target_include_directories(test_decoder_full PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_decoder_full PRIVATE veystrix_engine)
+set_target_properties(test_decoder_full PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Streaming MoE with real-checkpoint I/O (expert_store + io_pager).
@@ -163,6 +170,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_moe_stream/meta.json")
   add_test(NAME moe_stream COMMAND test_moe_stream
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_moe_stream"
            "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full/meta.json")
+  add_test(NAME decoder_full COMMAND test_decoder_full
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full")
 endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")

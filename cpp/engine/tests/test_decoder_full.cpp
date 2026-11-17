@@ -40,6 +40,20 @@ static bool bit_equal(const mx::array& a, const mx::array& b) {
   return true;
 }
 
+// Byte-wise comparison for 1-byte dtypes (e.g. the boolean QSA mask).
+static bool bit_equal_bytes(const mx::array& a, const mx::array& b) {
+  if (a.shape() != b.shape() || a.dtype() != b.dtype()) return false;
+  mx::array av = mx::view(mx::reshape(a, {-1}), mx::uint8);
+  mx::array bv = mx::view(mx::reshape(b, {-1}), mx::uint8);
+  mx::eval(av, bv);
+  if (av.size() != bv.size()) return false;
+  const uint8_t* pa = av.data<uint8_t>();
+  const uint8_t* pb = bv.data<uint8_t>();
+  for (size_t i = 0; i < av.size(); ++i)
+    if (pa[i] != pb[i]) return false;
+  return true;
+}
+
 static void dump_first_diff(const char* label, const mx::array& a,
                             const mx::array& b) {
   mx::array av = mx::view(mx::reshape(a, {-1}), mx::uint32);
@@ -295,10 +309,8 @@ int main(int argc, char** argv) {
     }
     if (layer_is_full(meta, l)) {
       if (full_seen < static_cast<int>(debug.qsa_mask.size())) {
-        if (!bit_equal(debug.qsa_mask[full_seen], load(P + "exp_mask"))) {
+        if (!bit_equal_bytes(debug.qsa_mask[full_seen], load(P + "exp_mask"))) {
           std::fprintf(stderr, "FAIL: layer %d QSA mask differs\n", l);
-          dump_first_diff("qsa_mask", debug.qsa_mask[full_seen],
-                          load(P + "exp_mask"));
           ok = false;
         }
         ++full_seen;

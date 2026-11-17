@@ -32,7 +32,27 @@ comparison (uint32 view), not tolerances.
 Evidence: `cd cpp/engine && rm -rf build && cmake -S . -B build && cmake --build
 build -j && ctest --test-dir build --output-on-failure` -> 5/5 passed.
 
-## Update 2026-11-17 (decoder milestone): now 14/14 ctests pass
+## Update 2026-11-17 (full loop + I/O): now 16/16 ctests pass
+
+- `moe_stream` — expert weights loaded from the REAL checkpoint via native
+  pager (`io_pager`) + `expert_store`, persistent slot pool, refcount, remap in
+  router-rank order -> `moe_block`, bit-exact (first + resident replay).
+- `decoder_full` — mixed-layer decoder loop: GDN OR full-attention per layer
+  (QSA sparse mask -> qkv -> q/k norms -> RoPE -> KV cache -> MLX SDPA -> o_proj),
+  non-zero shared expert (`moe_block_with_shared`), bit-exact for logits +
+  per-layer intermediates (3 layers, 1 full-attn, multiple seeds).
+
+REMAINING for a full standalone native token on the REAL 125B checkpoint:
+1. Quantized shared expert (use q4_projection for its 3 matmuls; combine unchanged).
+2. Fused-Metal RoPE (~1 ULP vs eager; mask unaffected for well-separated scores).
+3. 3-D MRoPE positions vector; quantized KV cache.
+4. Prefill / S>1 (GDN + mask/cache semantics unverified beyond S==1).
+5. Indexer-None dense fallback currently throws.
+6. CMake/model-adapter wiring of decoder_full; duplicate GDNConfig name collision.
+7. Guarded end-to-end parity harness on the full checkpoint (token IDs + per-step
+   logit SHA-256 + residual checksums).
+
+## Update 2026-11-17 (decoder milestone): 14/14 ctests pass
 
 **Full multi-layer decoder loop is assembled and bit-exact** (`decoder`, 2 and 4
 layers, real mlx_vlm modules, per-layer logits + all intermediates byte-compared):

@@ -175,6 +175,25 @@ std::string sha256_hex(const void* data, size_t len) {
   return out;
 }
 
+// Opt-in: SHA-256 the float32 GDN cache state AFTER each prefill step. These
+// are the tensors fed into the next step, so the first step/layer where the two
+// runs' hashes diverge localizes the responsible op.
+void dump_gdn_states(const std::vector<DecoderFullLayerCache>& caches,
+                     int step, int n_layers) {
+  for (int l = 0; l < n_layers; ++l) {
+    mx::array cv = mx::reshape(
+        mx::astype(caches[l].base.gdn.conv_state, mx::float32), mx::Shape{-1});
+    mx::eval(cv);
+    mx::array rs = mx::reshape(
+        mx::astype(caches[l].base.gdn.recurrent_state, mx::float32), mx::Shape{-1});
+    mx::eval(rs);
+    std::fprintf(stderr,
+                 "[GDNSTATE step=%02d L=%02d conv=%s rec=%s\n", step, l,
+                 sha256_hex(cv.data<float>(), static_cast<size_t>(cv.size()) * sizeof(float)).c_str(),
+                 sha256_hex(rs.data<float>(), static_cast<size_t>(rs.size()) * sizeof(float)).c_str());
+  }
+}
+
 // --------------------------------------------------------------------------- //
 // Flat config parsing (produced by gen_real_config.py).                        //
 // --------------------------------------------------------------------------- //
@@ -1073,6 +1092,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
                       layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
     debug_capture::get().enabled = false;
+    if (dbg_requested) dump_gdn_states(caches, static_cast<int>(i), n_layers);
   }
   if (dbg_requested) {
     auto& dbg = debug_capture::get();

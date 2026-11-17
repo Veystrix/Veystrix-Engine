@@ -153,6 +153,18 @@ def main() -> None:
     kv("rope_mrope", ",".join(str(x) for x in rp["mrope_section"]))
     kv("layer_types", ",".join(tc["layer_types"]))
     kv("ple_layer_ids", ",".join(str(x) for x in tc.get("ple_layer_ids", [])))
+    # PLE scalar params (needed by the C++ PLE loader). seed defaults to 1234
+    # in mlx_vlm's TextConfig when absent from config.json.
+    kv("ngram_size", tc.get("ngram_size", 3))
+    kv("heads_per_ngram", tc.get("heads_per_ngram", 8))
+    kv("ple_embed_dim", tc.get("ple_embed_dim", 2560))
+    kv("ple_conv_kernel_size", tc.get("ple_conv_kernel_size", 4))
+    kv("split_ngram_parts", tc.get("split_ngram_parts", 128))
+    kv("ngram_vocab_size_base", tc.get("ngram_vocab_size_base", 20000000))
+    kv("make_ngram_vocab_size_divisible_by", tc.get("make_ngram_vocab_size_divisible_by", 128))
+    eos = tc.get("eos_token_id", 248044)
+    kv("eos_token_id", eos[0] if isinstance(eos, list) else eos)
+    kv("config_seed", tc.get("seed", 1234))
 
     kv("prompt_tokens", len(prompt))
     kv("prompt_ids", ",".join(str(t) for t in prompt))

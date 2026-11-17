@@ -47,6 +47,7 @@
 #include "cross_shard_moe.hpp"
 #include "dense_manifest.hpp"
 #include "rope_fused_apply.hpp"
+#include "ple.hpp"
 #include "io_pager.hpp"
 #include "gdn_layer.hpp"
 #include "gdn_conv.h"
@@ -462,6 +463,8 @@ struct RealLayer {
   std::optional<FullAttentionWeights> full;
   std::unique_ptr<StreamingMoE> stream;       // single-shard layers
   std::unique_ptr<CrossShardMoE> cross;       // layers split across two shards
+  std::optional<PLEWeights> ple;              // set only on PLE layers (index 1)
+  PLECache ple_cache;                         // mutable n-gram/conv cache for that layer
   int top_k = 0;
   AttnKind kind = AttnKind::Linear;
 
@@ -471,6 +474,7 @@ struct RealLayer {
             Linear sgl, std::optional<GDNWeights> g,
             std::optional<FullAttentionWeights> f,
             std::unique_ptr<StreamingMoE> st, std::unique_ptr<CrossShardMoE> cr,
+            std::optional<PLEWeights> p,
             int tk, AttnKind k)
       : attn_norm_w(std::move(an)), attn_down_w(std::move(ad)),
         attn_up_w(std::move(au)), attn_inject_w(std::move(ai)),
@@ -479,7 +483,8 @@ struct RealLayer {
         gate_w(std::move(gw)), shared_gw(std::move(sg)),
         shared_uw(std::move(su)), shared_dw(std::move(sd)),
         shared_glw(std::move(sgl)), gdn(std::move(g)), full(std::move(f)),
-        stream(std::move(st)), cross(std::move(cr)), top_k(tk), kind(k) {}
+        stream(std::move(st)), cross(std::move(cr)), ple(std::move(p)),
+        top_k(tk), kind(k) {}
 };
 
 struct RealHead {
@@ -649,7 +654,7 @@ GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
 mx::array run_step(
     const mx::array& input_embeddings,
     int32_t input_token,  // raw token id for this step (needed by PLE n-gram hash)
-    const std::vector<RealLayer>& layers,
+    std::vector<RealLayer>& layers,
     const RealHead& head,
     const DecoderConfig& cfg,
     const FullAttentionConfig& fa_cfg,
@@ -660,7 +665,17 @@ mx::array run_step(
       mx::tile(input_embeddings, std::vector<int>{1, 1, cfg.hc_count});
 
   for (int l = 0; l < cfg.n_layers; ++l) {
-    const RealLayer& L = layers[l];
+    RealLayer& L = layers[l];
+
+    // Production decoder: hidden_states = hidden_states + ple(hidden_states,
+    // input_ids, ple_cache). PLE is present only on the configured PLE layer.
+    if (L.ple) {
+      std::vector<int64_t> tid{static_cast<int64_t>(input_token)};
+      mx::array tok(tid.data(), mx::Shape{1, 1}, mx::int64);
+      mx::array ple_out =
+          ple_forward(hidden, tok, *L.ple, L.ple_cache, /*mask=*/nullptr);
+      hidden = hidden + ple_out;
+    }
 
     GatedResidualOutput ar = gated_residual(
         hidden, L.attn_norm_w, L.attn_down_w, L.attn_up_w, L.attn_inject_w,
@@ -804,6 +819,59 @@ mx::array embed_token(const DenseLoader::QTriplet& embed, int token,
   return mx::reshape(row, mx::Shape{1, 1, hidden});
 }
 
+// Build the production PLE layer (layer index 1) from the flat config's shard
+// map. All PLE tensors are present there (gen_real_config.py emits them).
+static PLEWeights load_ple(DenseLoader& dl, const Config& cfg, int group_size,
+                           int bits, float eps) {
+  const std::string pb = "language_model.model.layers." +
+                         std::to_string(get_int(cfg, "ple_layer_ids", 2) - 1) +
+                         ".ple.";
+  const int ns = get_int(cfg, "ngram_size", 3);
+  const int hpn = get_int(cfg, "heads_per_ngram", 8);
+  const int hc = get_int(cfg, "hc_count", 4);
+  const int hs = get_int(cfg, "hidden_size", 2560);
+  const int ped = get_int(cfg, "ple_embed_dim", 2560);
+  const int ck = get_int(cfg, "ple_conv_kernel_size", 4);
+  const int nparts = get_int(cfg, "split_ngram_parts", 128);
+  const int eos = get_int(cfg, "eos_token_id", 248044);
+  const int cd = ns;  // conv_dilation == ngram_size in production
+
+  Linear key_proj = dl.linear(pb + "key_proj", ped);
+  Linear value_proj = dl.linear(pb + "value_proj", ped);
+  mx::array nk = dl.raw(pb + "norm_key.weight");
+  mx::array nq = dl.raw(pb + "norm_query.weight");
+  mx::array nc = dl.raw(pb + "norm_conv.weight");
+  mx::array cw = dl.raw(pb + "conv1d.weight");
+  mx::array lm = dl.raw(pb + "ple_embedding.layer_multipliers");
+  mx::array ho = dl.raw(pb + "ple_embedding.ngram_heads_offsets");
+  mx::array hvs = dl.raw(pb + "ple_embedding.ngram_heads_vocab_sizes");
+
+  std::vector<PLEEmbShard> shards;
+  std::vector<int64_t> offsets;
+  offsets.push_back(0);
+  int64_t total = 0;
+  shards.reserve(nparts);
+  for (int s = 0; s < nparts; ++s) {
+    std::string base = pb + "ple_embedding.ngram_embedding.shard_" +
+                       std::to_string(s);
+    mx::array ew = dl.raw(base + ".weight");
+    mx::array es = dl.raw(base + ".scales");
+    mx::array eb = dl.raw(base + ".biases");
+    total += ew.shape(0);
+    offsets.push_back(total);
+    shards.emplace_back(std::move(ew), std::move(es), std::move(eb));
+  }
+  std::fprintf(stderr, "[load] PLE: %zu embedding shards, %lld rows\n",
+               shards.size(), (long long)total);
+  int sl = (ck - 1) * cd;
+  return PLEWeights(std::move(key_proj), std::move(value_proj),
+                    std::move(nk), std::move(nq), std::move(nc),
+                    std::move(cw), std::move(lm), std::move(ho), std::move(hvs),
+                    std::move(shards), std::move(offsets),
+                    group_size, bits, ns, hpn, hc, hs, ped, eos, eps,
+                    ck, cd, sl);
+}
+
 std::vector<StepRecord> run_generation(const std::string& ckpt,
                                        const Config& cfg, int num_tokens) {
   const int n_layers = get_int(cfg, "n_layers");
@@ -886,6 +954,12 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   caches.reserve(n_layers);
 
   const int conv_dim = 2 * dcfg.gdn.key_dim + dcfg.gdn.value_dim;
+  const int ple_layer = get_int(cfg, "ple_layer_ids", 2) - 1;
+  const bool use_ple = std::getenv("VEYSTRIX_CPP_NO_PLE") == nullptr &&
+                       get_int(cfg, "ple_layer_ids", 0) != 0;
+  std::optional<PLEWeights> ple_weights;
+  if (use_ple) ple_weights = load_ple(dl, cfg, group_size, bits, eps);
+
   for (int l = 0; l < n_layers; ++l) {
     const std::string b = "language_model.model.layers." + std::to_string(l) + ".";
     const bool linear = layer_types[l] == "linear_attention";
@@ -968,8 +1042,10 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         std::move(mnw), std::move(mdw), std::move(muw), std::move(miw),
         std::move(gate), std::move(sgw), std::move(suw), std::move(sdw),
         std::move(sglw), std::move(gdn), std::move(full), std::move(stream),
-        std::move(cross), top_k,
+        std::move(cross), std::nullopt, top_k,
         linear ? AttnKind::Linear : AttnKind::FullAttention);
+    if (l == ple_layer && ple_weights)
+      layers.back().ple = std::move(ple_weights);
 
     GDNCacheState zero(
         mx::zeros(mx::Shape{1, dcfg.gdn.conv_kernel - 1, conv_dim}, mx::float32),

@@ -1,0 +1,250 @@
+# Sequential speedup roadmap — 22 methods
+
+**Branch:** `speedup-roadmap`
+**Owner targets:** Qwen decode **2.3 → 5+ tok/s**, Nemotron decode **6.7 → 15+ tok/s**, plus faster prefill.
+**Date opened:** 2026-11-17
+**Research basis:** `reports/Faster Qwen Nemotron inference on M4.md` and `research_notes/Faster Qwen Nemotron inference on M4/` (8 note files, primary sources inline).
+
+This is the execution ledger. We go **one method at a time**, in the order below, and never stack a new method until the current one has passed its gate and been recorded. Method IDs 1–22 are the canonical IDs from the report; the **Step** column is the order we will actually attempt them (cheap/bit-exact first, risky/heavy last).
+
+## Rules of engagement (non-negotiable)
+
+1. **16 GB M4 first.** No larger Mac until the 16 GB path is proven (owner rule).
+2. **Bit-identical digest gate.** Every method must produce the same token digest, BF16 rounding boundaries, Q4 affine G32 weights, and exact top-10/512 routing as the current baseline. If a method drops quality, **drop it entirely** (owner rule).
+3. **Guarded runs only, with explicit permission.** No hardware benchmark runs are authorized by this document. Each A/B must use `scripts/flashnext/real_run_guard.py` with the established envelope; permission is asked immediately before each run.
+4. **One method at a time.** Each A/B is candidate vs the *current accepted baseline*, not against a stale number. Accepted methods become the new baseline.
+5. **Record everything.** Results into `results/...` (preserved; never delete), guard JSONL into `experiments/ane/results/` or the appropriate folder, and update the status table below.
+6. **Do not implement anything in `DO_NOT_IMPLEMENT.md`** without a new premise. That registry stays authoritative for dead ends.
+
+## Honest feasibility verdict (from research, before we start)
+
+- **Qwen 5+ on 16 GB: reachable only as a stack** of Steps 1–8. No single method delivers 2×.
+- **Nemotron 15+ on 16 GB: not reachable bit-exact.** Fully-resident ceiling is ~13.9 tok/s at ~20.8 GiB; best published 16 GB figure is 4.39 tok/s. Steps 19–21 (more memory / second Mac) are the only credible routes and are deferred by rule 1. We will still attempt the 16 GB-safe steps; we do not expect 15+ until memory or device count changes.
+- **Prefill: strongly improvable and bit-exact** (Steps 15–18).
+
+---
+
+## Status tracker
+
+| Step | Method | Name | Phase | Target | Expectation | Gate | Status |
+|---|---|---|---|---|---|---|---|
+| 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | decides Step 6 vs 7 priority | no code change | PENDING |
+| 1 | #8 | High Power / AC mode | Free config | both | 1.4–2.17× | digest | PENDING |
+| 2 | #7 | MLX command-buffer limits | Free config | decode | +11.9–13.7% | digest (source bit-identical) | PENDING |
+| 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
+| 4 | #10 | `async_eval` one-step-ahead | Free config | decode | +50% at 4-bit | digest | PENDING |
+| 5 | #5 | Correctly sized pinned expert cache | Cache | decode | 4.39 tok/s already shown on 16 GB (Nemotron) | digest + no thrash | PENDING |
+| 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode | +13–52% | digest | PENDING |
+| 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | +20% decode, 9× fewer read-ops | digest | PENDING |
+| 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
+| 9 | #6 | Overlap / double-buffered async I/O | Overlap | decode | +32% (source bit-exact) | digest | PENDING |
+| 10 | #1 | Native / sync-removed decode path | Sync removal | decode | 9.0–9.6 tok/s (source, ≥64 GB) | raw logits + cache tensors | PENDING |
+| 11 | #14 | Wave-Partitional Prefill | Prefill | prefill | 2.28→5.65 tok/s | digest, fixed chunk boundaries | PENDING |
+| 12 | #13 | Prefix / prompt caching | Prefill | prefill | 4.94×–57× TTFT | digest, fixed chunking | PENDING |
+| 13 | #16 | Pre-packed fp32 prefill GEMM | Prefill | prefill | 1.44×, max-abs-diff 0 | digest (avoid BNNS Graph) | PENDING |
+| 14 | #15 | Full-layer staging + second SSD mirror | Prefill | prefill+decode | 29→240 t/s prefill | digest | PENDING |
+| 15 | #19 | Last-row-only prefill < 2,048 tokens | Prefill | prefill | TTFT/memory lead | digest required (currently changes logits) | PENDING |
+| 16 | #12 | Lossless rANS reconstruction + 3-tier cache | I/O stack | decode+prefill | 2.78× | digest | PENDING |
+| 17 | #11 | io_uring + O_DIRECT pager + KICK/WAIT | I/O stack | decode | 1.47→16–22 tok/s (source) | byte-exact | PENDING |
+| 18 | #22 | SwiftLM-style GPU-vs-SSD rewrite | I/O stack | decode | 8.5× (source, full top-k) | digest | PENDING |
+| 19 | #17 | Full residency on more memory | Deferred | decode+prefill | 2.3→58–83 tok/s at 128 GB | digest | DEFERRED (16 GB rule) |
+| 20 | #18 | Second Mac via RPC / tensor parallel | Deferred | decode+prefill | 25 tok/s on 2× M4 | digest | DEFERRED (16 GB rule) |
+| 21 | #20 | Multi-buffer / 64-bit offsets past 8 GiB cap | Deferred | decode | unlock larger pool | digest | DEFERRED (16 GB rule) |
+| 22 | #21 | K>1 verification read-sharing at larger K | Deferred | decode | union 0.54–0.62 at K=6 | digest (K=2 already slower) | DEFERRED (needs new premise) |
+
+---
+
+## Phase 0 — Prerequisite: profile
+
+**Step 0 — profile the per-token split on our 16 GB M4.** No code change, no speed claim. Reproduce the reference profile: on the same model, GPU 27%, Python/`mx.eval` syncs 41%, SSD reads 29%, bookkeeping 3%. If our split resembles it, Step 10 (sync removal) jumps ahead of Steps 6–9; if SSD dominates, the read-path steps take priority. Record the profile in `results/...` and note the decision here before starting Step 1.
+
+**Source:** `Jakevin/moe-offload` — https://github.com/Jakevin/moe-offload
+
+---
+
+## Phase 1 — Free, bit-exact config (Steps 1–4)
+
+### Step 1 — Method #8: High Power / AC mode
+- **Premise:** macOS Low Power mode caps sustained GPU/SSD clocks; disabling it is free and changes no math.
+- **Change:** verify harness runs with AC / High Power; Low Power off.
+- **Evidence:** 1.4–2.17× in controlled M4/M5 tests.
+- **Gate:** same digest; record thermal/clock state so it is not confounded with later steps.
+- **Status:** PENDING.
+
+### Step 2 — Method #7: MLX Metal command-buffer limits
+- **Premise:** larger command buffers reduce launch overhead on launch-heavy MoE decode.
+- **Change:** `MLX_MAX_MB_PER_BUFFER=2048`, `MLX_MAX_OPS_PER_BUFFER=1000` (source also tested 400 MB + 1000 ops).
+- **Evidence:** MoE +11.9–13.7% on M5 Max; +5–8% launch-heavy MoE; output hashes bit-identical; prefill/memory unchanged. Dense models gain nothing.
+- **Gate:** digest; confirm no prefill regression.
+- **Status:** PENDING.
+
+### Step 3 — Method #9: MLX memory-residency API
+- **Premise:** macOS VM compressor compresses cold anonymous buffers and decompresses them inside matmul.
+- **Change:** use `set_wired_limit` + `set_cache_limit` + `set_memory_limit` + `clear_cache` (MLX API). **Not** the already-rejected `iogpu.wired_limit_mb` sysctl.
+- **Evidence:** compressed memory 19.69 → 1.7 GB (−91%).
+- **Gate:** digest; watch for swap growth under the guard.
+- **Status:** PENDING.
+
+### Step 4 — Method #10: `async_eval` one-step-ahead
+- **Premise:** overlap evaluation of the next step with host work.
+- **Change:** enable `async_eval` / one-step-ahead evaluation with buffer-limit env vars.
+- **Evidence:** +50% at 4-bit (silica); decode == mlx-lm.
+- **Gate:** digest (scheduling only, expected exact).
+- **Status:** PENDING.
+
+---
+
+## Phase 2 — Cache sizing (Step 5)
+
+### Step 5 — Method #5: Correctly sized pinned expert cache
+- **Premise:** a cache helps only when its pool is ≥⅓ of total expert bytes. At 11% coverage a model regressed −64%; at 71% coverage another gained +216%. On 16 GB, a few GB is the realistic ceiling; 8 GB thrashed (Nemotron, 4 GB = 4.39 tok/s).
+- **Change:** sweep small cache sizes (start ≤4 GB), pin the cache to avoid VM compression, allocate per-layer proportional to observed routing (trace first if needed).
+- **Evidence:** Nemotron 16 GB 4 GB cache = 4.39 tok/s, 86.1% hit; Palm 1→10 GiB 12.38→16.19 tok/s; llama.cpp #27861 18.4→24.2 tok/s at 48 slots.
+- **Gate:** digest + no thrash + guard floor. **This step determines the ceiling for all later I/O steps on 16 GB.**
+- **Status:** PENDING.
+
+---
+
+## Phase 3 — Read path (Steps 6–7)
+
+### Step 6 — Method #2: Explicit sorted, gap-merged `pread`
+- **Premise:** mmap faults and per-slice reads cause 16 KiB random read storms; reading exactly the router-selected experts as large merged ranges is bit-exact.
+- **Change:** replace fault/per-slice reads with sorted, gap-merged parallel `pread` of the selected experts' byte ranges.
+- **Evidence:** same model 8.51→9.17 tok/s; elsewhere +13–52%, read count 28.6k→8.5k, avg read 450 KB→1.5 MB.
+- **Gate:** digest.
+- **Status:** PENDING.
+
+### Step 7 — Method #3: Per-expert coalescing / sidecar layout
+- **Premise:** an expert's 9 sub-slices (gate/up/down × weight/scales/biases) are scattered over a large span; making them contiguous is deterministic and bit-exact.
+- **Change:** one-time offline sidecar/relayout so each expert is one contiguous block. **No expert permutation** (permutation risks changing token identity and is excluded).
+- **Evidence:** ~+20% decode, cold read 1396→463 µs (3.02×), 9× fewer read-ops (486→54/token), negligible extra disk; sidecar run bitwise-identical.
+- **Gate:** digest.
+- **Status:** PENDING.
+
+---
+
+## Phase 4 — Prefetch and overlap (Steps 8–9)
+
+### Step 8 — Method #4: Next-layer router prefetch
+- **Premise:** the router completes before expert compute, creating a prefetch window; predicting l+1 experts from the current residual is bit-exact (changes timing only).
+- **Change:** add next-layer expert prediction; read ahead into the cache.
+- **Evidence:** same model hit 84.3→94.7%, 9.17→9.73 tok/s; recall@10/16/24 = 83.6/94.1/96.7%; Palm cross-layer 10.89→12.70 tok/s.
+- **Gate:** digest.
+- **Status:** PENDING.
+
+### Step 9 — Method #6: Overlap / double-buffered async I/O
+- **Premise:** fetch l+1 while computing l; GPU shared-expert compute hides SSD misses with one sync per layer.
+- **Change:** reorder the layer so router top-k issues reads first, compute shared FFN while NVMe works, join before expert matmul.
+- **Evidence:** Jetson 1.94→2.95 tok/s, overlap alone +32%, bit-for-bit logits; TinyGiant M1 16 GB 2.97→6.06 GB/s (2.09×); 75% hit 2.92→3.81 tok/s.
+- **Gate:** digest.
+- **Status:** PENDING.
+
+---
+
+## Phase 5 — Sync removal (Step 10)
+
+### Step 10 — Method #1: Native / sync-removed decode path
+- **Premise:** 41% of per-token time is Python/`mx.eval` sync on the same model. This is the single largest bit-exact lever.
+- **Change:** C++/Metal fused decode path on the MLX C++ API (no per-layer Python↔GPU sync). Address the reference port's dense-attention-only ≤2,048-token limitation.
+- **Evidence:** same model 2.52→9.0–9.6 tok/s; bit-exact on token ids, raw logits every step, 122/122 cache tensors; C++ path 9.0–9.6 at ~11.5 GB.
+- **Gate:** raw logits + full cache tensor equality, not just final tokens.
+- **Status:** PENDING (do not start until Step 0 profile confirms the sync share).
+
+---
+
+## Phase 6 — Prefill (Steps 11–15)
+
+### Step 11 — Method #14: Wave-Partitional Prefill
+- **Premise:** when a ubatch touches more experts than the cache holds, run expert GEMMs in waves, mask and sum; each expert loaded once per ubatch.
+- **Evidence:** merged llama.cpp PR #25294: 2.28→5.65 tok/s (2.48×); bit-exact with matched kernels/ubatch; O_DIRECT + async I/O pool.
+- **Gate:** digest; keep kernels and ubatch matched.
+- **Status:** PENDING.
+
+### Step 12 — Method #13: Prefix / prompt caching
+- **Premise:** agent turns reuse long system/tools prefixes; snapshot model + KV state at prefix points.
+- **Evidence:** same model TTFT 315.7→63.9 s (4.94×); Qwen3-9B 19.42→0.35 s (57×); KVLink 96% TTFT cut. Bit-exact when chunk boundaries match.
+- **Gate:** digest; **keep chunk boundaries fixed** (changing them shifted logits slightly in the source, max |diff| 1.375, though argmax was unchanged).
+- **Status:** PENDING.
+
+### Step 13 — Method #16: Pre-packed fp32 prefill GEMM
+- **Premise:** pre-pack weights into an fp32 prefill GEMM layout.
+- **Evidence:** 1.44× end-to-end, max-abs-diff = 0. **BNNS Graph is NOT bit-exact at 9/12 shapes — do not use.**
+- **Gate:** digest.
+- **Status:** PENDING.
+
+### Step 14 — Method #15: Full-layer staging + second SSD mirror
+- **Premise:** stage the next layer's whole expert block into pinned host buffers while the GPU computes the current layer; mirror the GGUF across two SSDs.
+- **Evidence:** 7,943-token prompt prefill 29→240 t/s, decode 2.4–2.9→5.8–6.0 t/s, 78% hit, ~18 GB/s combined SSD.
+- **Gate:** digest; depends on a second physical SSD (hardware availability).
+- **Status:** PENDING.
+
+### Step 15 — Method #19: Last-row-only prefill below 2,048 tokens
+- **Premise:** untried repo lead (`DO_NOT_IMPLEMENT.md` "still open"); TTFT/memory candidate for short prompts.
+- **Evidence:** repo lead, premise only — no published number.
+- **Gate:** currently changes logits → **bit-exactness gate must be cleared before any A/B**. If it cannot be made exact, drop it.
+- **Status:** PENDING (gate not yet cleared).
+
+---
+
+## Phase 7 — I/O stack rewrites (Steps 16–18)
+
+### Step 16 — Method #12: Lossless rANS reconstruction + 3-tier cache
+- **Premise:** pack each expert into one aligned block, reconstruct exact weights in VRAM with lossless rANS, cache all three of gate/up/down.
+- **Evidence:** SSD-LLaMA 2.78× over no-cache; prefill 1.52–4.19×, decode 2.10–15.58×. Caching only gate/up gives higher hit but lower throughput.
+- **Gate:** digest (lossless by construction; audit that decompressed weights equal the original quantized values).
+- **Status:** PENDING.
+
+### Step 17 — Method #11: io_uring + O_DIRECT pager + KICK/WAIT doorbell
+- **Premise:** compact VRAM slot pool + host RAM victim cache + batched io_uring/O_DIRECT pager + on-device doorbell overlapping shared-expert compute with miss servicing.
+- **Evidence:** same model (PR #31469) 1.47→16.29/22.03 tok/s, 208→12–35 MiB/tok, **100% byte-exact**, 576/576 greedy tokens. Linux/CUDA proof; needs an MLX/Metal port.
+- **Gate:** byte-exact.
+- **Status:** PENDING (port effort high).
+
+### Step 18 — Method #22: SwiftLM-style GPU-vs-SSD streaming rewrite
+- **Premise:** rewrite SSD expert streaming with a tuned GPU/SSD split at full top-k.
+- **Evidence:** 0.58→4.95 tok/s (8.5×) at full top-8 quality; 32 GB M6 14.1 streaming vs 48.4 resident.
+- **Gate:** digest (full top-k preserved).
+- **Status:** PENDING.
+
+---
+
+## Phase 8 — Deferred by the 16 GB-first rule (Steps 19–22)
+
+### Step 19 — Method #17: Full residency on more memory
+- **Premise:** SSD reads disappear when experts fit in unified memory.
+- **Evidence:** same model 2.3 tok/s (16 GB) → 12–16 (64 GB) → 58–83 (128 GB); 64 GB M5 Pro 27.6 tok/s with draft head.
+- **Gate:** digest. **Status:** DEFERRED until 16 GB path proven.
+
+### Step 20 — Method #18: Second Mac via RPC / tensor parallel
+- **Premise:** pool two 16 GB Macs over Thunderbolt.
+- **Evidence:** 2× M4 16 GB, Qwen3.6-35B-A3B 25 tok/s; TP over RDMA ~1.3× decode, ~1.7–2× prefill (50/50 split; 40/60 OOMs).
+- **Gate:** digest. **Status:** DEFERRED until 16 GB path proven.
+
+### Step 21 — Method #20: Multi-buffer / 64-bit offsets past the 8 GiB pool cap
+- **Premise:** current single `uint32` pool caps at 8 GiB; multi-buffer/64-bit offsets unlock a larger expert pool.
+- **Evidence:** repo lead, premise only.
+- **Gate:** digest. **Status:** DEFERRED until 16 GB path proven.
+
+### Step 22 — Method #21: K>1 verification read-sharing at larger K
+- **Premise:** route union across K tokens shares reads; union ratio 0.542–0.62 at K=6 vs 0.796 at K=2.
+- **Evidence:** repo lead. **K=2 was already measured 16% slower here (commit c68ec90)** — the genuinely open part is larger K only.
+- **Gate:** digest; requires a new premise after K=2 result. **Status:** DEFERRED.
+
+---
+
+## How we will record each step
+
+For every step, before touching code:
+1. Confirm the guard envelope and ask for run permission.
+2. Run candidate vs current accepted baseline with identical prompt/seed/token count.
+3. Compare token digest (and raw logits for Step 10), tok/s, physical MB/token, guard floor, swap/compressor growth.
+4. If digest differs → **drop the method**, mark REJECTED with the number, add to `DO_NOT_IMPLEMENT.md`.
+5. If digest matches but slower → mark NO GAIN, keep the flag OFF (do not delete code; owner decision 2026-11-17).
+6. If digest matches and faster → mark ACCEPTED, record the gain, promote baseline, update the tracker.
+7. Commit the step on this branch with the measurement in the commit message.
+
+## Links
+- Research report: `reports/Faster Qwen Nemotron inference on M4.md`
+- Research notes: `research_notes/Faster Qwen Nemotron inference on M4/` (8 files)
+- Dead-end registry: `docs/performance/DO_NOT_IMPLEMENT.md`
+- Active speed profile: `docs/performance/EXACT_SPEED.md`

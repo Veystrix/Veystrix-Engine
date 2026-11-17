@@ -37,6 +37,7 @@ collect runtime-specific correctness and experiment constraints.
 |---|---|
 | [`decisions/README.md`](decisions/README.md) | Architecture decision record (ADR) log for model and runtime decisions |
 | [`security/ANTI_REVERSE_ENGINEERING.md`](security/ANTI_REVERSE_ENGINEERING.md) | Honest limits of local tamper resistance and the commercial protection path |
+| [`performance/SPEEDUP_ROADMAP.md`](performance/SPEEDUP_ROADMAP.md) | Sequential 22-method execution ledger — check current step and status |
 | [`performance/DO_NOT_IMPLEMENT.md`](performance/DO_NOT_IMPLEMENT.md) | Measured dead ends — check before retrying any speed idea |
 | [`performance/EXACT_SPEED.md`](performance/EXACT_SPEED.md) | Curated bit-identical speed profile for both models |
 | [`hardware/MEMORY_SUPPORT.md`](hardware/MEMORY_SUPPORT.md) | Supported unified-memory tiers and pool caps |

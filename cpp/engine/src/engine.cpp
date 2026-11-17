@@ -137,6 +137,16 @@ GatedResidualOutput gated_residual(
   return {mixed_input, inj};
 }
 
+mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,
+                         const mx::array& gate, float eps, bool sigmoid_act) {
+  auto dtype = x.dtype();
+  mx::array y = mx::fast::rms_norm(x, weight, eps);
+  y = mx::astype(y, mx::float32);
+  mx::array g = mx::astype(gate, mx::float32);
+  mx::array act = sigmoid_act ? mx::sigmoid(g) : g * mx::sigmoid(g);  // silu
+  return mx::astype(y * act, dtype);
+}
+
 std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::array& k) {
   float scale = 1.0f / std::sqrt(static_cast<float>(q.shape().back()));
   mx::array qn = mx::astype(q, mx::float32);

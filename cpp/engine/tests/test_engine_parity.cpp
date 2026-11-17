@@ -94,6 +94,15 @@ static int run_case(const std::string& root, const std::string& name, int G) {
       std::fprintf(stderr, "[%s] gated_residual differs\n", name.c_str());
       extra_ok = false;
     }
+    // Gated RMSNorm (sigmoid).
+    mx::array rgx = load("rng_gx"), rgw = load("rng_gw"), rgg = load("rng_gg");
+    mx::array erg = load("rng_gated");
+    mx::array gated = rms_norm_gated(rgx, rgw, rgg, 1e-6f, true);
+    mx::eval(gated);
+    if (!bit_equal(gated, erg)) {
+      std::fprintf(stderr, "[%s] rms_norm_gated differs\n", name.c_str());
+      extra_ok = false;
+    }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "[%s] extra primitive load failed: %s\n", name.c_str(), e.what());
     extra_ok = false;

@@ -97,6 +97,12 @@ mx::array moe_block_relu2(const mx::array& x, const mx::array& route,
 // `weight` is the checkpoint gain (float32; one-centered means no +1).
 mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps);
 
+// Gated RMSNorm at the end of the GDN block (Qwen4ExpRMSNormGated):
+//   y = fast_rms_norm(x, weight, eps).f32
+//   return (y * act(gate.f32)).astype(x.dtype), act = sigmoid or silu.
+mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,
+                         const mx::array& gate, float eps, bool sigmoid_act);
+
 // Greedy sampler: argmax over the last axis -> uint32 scalar-ish array,
 // matching veystrix.sampling.Sampler.__call__ for greedy decoding.
 mx::array sample_greedy(const mx::array& logits);

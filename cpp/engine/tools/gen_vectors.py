@@ -156,13 +156,20 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     normg = mx.reshape(normed, (1, HC, HD))
     gr_mixed = mx.mean(mixg * normg, axis=-2)
     gr_inj = 2 * mx.sigmoid(mx.matmul(normed, iw.T) / HC)
+    # Gated RMSNorm (sigmoid activation) at end of GDN.
+    gx = mx.array(rng.normal(size=(1, 16)).astype(np.float32))
+    gw = mx.array(np.ones(16).astype(np.float32))
+    rgg = mx.array(rng.normal(size=(1, 16)).astype(np.float32))
+    gy2 = mx.fast.rms_norm(gx, gw, 1e-6).astype(mx.float32)
+    gated_sigmoid = (gy2 * mx.sigmoid(rgg.astype(mx.float32))).astype(gx.dtype)
     arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected,
               "norm_x": norm_x, "norm_w": norm_w, "norm_expected": norm_expected,
               "sample_logits": sample_logits, "greedy": greedy,
               "gdn_q": q, "gdn_k": k, "gdn_qn": qn, "gdn_kn": kn,
               "gdn_gy": gy, "gdn_gg": gg, "gdn_sig": gate_sig, "gdn_silu": gate_silu,
               "gr_hyp": hyp, "gr_nw": nw, "gr_dw": dw, "gr_uw": uw, "gr_iw": iw,
-              "gr_mixed": gr_mixed, "gr_inj": gr_inj}
+              "gr_mixed": gr_mixed, "gr_inj": gr_inj,
+              "rng_gx": gx, "rng_gw": gw, "rng_gg": rgg, "rng_gated": gated_sigmoid}
     for k, v in arrays.items():
         save(d / f"{k}.npy", v)
     meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,

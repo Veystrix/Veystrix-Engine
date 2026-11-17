@@ -177,7 +177,11 @@ GDNLayerOutput gdn_prefill(const mx::array& x, const GDNWeights& w,
   }
 
   // 3. conv_input = concat([conv_state, mixed_qkv]); advance conv cache.
-  mx::array conv_input = mx::concatenate({cache.conv_state, mixed_qkv}, 1);
+  // Python creates conv_state with dtype=inputs.dtype, so the concat stays in
+  // the activation dtype. Defensively cast here so a wrongly-typed cache can
+  // never promote the conv->qkv->delta chain to f32 and break bit-exactness.
+  mx::array conv_state_in = mx::astype(cache.conv_state, x.dtype());
+  mx::array conv_input = mx::concatenate({conv_state_in, mixed_qkv}, 1);
   const int n_keep = K - 1;
   const int Tconv = conv_input.shape(1);
   mx::array new_conv_state = mx::contiguous(mx::slice(

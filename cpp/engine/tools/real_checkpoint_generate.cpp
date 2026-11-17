@@ -1248,8 +1248,12 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     if (l == ple_layer && ple_weights)
       layers.back().ple = std::move(ple_weights);
 
+    // Python's Qwen3.5 GatedDeltaNet creates conv_state with dtype=inputs.dtype
+    // (bf16 on the real checkpoint); recurrent/init state stays f32. A f32
+    // conv_state promotes the whole conv->qkv->delta chain to f32 and breaks
+    // bit-exactness. Keep conv_state in the activation dtype.
     GDNCacheState zero(
-        mx::zeros(mx::Shape{1, dcfg.gdn.conv_kernel - 1, conv_dim}, mx::float32),
+        mx::zeros(mx::Shape{1, dcfg.gdn.conv_kernel - 1, conv_dim}, mx::bfloat16),
         mx::zeros(mx::Shape{1, dcfg.gdn.num_v_heads, dcfg.gdn.head_v_dim,
                             dcfg.gdn.head_k_dim}, mx::float32));
     caches.emplace_back(DecoderLayerCache(std::move(zero)));

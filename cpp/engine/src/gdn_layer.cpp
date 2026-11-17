@@ -41,6 +41,9 @@ GDNLayerOutput gdn_layer_forward(const mx::array& x, const GDNWeights& w,
     z = mx::reshape(z, mx::Shape{B, 1, Hv, Dv});
 
     // 2. Cached depthwise conv: conv_input = concat([conv_state, mixed_qkv]).
+    // Python keeps conv_state in the activation dtype; cast defensively so the
+    // concat cannot promote the chain to f32.
+    conv_state = mx::astype(conv_state, mixed_qkv.dtype());
     mx::array conv_input = mx::concatenate({conv_state, mixed_qkv}, 1);  // [B,K,conv_dim]
     const int n_keep = K - 1;
     const int Tconv = conv_input.shape(1);

@@ -44,6 +44,22 @@ mixed full-attention path in `decoder_full` is bit-exact at loop level but its
 QSA indexer needs a prepopulated cache, so "from-scratch zeroed cache"
 generation uses the all-linear path — documented in native_generate.md).
 
+## Update 2026-11-17 (prefill + fused RoPE): 20/20 ctests pass
+
+- `rope_fused` — fused-Metal RoPE extracted verbatim from production, 0 ULP
+  bit-exact over 6 cases (f32/f16/bf16, 2-D/3-D positions). Replaces the eager
+  path; the eager-vs-fused ~1 ULP delta never changed the QSA boolean mask.
+- `prefill` — GDN S>1 path bit-exact (S=2,5,16 + masked). Production uses the
+  SAME fused kernel per-token loop (chunked scan is dead code on this M4);
+  full conv1d over the sequence + optional SSM mask. MoE needs no S>1 changes
+  (processes [B,S,H] uniformly; flatten tokens).
+
+ENGINE-LEVEL PRIMITIVES ARE NOW COMPLETE AND BIT-EXACT (20/20). Remaining is
+serving-stack integration, NOT engine correctness: server wrapper / KV-cache
+paging, wiring native_generate's weight load to full real-checkpoint streaming,
+and the guarded app-level cross-check on real checkpoints (needs owner hardware
+permission). Python must NOT be dropped until that cross-check passes.
+
 ## Update 2026-11-17 (parity gaps closed): 18/18 ctests pass
 
 - `parity_gaps` — quantized shared expert (Q4 projection for shared gate/up/down)

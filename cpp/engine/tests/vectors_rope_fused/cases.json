@@ -1,0 +1,128 @@
+[
+  {
+    "dir": "case_f32_pos2",
+    "dtype": "float32",
+    "stored_as_uint16": false,
+    "position_ndim": 2,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case_f32_pos3",
+    "dtype": "float32",
+    "stored_as_uint16": false,
+    "position_ndim": 3,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case_f16_pos2",
+    "dtype": "float16",
+    "stored_as_uint16": false,
+    "position_ndim": 2,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case_f16_pos3",
+    "dtype": "float16",
+    "stored_as_uint16": false,
+    "position_ndim": 3,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case_bf16_pos2",
+    "dtype": "bfloat16",
+    "stored_as_uint16": true,
+    "position_ndim": 2,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case_bf16_pos3",
+    "dtype": "bfloat16",
+    "stored_as_uint16": true,
+    "position_ndim": 3,
+    "rotary_dim": 32,
+    "base": 10000000.0,
+    "mrope_section": [
+      11,
+      11,
+      10
+    ],
+    "attention_scaling": 1.0,
+    "B": 2,
+    "H": 3,
+    "T": 4,
+    "D": 128,
+    "max_position_embeddings": 2048,
+    "fused_apply": true,
+    "mlx_version": "0.32.2"
+  }
+]

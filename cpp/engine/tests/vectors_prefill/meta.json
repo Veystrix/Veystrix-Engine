@@ -1,0 +1,20 @@
+{
+  "hidden_size": 64,
+  "key_dim": 64,
+  "value_dim": 128,
+  "num_k_heads": 2,
+  "num_v_heads": 4,
+  "head_k_dim": 32,
+  "head_v_dim": 32,
+  "conv_kernel": 4,
+  "eps": 1e-06,
+  "output_activation": "sigmoid",
+  "batch": 1,
+  "cases": [
+    "s2",
+    "s5",
+    "s16",
+    "s5_masked"
+  ],
+  "seed": 20261117
+}

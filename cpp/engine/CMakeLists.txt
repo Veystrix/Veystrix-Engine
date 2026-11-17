@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -111,6 +111,13 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(NOT Python3_Interpreter_FOUND)
   set(Python3_EXECUTABLE python3)
 endif()
+
+# Batched prefill (all S tokens through each layer) bit-exact parity.
+add_executable(test_prefill_batched tests/test_prefill_batched.cpp)
+target_include_directories(test_prefill_batched PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_prefill_batched PRIVATE veystrix_engine)
+set_target_properties(test_prefill_batched PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Production PLE layer (layer index 1) bit-exact parity.
 add_executable(test_ple tests/test_ple.cpp)
@@ -204,6 +211,8 @@ enable_testing()
 add_executable(test_dense_manifest tests/test_dense_manifest.cpp)
 target_include_directories(test_dense_manifest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME dense_manifest COMMAND test_dense_manifest)
+add_test(NAME prefill_batched COMMAND test_prefill_batched
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_prefill_batched)
 add_test(NAME ple COMMAND test_ple ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_ple)
 add_test(NAME rope_fused_mrope COMMAND test_rope_fused_mrope
          ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_rope_mrope)

@@ -48,6 +48,7 @@
 #include "dense_manifest.hpp"
 #include "rope_fused_apply.hpp"
 #include "ple.hpp"
+#include "prefill_batched.hpp"
 #include "io_pager.hpp"
 #include "gdn_layer.hpp"
 #include "gdn_conv.h"
@@ -1293,20 +1294,75 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   debug_capture::get().moe_hash = std::getenv("REALGEN_DEBUG_MOE") != nullptr;
   int pos = 0;
   std::optional<mx::array> logits;
-  for (size_t i = 0; i < prompt.size(); ++i) {
-    std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
-    mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
-    debug_capture::get().current_step = static_cast<int>(i);
-    // Opt-in: capture only the LAST prefill step (the one whose logits feed
-    // step 0). Disabled by default, so normal runs are byte-identical.
-    debug_capture::get().enabled = dbg_requested && (i + 1 == prompt.size());
-    if (debug_capture::get().enabled) debug_capture::get().clear();
-    logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
-                      static_cast<int32_t>(prompt[i]),
-                      layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
-    debug_capture::get().enabled = false;
-    mem_telemetry("prefill-step");
-    if (dbg_requested) dump_gdn_states(caches, static_cast<int>(i), n_layers);
+  const bool seq_prefill = std::getenv("VEYSTRIX_CPP_SEQ_PREFILL") != nullptr;
+  if (!seq_prefill && prompt.size() > 1) {
+    // Batched prefill: ONE call feeds all S prompt tokens through every layer,
+    // matching production language(ids, cache). Eliminates the sequential-S=1
+    // ULP drift that amplifies through MoE routing. (Synthetic bit-exact vs Python.)
+    std::vector<BatchedLayer> bl;
+    bl.reserve(n_layers);
+    for (int l = 0; l < n_layers; ++l) {
+      RealLayer& R = layers[l];
+      bl.emplace_back(R.attn_norm_w, R.attn_down_w, R.attn_up_w, R.attn_inject_w,
+                      R.mlp_norm_w, R.mlp_down_w, R.mlp_up_w, R.mlp_inject_w,
+                      R.gate_w, R.shared_gw, R.shared_uw, R.shared_dw,
+                      R.shared_glw, R.top_k, R.kind);
+      BatchedLayer& B = bl.back();
+      if (R.gdn) B.gdn = R.gdn;
+      if (R.full) B.full = R.full;
+      if (R.ple) { B.ple = R.ple; B.ple_cache = R.ple_cache; }
+      B.moe_forward = [&R](const mx::array& x, const mx::array& idx,
+                           const mx::array& sc) {
+        // MoE is per-token independent (gather_qmm gathers each row's experts
+        // separately), so process one token at a time to stay within the
+        // num_slots=16 slot pool. This is bit-exact regardless of batching.
+        int S = static_cast<int>(x.shape(0));
+        if (S <= 1)
+          return R.stream ? R.stream->forward(x, idx, sc).output
+                          : R.cross->forward(x, idx, sc).output;
+        std::vector<mx::array> outs;
+        outs.reserve(S);
+        for (int t = 0; t < S; ++t) {
+          std::vector<int32_t> ti{t};
+          mx::array rowidx(ti.data(), mx::Shape{1}, mx::int32);
+          mx::array xt = mx::take(x, rowidx, 0);
+          mx::array it = mx::take(idx, rowidx, 0);
+          mx::array st = mx::take(sc, rowidx, 0);
+          outs.push_back(R.stream ? R.stream->forward(xt, it, st).output
+                                  : R.cross->forward(xt, it, st).output);
+        }
+        return mx::concatenate(outs, 0);
+      };
+    }
+    BatchedHead bh(head.norm_w, head.down_w, head.up_w,
+                   BatchedLMTriplet(head.lm.w, head.lm.s, head.lm.b));
+    std::vector<int32_t> ids(prompt.begin(), prompt.end());
+    mx::array ids_arr(ids.data(), mx::Shape{1, static_cast<int>(ids.size())}, mx::int32);
+    auto embed_all = [&](const mx::array& ida) {
+      mx::array f = mx::reshape(ida, mx::Shape{-1});
+      mx::array w = mx::take(embed.w, f, 0), s = mx::take(embed.s, f, 0),
+                b = mx::take(embed.b, f, 0);
+      mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
+      return mx::reshape(row, mx::Shape{1, static_cast<int>(f.size()), H});
+    };
+    logits = run_prefill_batched(ids_arr, embed_all, bl, bh, dcfg, fa, caches,
+                                 group_size, bits);
+    // copy back mutable PLE caches
+    for (int l = 0; l < n_layers; ++l)
+      if (bl[l].ple) layers[l].ple_cache = bl[l].ple_cache;
+    pos = static_cast<int>(prompt.size());
+    mem_telemetry("prefill-batched");
+  } else {
+    for (size_t i = 0; i < prompt.size(); ++i) {
+      std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
+      mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+      debug_capture::get().current_step = static_cast<int>(i);
+      logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
+                        static_cast<int32_t>(prompt[i]),
+                        layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
+      mem_telemetry("prefill-step");
+      if (dbg_requested) dump_gdn_states(caches, static_cast<int>(i), n_layers);
+    }
   }
   if (dbg_requested) {
     auto& dbg = debug_capture::get();

@@ -1,0 +1,42 @@
+{
+  "generator": "gen_prefill_batched_vectors.py",
+  "seed": 20261118,
+  "H": 32,
+  "HC": 2,
+  "LOW": 16,
+  "S": 4,
+  "n_layers": 2,
+  "hk": 1,
+  "hv": 2,
+  "dk": 32,
+  "dv": 32,
+  "conv_kernel": 4,
+  "n_heads": 2,
+  "kv_heads": 1,
+  "head_dim": 16,
+  "n_idx_heads": 2,
+  "n_idx_kv": 1,
+  "idx_head_dim": 16,
+  "compress_ratio": 2,
+  "token_budget": 64,
+  "rope_dim": 16,
+  "rope_base": 10000.0,
+  "rope_style": "interleaved",
+  "rope_mrope_section": [
+    6,
+    6,
+    4
+  ],
+  "eps": 1e-06,
+  "top_k": 2,
+  "group_size": 32,
+  "bits": 4,
+  "vocab": 64,
+  "layer_types": [
+    "linear_attention",
+    "full_attention"
+  ],
+  "moe_routed": "stubbed_to_zero",
+  "ple": "absent",
+  "note": "Python feeds all S tokens through each layer in ONE call; routed experts are stubbed to exact zero in both oracle and C++."
+}

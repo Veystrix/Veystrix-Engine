@@ -663,6 +663,14 @@ mx::array run_step(
     int group_size, int bits) {
   mx::array hidden =
       mx::tile(input_embeddings, std::vector<int>{1, 1, cfg.hc_count});
+  if (const char* ed = std::getenv("REALGEN_DUMP_EMBED")) {
+    if (debug_capture::get().current_step == 15) {
+      mx::array ef = mx::reshape(mx::astype(hidden, mx::float32), mx::Shape{-1});
+      mx::eval(ef);
+      std::FILE* f = std::fopen(ed, "wb");
+      if (f) { std::fwrite(ef.data<float>(), sizeof(float), ef.size(), f); std::fclose(f); }
+    }
+  }
 
   for (int l = 0; l < cfg.n_layers; ++l) {
     RealLayer& L = layers[l];
@@ -703,6 +711,17 @@ mx::array run_step(
       debug_capture::get().add(nm, branch);
     }
     hidden = inject(hidden, branch, ar.injection_weights);
+    if (const char* hd = std::getenv("REALGEN_DUMP_LAYER_HIDDEN")) {
+      // Dump hidden after attention for the LAST prompt step only (step==n_layers-1 index in prefill).
+      if (debug_capture::get().current_step == 15) {
+        mx::array hf = mx::reshape(mx::astype(hidden, mx::float32), mx::Shape{-1});
+        mx::eval(hf);
+        char pth[512];
+        std::snprintf(pth, sizeof(pth), "%s.attn.L%02d.f32", hd, l);
+        std::FILE* f = std::fopen(pth, "wb");
+        if (f) { std::fwrite(hf.data<float>(), sizeof(float), hf.size(), f); std::fclose(f); }
+      }
+    }
     if (dbg_should_hash()) {
       char tag[160];
       std::snprintf(tag, sizeof(tag), "step%d L%02d hidden_after_attn",
@@ -741,6 +760,16 @@ mx::array run_step(
     }
 
     hidden = inject(hidden, moe, mr.injection_weights);
+    if (const char* hd = std::getenv("REALGEN_DUMP_LAYER_HIDDEN")) {
+      if (debug_capture::get().current_step == 15) {
+        mx::array hf = mx::reshape(mx::astype(hidden, mx::float32), mx::Shape{-1});
+        mx::eval(hf);
+        char pth[512];
+        std::snprintf(pth, sizeof(pth), "%s.layer.L%02d.f32", hd, l);
+        std::FILE* f = std::fopen(pth, "wb");
+        if (f) { std::fwrite(hf.data<float>(), sizeof(float), hf.size(), f); std::fclose(f); }
+      }
+    }
     if (dbg_should_hash()) {
       const int st = debug_capture::get().current_step;
       const char* kind = L.stream ? "stream" : "cross";
@@ -773,6 +802,15 @@ mx::array run_step(
 
   // final_head with a quantized lm_head (matches nn.Linear after nn.quantize).
   const int hc = cfg.hc_count, H = cfg.hidden_size;
+  if (const char* hi = std::getenv("REALGEN_DUMP_HIDDEN")) {
+    mx::array hf = mx::reshape(mx::astype(hidden, mx::float32), mx::Shape{-1});
+    mx::eval(hf);
+    char pth[512];
+    std::snprintf(pth, sizeof(pth), "%s.step%d.f32", hi,
+                  debug_capture::get().current_step);
+    std::FILE* f = std::fopen(pth, "wb");
+    if (f) { std::fwrite(hf.data<float>(), sizeof(float), hf.size(), f); std::fclose(f); }
+  }
   mx::Shape gs{static_cast<int>(hidden.shape(0)),
                static_cast<int>(hidden.shape(1)), hc, H};
   mx::array w2d = mx::reshape(head.norm_w, mx::Shape{hc, H});
@@ -786,6 +824,15 @@ mx::array run_step(
       linear(low * mx::sigmoid(low), head.up_w));
   mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   debug_capture::get().add("final_mixed", mixed);
+  if (const char* mf = std::getenv("REALGEN_DUMP_MIXED")) {
+    mx::array mf32 = mx::reshape(mx::astype(mixed, mx::float32), mx::Shape{-1});
+    mx::eval(mf32);
+    char pth[512];
+    std::snprintf(pth, sizeof(pth), "%s.step%d.f32", mf,
+                  debug_capture::get().current_step);
+    std::FILE* f = std::fopen(pth, "wb");
+    if (f) { std::fwrite(mf32.data<float>(), sizeof(float), mf32.size(), f); std::fclose(f); }
+  }
 
   mx::array logits =
       mx::quantized_matmul(mixed, head.lm.w, head.lm.s, head.lm.b,
@@ -815,6 +862,14 @@ mx::array embed_token(const DenseLoader::QTriplet& embed, int token,
   mx::array w = mx::take(embed.w, idx, 0);
   mx::array s = mx::take(embed.s, idx, 0);
   mx::array b = mx::take(embed.b, idx, 0);
+  if (const char* ed = std::getenv("REALGEN_DUMP_EMBEDTENSOR") ; ed && token == 93460) {
+    for (auto [tag, arr] : {std::pair<const char*, mx::array>{"w", w}, {"s", s}, {"b", b}}) {
+      mx::array f = mx::reshape(mx::astype(arr, mx::float32), mx::Shape{-1});
+      mx::eval(f);
+      char pth[512]; std::snprintf(pth, sizeof(pth), "%s.%s.f32", ed, tag);
+      FILE* fp=fopen(pth,"wb"); if(fp){fwrite(f.data<float>(),sizeof(float),f.size(),fp);fclose(fp);}
+    }
+  }
   mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
   return mx::reshape(row, mx::Shape{1, 1, hidden});
 }
@@ -1277,6 +1332,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
 
   // Greedy decode steps. The prefill logits already give us step 0.
   for (int step = 0; step < num_tokens; ++step) {
+    debug_capture::get().current_step = 100 + step;  // never collides with prefill 0..15
     if (step > 0) {
       std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
       mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);

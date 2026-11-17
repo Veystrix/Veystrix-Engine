@@ -647,6 +647,7 @@ GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
 // --------------------------------------------------------------------------- //
 mx::array run_step(
     const mx::array& input_embeddings,
+    int32_t input_token,  // raw token id for this step (needed by PLE n-gram hash)
     const std::vector<RealLayer>& layers,
     const RealHead& head,
     const DecoderConfig& cfg,
@@ -1032,6 +1033,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     debug_capture::get().enabled = dbg_requested && (i + 1 == prompt.size());
     if (debug_capture::get().enabled) debug_capture::get().clear();
     logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
+                      static_cast<int32_t>(prompt[i]),
                       layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
     debug_capture::get().enabled = false;
     mem_telemetry("prefill-step");
@@ -1064,7 +1066,8 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     if (step > 0) {
       std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
       mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
-      logits = run_step(embed_token(embed, token, group_size, bits, H), layers,
+      logits = run_step(embed_token(embed, token, group_size, bits, H),
+                        static_cast<int32_t>(token), layers,
                         head, dcfg, fa, pos_ids, caches, group_size, bits);
       mem_telemetry("decode-step");
     }

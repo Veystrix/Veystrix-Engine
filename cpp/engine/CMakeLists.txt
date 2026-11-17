@@ -112,6 +112,20 @@ if(NOT Python3_Interpreter_FOUND)
   set(Python3_EXECUTABLE python3)
 endif()
 
+# Fused-Metal MRoPE bit-exact parity (Python MRoPERotaryEmbedding fused path).
+add_executable(test_rope_fused_mrope tests/test_rope_fused_mrope.cpp)
+target_include_directories(test_rope_fused_mrope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_rope_fused_mrope PRIVATE veystrix_engine)
+set_target_properties(test_rope_fused_mrope PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Batched vs sequential prefill primitives bit-exact parity.
+add_executable(test_prefill_modes tests/test_prefill_modes.cpp)
+target_include_directories(test_prefill_modes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_prefill_modes PRIVATE veystrix_engine)
+set_target_properties(test_prefill_modes PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Packed linear projection bit-exact parity (Python nn.QuantizedLinear).
 add_executable(test_linear_quantized tests/test_linear_quantized.cpp)
 target_include_directories(test_linear_quantized PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -183,6 +197,10 @@ enable_testing()
 add_executable(test_dense_manifest tests/test_dense_manifest.cpp)
 target_include_directories(test_dense_manifest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME dense_manifest COMMAND test_dense_manifest)
+add_test(NAME rope_fused_mrope COMMAND test_rope_fused_mrope
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_rope_mrope)
+add_test(NAME prefill_modes COMMAND test_prefill_modes
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_prefill_modes)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_quant_linear/meta.json")
   add_test(NAME linear_quantized COMMAND test_linear_quantized
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_quant_linear")

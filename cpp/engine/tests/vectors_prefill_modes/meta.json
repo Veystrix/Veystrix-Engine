@@ -1,0 +1,34 @@
+{
+  "hidden_size": 64,
+  "key_dim": 64,
+  "value_dim": 128,
+  "num_k_heads": 2,
+  "num_v_heads": 4,
+  "head_k_dim": 32,
+  "head_v_dim": 32,
+  "conv_kernel": 4,
+  "eps": 1e-06,
+  "output_activation": "sigmoid",
+  "batch": 1,
+  "comparison_S": 8,
+  "dump_S": 16,
+  "seed": 20261117,
+  "n_heads": 4,
+  "kv_heads": 2,
+  "head_dim": 8,
+  "cases": [
+    "batched",
+    "sequential"
+  ],
+  "gdn_comparison": {
+    "max_abs_diff": 3.725290298461914e-07,
+    "correlation": 0.999999999999969,
+    "bit_identical": false
+  },
+  "full_attn_comparison": {
+    "max_abs_diff": 2.2351741790771484e-08,
+    "correlation": 0.9999999999999634,
+    "bit_identical": false
+  },
+  "note": "batched/ = ONE Python Qwen4ExpGatedDeltaNet.__call__ (full matmul + full conv1d + fused delta kernel T=S).  sequential/ = S Python single-token __call__s (per-token matmul + _causal_conv1d_decode + fused delta kernel T=1).  Both start from identical x/i_conv/i_rec."
+}

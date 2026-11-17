@@ -1,0 +1,23 @@
+{
+  "dtype": "float32",
+  "stored_as_uint16": false,
+  "position_ndim": 2,
+  "rotary_dim": 64,
+  "base": 10000000.0,
+  "mrope_section": [
+    11,
+    11,
+    10
+  ],
+  "attention_scaling": 1.0,
+  "style": "interleaved",
+  "B": 1,
+  "H": 4,
+  "S": 8,
+  "D": 64,
+  "max_position_embeddings": 262144,
+  "seed": 20261119,
+  "start_pos": 13,
+  "fused_apply": true,
+  "mlx_version": "0.32.2"
+}

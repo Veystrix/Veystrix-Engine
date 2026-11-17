@@ -46,6 +46,7 @@
 #include "moe_stream.hpp"
 #include "cross_shard_moe.hpp"
 #include "dense_manifest.hpp"
+#include "rope_fused_apply.hpp"
 #include "io_pager.hpp"
 #include "gdn_layer.hpp"
 #include "gdn_conv.h"
@@ -518,8 +519,8 @@ FullAttentionOutput full_attention_dense(
   mx::array v = mx::transpose(
       mx::reshape(vproj, mx::Shape{B, S, Hkv, D}), {0, 2, 1, 3});
 
-  q = qsa_apply_rope(q, position_ids, cfg.rope);
-  k = qsa_apply_rope(k, position_ids, cfg.rope);
+  q = rope_apply_fused(q, position_ids, cfg.rope);
+  k = rope_apply_fused(k, position_ids, cfg.rope);
 
   if (!cache.keys.has_value()) {
     cache.keys = k;

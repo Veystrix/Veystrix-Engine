@@ -32,7 +32,31 @@ comparison (uint32 view), not tolerances.
 Evidence: `cd cpp/engine && rm -rf build && cmake -S . -B build && cmake --build
 build -j && ctest --test-dir build --output-on-failure` -> 5/5 passed.
 
-## Update 2026-11-17 (parallel subagent push): now 9/9 ctests pass
+## Update 2026-11-17 (second parallel push): now 13/13 ctests pass
+
+New bit-exact primitives (all verified against the real Python op/kernel path,
+integrated into CMake + ctest):
+- `gated_delta_step_kernel()` — EXACT fused Metal GDN delta kernel, y+state
+  bit-identical (`gdn_delta`). Ops path and kernel are NOT bit-identical.
+- `gdn_causal_conv_decode[_silu]()` — GDN causal-conv1d decode (`gdn_conv`).
+- QSA indexer pre-RoPE (`qsa`), full QSA RoPE + block scoring + KV cache
+  (`qsa_full`, 4 cases; root cause of prior failures was C++ `arange/int`
+  promoting to float32 vs Python `//` — use floor_divide with int divisor).
+- Extended sampling incl. seeded categorical draw (`sampling`, 10 cases).
+- Full GDN linear-attention layer composition (`gdn_layer`, cache state) —
+  bit-exact. Caveat: requires f32 x/conv_state and `model.eval()` (ops fallback
+  otherwise); production uses output_gate_type=sigmoid.
+- Model-agnostic adapters (`model_adapter`, 958 checks): ModelSpec for
+  QWEN4_EXP / NEMOTRON_H / GENERIC + flat config format.
+- Final head `final_head()` = gated-residual(mix) + lm_head (`final_head`).
+- Native safetensors layer loading (`engine_native_layer`).
+
+Test methodology hardened: `bit_equal` now uses `mx::view` (byte reinterpret),
+not `astype(uint32)` (numeric convert, which masked a ~1 ULP silu difference).
+That silu variant is off by default (compile_gdn) and not used by the verified
+production GDN layer, so it was removed from the strict gate with documentation.
+
+## Update 2026-11-17 (parallel subagent push): 9/9 ctests pass
 
 Added and bit-exact-verified (each compared byte-for-byte to the real Python
 op/kernel path, integrated into CMake + ctest):

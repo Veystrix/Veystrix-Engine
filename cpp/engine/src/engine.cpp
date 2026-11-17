@@ -55,14 +55,17 @@ mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores)
 
 mx::array moe_block(const mx::array& x, const mx::array& route,
                     const mx::array& scores, const ExpertWeights& w) {
-  // gate/up/down via gather_qmm with the SAME routed indices.
-  mx::array g = q4_projection(x, w.gate, route, w.group_size, w.bits);
-  mx::array u = q4_projection(x, w.up, route, w.group_size, w.bits);
-  mx::array a = swiglu(g, u);
-  // down projection consumes slot activations: [t, slots, inter].
-  mx::array d = q4_projection(a, w.down, route, w.group_size, w.bits,
-                              /*slot_input=*/true);
-  return weighted_combine(d, scores);
+  // Match StreamingSwitchGLU.__call__: x[tokens,hidden] is expanded by
+  // (-2,-3) before gather_qmm, so x is [tokens,1,1,hidden]. gather_qmm with
+  // rhs_indices=route[tokens,k] yields [tokens,k,1,out]; squeeze(-2) then
+  // gives [tokens,k,out] before the score combine over axis -2.
+  mx::array x4 = mx::expand_dims(x, std::vector<int>{-2, -3});
+  mx::array g = q4_projection(x4, w.gate, route, w.group_size, w.bits);
+  mx::array u = q4_projection(x4, w.up, route, w.group_size, w.bits);
+  mx::array a = swiglu(g, u);                       // [tokens,k,1,inter]
+  mx::array d = q4_projection(a, w.down, route, w.group_size, w.bits);
+  d = mx::squeeze(d, -2);                           // [tokens,k,hidden]
+  return weighted_combine(d, scores);              // [tokens,hidden]
 }
 
 mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,

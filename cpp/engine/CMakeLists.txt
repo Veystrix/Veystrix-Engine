@@ -24,5 +24,13 @@ target_link_libraries(test_engine_smoke PRIVATE veystrix_engine)
 set_target_properties(test_engine_smoke PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Bit-exact parity test against Python-generated vectors.
+add_executable(test_engine_parity tests/test_engine_parity.cpp)
+target_link_libraries(test_engine_parity PRIVATE veystrix_engine)
+set_target_properties(test_engine_parity PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 enable_testing()
 add_test(NAME engine_smoke COMMAND test_engine_smoke)
+add_test(NAME engine_parity COMMAND test_engine_parity
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")

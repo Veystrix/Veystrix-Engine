@@ -2,6 +2,8 @@
 
 #include <mlx/mlx.h>
 
+#include <cmath>
+
 namespace veystrix::engine {
 
 RouterOutput router(const mx::array& logits, int top_k, float /*renorm_blend*/) {
@@ -98,6 +100,25 @@ mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps) {
   y = y * mx::astype(weight, mx::float32);
   y = mx::reshape(y, x.shape());
   return mx::astype(y, dtype);
+}
+
+std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::array& k) {
+  float scale = 1.0f / std::sqrt(static_cast<float>(q.shape().back()));
+  mx::array qn = mx::astype(q, mx::float32);
+  qn = qn * mx::rsqrt(mx::sum(mx::square(qn), -1, /*keepdims=*/true) + 1e-6f);
+  mx::array kn = mx::astype(k, mx::float32);
+  kn = kn * mx::rsqrt(mx::sum(mx::square(kn), -1, /*keepdims=*/true) + 1e-6f);
+  return {qn * scale, kn};
+}
+
+mx::array gdn_gate_sigmoid(const mx::array& y, const mx::array& gate) {
+  return mx::astype(y, mx::float32) * mx::sigmoid(mx::astype(gate, mx::float32));
+}
+
+mx::array gdn_gate_silu(const mx::array& y, const mx::array& gate) {
+  mx::array g = mx::astype(gate, mx::float32);
+  mx::array silu = g * mx::sigmoid(g);
+  return mx::astype(y, mx::float32) * silu;
 }
 
 mx::array sample_greedy(const mx::array& logits) {

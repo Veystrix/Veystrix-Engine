@@ -14,6 +14,7 @@
 // compare against vectors produced by the real Python path (tools/gen_vectors.py).
 #pragma once
 #include <array>
+#include <utility>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -99,5 +100,14 @@ mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps);
 // Greedy sampler: argmax over the last axis -> uint32 scalar-ish array,
 // matching veystrix.sampling.Sampler.__call__ for greedy decoding.
 mx::array sample_greedy(const mx::array& logits);
+
+// GDN q/k L2 normalization (compile_gdn._normalize_qk):
+//   scale = last_dim^-0.5; v = v*rsqrt(sum(v^2,-1,keepdims)+1e-6); return v*scale, k
+std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::array& k);
+
+// GDN gate chains (compile_gdn._gate_sigmoid / _gate_silu):
+//   f32(y) * sigmoid(f32(gate))  or  f32(y) * silu(f32(gate)).
+mx::array gdn_gate_sigmoid(const mx::array& y, const mx::array& gate);
+mx::array gdn_gate_silu(const mx::array& y, const mx::array& gate);
 
 }  // namespace veystrix::engine

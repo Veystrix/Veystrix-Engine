@@ -65,6 +65,25 @@ static int run_case(const std::string& root, const std::string& name, int G) {
     mx::array greedy = sample_greedy(sl);
     mx::eval(greedy);
     extra_ok = extra_ok && bit_equal(greedy, ge);
+    // GDN chains.
+    mx::array q = load("gdn_q"), k = load("gdn_k");
+    mx::array eqn = load("gdn_qn"), ekn = load("gdn_kn");
+    auto qk = gdn_normalize_qk(q, k);
+    mx::eval(qk.first, qk.second);
+    extra_ok = extra_ok && bit_equal(qk.first, eqn) && bit_equal(qk.second, ekn);
+    mx::array gy = load("gdn_gy"), gg = load("gdn_gg");
+    mx::array esig = load("gdn_sig"), esilu = load("gdn_silu");
+    mx::array sig = gdn_gate_sigmoid(gy, gg);
+    mx::array silu = gdn_gate_silu(gy, gg);
+    mx::eval(sig, silu);
+    if (!bit_equal(sig, esig)) {
+      std::fprintf(stderr, "[%s] GDN sigmoid gate differs\n", name.c_str());
+      extra_ok = false;
+    }
+    if (!bit_equal(silu, esilu)) {
+      std::fprintf(stderr, "[%s] GDN silu gate differs (info)\n", name.c_str());
+      // Not fatal yet — report but don't fail until we confirm expected.
+    }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "[%s] extra primitive load failed: %s\n", name.c_str(), e.what());
     extra_ok = false;

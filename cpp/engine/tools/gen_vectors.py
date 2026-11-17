@@ -124,9 +124,23 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     # Greedy sample vector: production takes ONE logit row and returns shape (1,).
     sample_logits = mx.array(rng.normal(size=(E,)).astype(np.float32))
     greedy = mx.astype(mx.reshape(mx.argmax(sample_logits.reshape(-1), axis=-1), (1,)), mx.uint32)
+    # GDN chains (compile_gdn.py). q/k normalization + gates.
+    q = mx.array(rng.normal(size=(T, 8, 64)).astype(np.float32))
+    k = mx.array(rng.normal(size=(T, 8, 64)).astype(np.float32))
+    scale = q.shape[-1] ** -0.5
+    qn = q * mx.rsqrt(mx.sum(mx.square(q), axis=-1, keepdims=True) + 1e-6)
+    kn = k * mx.rsqrt(mx.sum(mx.square(k), axis=-1, keepdims=True) + 1e-6)
+    qn, kn = qn * scale, kn
+    gy = mx.array(rng.normal(size=(T, 64)).astype(np.float32))
+    gg = mx.array(rng.normal(size=(T, 64)).astype(np.float32))
+    gate_sig = gy.astype(mx.float32) * mx.sigmoid(gg.astype(mx.float32))
+    import mlx.nn as nn
+    gate_silu = gy.astype(mx.float32) * nn.silu(gg.astype(mx.float32))
     arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected,
               "norm_x": norm_x, "norm_w": norm_w, "norm_expected": norm_expected,
-              "sample_logits": sample_logits, "greedy": greedy}
+              "sample_logits": sample_logits, "greedy": greedy,
+              "gdn_q": q, "gdn_k": k, "gdn_qn": qn, "gdn_kn": kn,
+              "gdn_gy": gy, "gdn_gg": gg, "gdn_sig": gate_sig, "gdn_silu": gate_silu}
     for k, v in arrays.items():
         save(d / f"{k}.npy", v)
     meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,

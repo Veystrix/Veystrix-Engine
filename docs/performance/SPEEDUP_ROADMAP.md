@@ -36,7 +36,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 5 | #5 | Correctly sized pinned expert cache | Cache | decode | **A/B measured:** Nemotron 2→4 GB is a resolved REGRESSION (−1.61 tok/s, +0.86 s TTFT) | digest identical | 2 GB retained; 4 GB rejected |
 | 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode+prefill | **A/B measured:** TTFT −0.69 s (resolved), decode unresolved | digest identical | PARTIAL — flag off |
 | 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | **already rejected:** expert packing +9% in-process, no server gain, +70 GiB disk | digest | REJECTED (prior) |
-| 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
+| 8 | #4 | Next-layer router prefetch | Prefetch | decode | **already implemented & rejected:** `decode_prefetch.py` + Nemotron `LOOKAHEAD_LAYERS`; `DO_NOT_IMPLEMENT.md:20` 2.39→2.38 tok/s | digest | REJECTED (prior) |
 | 9 | #6 | Overlap / double-buffered async I/O | Overlap | decode | **already rejected here:** `DO_NOT_IMPLEMENT.md:21,25` decode overlap 2.39→2.41 (within band), perfect predictor tied | digest | REJECTED (prior) |
 | 10 | #1 | Native / sync-removed decode path | Sync removal | decode | 1.065× Qwen / 1.386× Nemotron ceilings measured; owner wants full port later for future-model reuse | raw logits + cache tensors | PLANNED LATER (owner decision 2026-11-17) |
 | 11 | #14 | Wave-Partitional Prefill | Prefill | prefill | 2.28→5.65 tok/s | digest, fixed chunk boundaries | PENDING |

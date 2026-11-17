@@ -18,6 +18,10 @@ Implemented in `src/`:
 - `moe_block()` / `moe_block_from_logits()` — the composition, one MoE layer.
 - `moe_block_relu2()` — Nemotron-style relu2 MLP (single up projection, no gate).
 - `rms_norm()` — one-centered production RMSNorm (`patch_rmsnorm.py`).
+- `gdn_normalize_qk()`, `gdn_gate_sigmoid()`, `gdn_gate_silu()` — GDN chains
+  (`compile_gdn.py`), used in every linear-attention layer.
+- `gated_residual()` — Qwen4 hyper-connection / gated residual, used twice per
+  decoder layer (`Qwen4ExpGatedResidual.__call__`).
 - `sample_greedy()` — production greedy sampler (`veystrix/sampling.py`).
 - `src/expert_store.cpp` — native safetensors expert loader (`load_layer`),
   loads a real 512-expert Qwen layer straight from the checkpoint with no

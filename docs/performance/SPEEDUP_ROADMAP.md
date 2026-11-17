@@ -41,7 +41,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 10 | #1 | Native / sync-removed decode path | Sync removal | decode | 1.065× Qwen / 1.386× Nemotron ceilings measured; owner wants full port later for future-model reuse | raw logits + cache tensors | PLANNED LATER (owner decision 2026-11-17) |
 | 11 | #14 | Wave-Partitional Prefill | Prefill | prefill | **already covered in spirit:** single-chunk layer-major +14–30%, merge-small-tail +36% are in `exact-speed` (on by default). LLAMA.cpp wave port not done | digest | ALREADY DEPLOYED (equivalent wins) |
 | 12 | #13 | Prefix / prompt caching | Prefill | prefill | **already ON** in agentic mode (`modes.py:91`), 4.94–57× TTFT | digest | ALREADY DEPLOYED |
-| 13 | #16 | Pre-packed fp32 prefill GEMM | Prefill | prefill | **already ON** via `dense-gemm` in `exact-speed` (bit-equal, −2.4% prefill) | digest | ALREADY DEPLOYED |
+| 13 | #16 | Pre-packed fp32 prefill GEMM | Prefill | prefill | **dead end for us:** source is fp32-only (llama.cpp AMX); no fp32 GEMM here, dequant+dense is NOT bit-equal for most shapes (`dense_gemm.py:10-13`), 1.44× at 128 tok reverses to 0.82× at 512 while our chunks are 1K–8K. `dense-gemm` (−2.4%) already in exact-speed | digest | REJECTED (inapplicable) |
 | 14 | #15 | Full-layer staging + second SSD mirror | Prefill | prefill+decode | 29→240 t/s prefill | digest | PENDING |
 | 15 | #19 | Last-row-only prefill < 2,048 tokens | Prefill | prefill | TTFT/memory lead | digest required (currently changes logits) | PENDING |
 | 16 | #12 | Lossless rANS reconstruction + 3-tier cache | I/O stack | decode+prefill | 2.78× | digest | PENDING |

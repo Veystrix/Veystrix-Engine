@@ -90,17 +90,61 @@ cross-process and grows with layer count — consistent with a small numerical
 difference accumulating through the composed stack, not with a single
 nondeterministic kernel.
 
-## Open question / proposed next step
+## Localization run (granted, 2 guarded runs, reduced 10-layer config)
 
-Every candidate op is deterministic in isolation, including with NaN inputs and
-with host-buffer reuse. The divergence therefore arises only in the full
-composed path. To pinpoint it without repeated 13 GB loads, the next diagnostic
-should be a SINGLE instrumented run (under the owner's guard) that, during the
-last prefill step, materializes and hashes the hidden state after each of the 48
-layers plus the final `mixed` and `logits`, and counts NaN/Inf. The first layer
-whose hidden hash is reproducible-but-different (or where NaN first appears)
-identifies the responsible op/composition. Two such runs are enough to localize
-it. I have not run this yet at the owner's request.
+Instrumentation added to `real_checkpoint_generate.cpp` behind
+`REALGEN_DEBUG_HASHES=1` (off by default): hashes branch / hidden / MoE after
+every layer plus final `mixed` and `logits`, and counts NaN/Inf, on the last
+prefill step.
+
+Guarded invocation (both runs, exact envelope):
+```bash
+REALGEN_DEBUG_HASHES=1 python3 scripts/flashnext/real_run_guard.py \
+  --floor-gib 1.5 --swap-growth-mib 2048 --compressor-growth-mib 4096 \
+  --log /tmp/determinism_guard/guard_runN.jsonl -- \
+  /tmp/real_gen_localize <ckpt> <ref> 1 /tmp/real_config_L10_P16.txt
+```
+Guard result: both `returncode=0`, `stopped=None`, ~3–4 s each,
+`available_floor_gib` 4.87 / 4.74 (floor 1.5), `swapout_mib=0`, compressor peak
+963 / 997 MiB (limit +4096). No swap; no guard intervention.
+
+Per-layer comparison of the 42 captured arrays:
+
+* **Layers 0–5 (incl. GDN layers 0,1,2,4,5 and QSA layer 3): all 24 hashes
+  IDENTICAL** across the two runs.
+* **First divergence: `L06_branch_gdn`** (layer 6 is `linear_attention` / GDN).
+  From there `L06_hidden_attn`, `L06_moe`, `L06_hidden`, all of layers 7–9,
+  `final_mixed`, and `final_logits` diverge.
+* **NaN/Inf count = 0 for all 42 arrays in both runs.**
+* Step-0 token was 17324 in both; digests differed
+  (`07a30017…` vs `c3198eb2…`).
+
+Additional synthetic probes added after localization: `gdnsub` (fast::rms_norm,
+rms_norm_gated, gdn_normalize_qk, compute_g_beta) and `reduce`
+(`mx::mean(square(x),-1)` over 2560/10240 and `mx::mean(x,-2)`) — **all
+deterministic** (5/5 identical hashes). `race` confirmed `mx::eval` is
+synchronous with host-backed MoE buffers.
+
+## Most likely cause / proposed fix
+
+The divergence is in the **GDN path at layer 6**, not in the lm_head, not in
+QSA (layer 3 QSA branch was bit-identical), not in MoE (layers 0–5 MoE outputs
+identical), and not in any single MLX op (all isolated deterministically).
+Because layers 0–5 are bit-identical at the last step, layer 6's input hidden
+state is identical; the differing quantity is the **per-layer GDN cache state
+(conv_state / recurrent_state)** threaded through the 16 sequential prefill
+steps, or a value-dependent path inside the fused `mx::fast::metal_kernel`
+gated-delta kernel for layer 6. This is consistent with the earlier threshold:
+a 6-layer config (layers 0–5) was deterministic, adding layer 6 made it vary.
+
+Proposed fix (NOT applied — needs verification run): replace the fused
+`gated_delta_step_kernel` with the already-available ops-based
+`gated_delta_step` (`engine.hpp`) **in a tool-local copy of `gdn_layer_forward`**,
+so no shared primitive is touched; and/or force `mx::eval` of the GDN
+conv/recurrent state at the end of each layer in the tool's `run_step` so each
+step consumes a materialized buffer rather than a 16-deep lazy chain. Verify
+with one more guarded reduced-config run comparing digests before promoting to
+shared code.
 
 ## Files touched
 

@@ -257,6 +257,93 @@ void probe_race(){
   }
 }
 
+// ------- (i) large reductions used by gated_residual / final head ----------- //
+void probe_reduce(){
+  const int HC=4,H=2560,HCH=HC*H;
+  std::printf("\n=== reductions: mx::mean(square(x),-1) over %d / %d elems ===\n",H,HCH);
+  for(mx::Dtype dt:{mx::float32,mx::bfloat16}){
+    char tag[40];std::snprintf(tag,sizeof(tag),"mean_sq-%s",dt==mx::float32?"f32":"bf16");
+    auto xf=rand_floats((size_t)HC*H,81,2.0f);
+    std::vector<float> ref;
+    for(int r=0;r<5;++r){
+      mx::array x=make_array(xf,mx::Shape{1,1,HC,H},dt);
+      mx::array y=mx::astype(x,mx::float32);
+      mx::array m=mx::mean(mx::square(y),-1,true);
+      mx::array out=mx::reshape(m,mx::Shape{-1});
+      std::vector<float> cur=to_host(out);
+      if(r==0)ref=cur;
+      report(tag,r,hash_vec(cur),cur,ref);
+    }
+  }
+  // mean over the hc axis (size 4) like final_head's `mixed`
+  auto xf=rand_floats((size_t)HC*H,82,1.0f);
+  std::vector<float> ref;
+  for(int r=0;r<5;++r){
+    mx::array x=make_array(xf,mx::Shape{1,1,HC,H},mx::bfloat16);
+    mx::array out=mx::mean(x,-2,false);
+    std::vector<float> cur=to_host(out);if(r==0)ref=cur;report("mean_hc",r,hash_vec(cur),cur,ref);
+  }
+}
+
+// ------- (h) GDN sub-ops not yet isolated (fast rms_norm, gates, norm) ------- //
+void probe_gdnsub(){
+  const int B=1,T=1,HV=48,DV=128,DK=128;
+  std::printf("\n=== GDN sub-ops: fast::rms_norm / rms_norm_gated / norm_qk / g,beta ===\n");
+  auto xh=rand_floats((size_t)B*T*HV*DV,71,1.0f);
+  auto wh=rand_bf16_bits((size_t)DV,72);
+  auto zh=rand_floats((size_t)B*T*HV*DV,73,1.0f);
+  auto qh=rand_floats((size_t)B*T*HV*DK,74,1.0f);
+  auto kh=rand_floats((size_t)B*T*HV*DK,75,1.0f);
+  auto ah=rand_floats((size_t)B*T*HV,76,1.0f);
+  auto bh=rand_floats((size_t)B*T*HV,77,1.0f);
+  auto alh=rand_floats((size_t)HV,78,0.5f);
+  auto dbh=rand_floats((size_t)HV,79,0.1f);
+
+  {
+    std::vector<float> ref;
+    for(int r=0;r<5;++r){
+      mx::array x(xh.data(),mx::Shape{B,T,HV,DV},mx::float32);
+      mx::array w(wh.data(),mx::Shape{DV},mx::bfloat16);
+      mx::array out=mx::fast::rms_norm(x,w,1e-6f);
+      std::vector<float> cur=to_host(out);if(r==0)ref=cur;report("fast_rmsnorm",r,hash_vec(cur),cur,ref);
+    }
+  }
+  {
+    std::vector<float> ref;
+    for(int r=0;r<5;++r){
+      mx::array x(xh.data(),mx::Shape{B,T,HV,DV},mx::bfloat16);
+      mx::array w(wh.data(),mx::Shape{DV},mx::bfloat16);
+      mx::array g(zh.data(),mx::Shape{B,T,HV,DV},mx::bfloat16);
+      mx::array out=rms_norm_gated(x,w,g,1e-6f,true);
+      std::vector<float> cur=to_host(out);if(r==0)ref=cur;report("rms_norm_gated",r,hash_vec(cur),cur,ref);
+    }
+  }
+  {
+    std::vector<float> ref;
+    for(int r=0;r<5;++r){
+      mx::array q(qh.data(),mx::Shape{B,T,HV,DK},mx::float32);
+      mx::array k(kh.data(),mx::Shape{B,T,HV,DK},mx::float32);
+      auto qk=gdn_normalize_qk(q,k);
+      std::vector<float> cq=to_host(qk.first),ck=to_host(qk.second);
+      std::vector<float> cur=cq;cur.insert(cur.end(),ck.begin(),ck.end());
+      if(r==0)ref=cur;report("gdn_norm_qk",r,hash_vec(cur),cur,ref);
+    }
+  }
+  {
+    std::vector<float> ref;
+    for(int r=0;r<5;++r){
+      mx::array al(alh.data(),mx::Shape{HV},mx::float32);
+      mx::array a(ah.data(),mx::Shape{B,T,HV},mx::float32);
+      mx::array b(bh.data(),mx::Shape{B,T,HV},mx::float32);
+      mx::array db(dbh.data(),mx::Shape{HV},mx::float32);
+      auto gb=compute_g_beta(al,a,b,db);
+      std::vector<float> cg=to_host(gb.first),cb=to_host(gb.second);
+      std::vector<float> cur=cg;cur.insert(cur.end(),cb.begin(),cb.end());
+      if(r==0)ref=cur;report("gdn_g_beta",r,hash_vec(cur),cur,ref);
+    }
+  }
+}
+
 // --------------------- (f) NaN / Inf stress on the ops ---------------------- //
 void probe_nan(){
   const int N=248320,K=2560,GS=32,BITS=4,SN=K/GS,WPACK=K/8;
@@ -367,5 +454,7 @@ int main(int argc,char** argv){
   if(mode=="all"||mode=="gqmm") probe_gqmm();
   if(mode=="all"||mode=="nan") probe_nan();
   if(mode=="all"||mode=="race") probe_race();
+  if(mode=="all"||mode=="gdnsub") probe_gdnsub();
+  if(mode=="all"||mode=="reduce") probe_reduce();
   return 0;
 }

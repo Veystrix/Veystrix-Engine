@@ -14,7 +14,8 @@ import re
 import subprocess
 import sys
 
-MODES = ("qmm", "dqmm", "gdn", "sdpa", "router", "gqmm", "nan")
+MODES = ("qmm", "dqmm", "gdn", "sdpa", "router", "gqmm", "nan", "race",
+         "gdnsub", "reduce")
 
 # A "run" line is either [tag] runN sha256=... or [gdn] runN sha256=...
 RUN = re.compile(r"^\[([^\]]+)\]\s+run(\d+)\b.*?sha256=([0-9a-f]{64})")

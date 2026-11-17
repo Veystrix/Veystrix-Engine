@@ -65,6 +65,27 @@ native I/O path: Method #2 (explicit sorted, gap-merged pread) and Method #3
 This is not a quality or correctness rejection — it is a measured value judgment.
 The C++ scaffold remains for later if I/O work changes the profile.
 
+## Nemotron C++ — separate question, NOT covered by the Qwen profile
+
+Owner asked (2026-11-17) whether C++ decode applies to Nemotron. It is a different case:
+
+- **Different model:** local checkpoint is `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit-mlx-community`,
+  `model_type = nemotron_h`, `NemotronHForCausalLM`, 52 layers, hidden 2688, 6 experts/token,
+  **Q4 affine G64** (vs Qwen's Q4 affine G32). The reference C++ repo's Nemotron work is for
+  74B-A9B **Bolt** and is only a llama.cpp expert-cache patch — no C++ runner to adapt.
+- **Different engine:** Nemotron uses `models/nemotron35/` (own backend, `backend_core.py`,
+  `streamed_experts.py`), not Qwen's `qwen4_exp`. No code or profile transfers.
+- **Different sync structure:** `backend_core.py:311-327` has 2 evals/token;
+  `streamed_experts.py:915,961,973` does `unique.tolist()` per layer. Host work exists but its
+  share is **unmeasured**. The Qwen 1.065× ceiling must NOT be assumed for Nemotron.
+- **Existing harness:** `models/nemotron35/tests/bench/bench_decode_profile.py` records per-layer
+  `route_sync_and_copy_ms` (host/sync) vs `expert_dispatch_and_wait_ms` (I/O wait), and enables
+  `VEYSTRIX_BENCH_TOKEN_DIGEST=1` + `VEYSTRIX_BENCH_LOGIT_DIGEST=1` quality gates.
+
+**Status:** needs its own guarded profile before any C++/sync decision. Permission requested but
+NOT granted as of this writing — no Nemotron hardware run has been performed.
+
 ## Status
-- **Current phase:** investigation + profile complete; pivoted to Methods #2/#3
-- **Unblocked:** owner authorized this profile run; future A/B runs still need permission
+- **Current phase:** Qwen investigation + profile complete; pivoted to Methods #2/#3
+- **Unblocked:** owner authorized the Qwen profile run; future A/B runs still need permission
+- **Nemotron:** pending profile authorization; no C++ decision possible yet

@@ -34,7 +34,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
 | 4 | #10 | `async_eval` one-step-ahead | Free config | decode | +50% at 4-bit | digest | PENDING |
 | 5 | #5 | Correctly sized pinned expert cache | Cache | decode | 4.39 tok/s already shown on 16 GB (Nemotron) | digest + no thrash | PENDING |
-| 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode | +13–52% | digest | PENDING |
+| 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode+prefill | **A/B measured:** TTFT −0.69 s (resolved), decode unresolved | digest identical | PARTIAL — flag off |
 | 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | +20% decode, 9× fewer read-ops | digest | PENDING |
 | 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
 | 9 | #6 | Overlap / double-buffered async I/O | Overlap | decode | +32% (source bit-exact) | digest | PENDING |
@@ -125,6 +125,16 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 ---
 
 ## Phase 3 — Read path (Steps 6–7)
+
+**Step 6 A/B — MEASURED 2026-11-17 (guarded, clean, digest identical across all 6 arms).**
+Saved at `results/flashnext/20261117-143117-performance-v2-flag-flashnext-sorted-merged-pread-manual/`.
+Medians: decode 2.14 → 2.17 tok/s (verdict **unresolved**, sign differs between rounds);
+TTFT 23.13 → 22.56 s (verdict **resolved**, median −0.69 s vs band 0.30); physical read
+96.7 → 95.8 GB (unresolved). Implemented in `store.py:_pread_into_merged` behind
+`FLASHNEXT_SORTED_MERGED_PREAD=1` (off by default). Interpretation: prefill reads many rows
+per call so merging engages; decode's reads are chunked to ~2 rows and top-10/512 experts
+are too sparse for adjacent runs, so no decode gain. Keep flag off by default; no quality
+issue. **Do not retry gap-span merging for decode unless row-per-call count increases.**
 
 ### Step 6 — Method #2: Explicit sorted, gap-merged `pread`
 - **Premise:** mmap faults and per-slice reads cause 16 KiB random read storms; reading exactly the router-selected experts as large merged ranges is bit-exact.

@@ -269,15 +269,49 @@ with the generator's exact settings (`force_fused=false`, `mask_mode="causal"`,
 L=1,2,3,4,8,16, bf16 and f32) is deterministic 5/5 in every case — full-attention
 SDPA is also ruled out.
 
-**Status:** no fix found. Everything individually is deterministic, every
-candidate composition-level fix tried so far (fused GDN kernel, lazy state,
-cross-shard buffer reuse) leaves the exact same divergence pattern. The next
-required diagnostic is to hash MoE intermediates (route indices/scores,
-`m2d`, `ar.mixed_input`, `sf.output`, `inject` weights) at layers 5 and 8 in two
-processes; the only remaining untested surface is the MoE route/gather/combine
-with those layers' real expert values, or a value-dependent behaviour in
-`gated_residual`'s large reductions. No unverified fix was applied to shared
-code.
+## DECISIVE MoE diagnostic — expert bytes identical; divergence in gather_qmm output
+
+Added `REALGEN_DEBUG_MOE=1` (opt-in) hashing: raw `buf_[i]` bytes after
+`run_batched_reads` and after `mx::eval(out)` for all 9 expert tensors of layers
+5/8, route ids/scores/slots/misses, MoE input/output, and hidden after every
+layer at steps 0/1/2. Two guarded runs (10-layer, 16 tokens, both
+REALGEN_DEBUG_HASHES and REALGEN_DEBUG_MOE on):
+
+```
+run A: returncode=0 stopped=None seconds=7 floor=4.33GiB swapout_mib=0  step0 out=0 sha=2d2842356e9e...
+run B: returncode=0 stopped=None seconds=7 floor=4.00GiB swapout_mib=0  step0 out=0 sha=2d2842356e9e...
+444 MOEHASH lines/run; 42 DBG hashes; 160 GDN-state hashes.
+```
+
+Results:
+
+* **Expert weight bytes: 108/108 hashes IDENTICAL** (9 tensors × `buf_read` +
+  `buf_after_eval` × layers 5/8 × steps 0/1/2). **No read race; no DATA
+  divergence.** Both runs even produce identical step-0 token (0) and digest
+  (`2d284235…`), and all 42 DBG per-layer hashes match.
+* Route ids/scores/slots/misses at layers 5/8: identical at ALL three steps.
+* **First ANY-hash divergence: step 2, layer 3 (stream), `slots`** — while that
+  layer's route_indices, route_scores, misses, and moe_out are all identical:
+  the same experts mapped into different slot numbers (bookkeeping-only).
+* **First *harmful* divergence: step 2, layer 8 (cross), `moe_out`** — all of
+  its inputs are bit-identical (9 expert byte hashes, route ids, scores, slots,
+  misses, m2d) yet `gather_qmm`'s output differs
+  (`38c1c63e…` vs `8d59f497…`), propagating to `moe2d`, `hidden_after_layer`,
+  and layer 9.
+
+**Verdict: LOGIC/COMPUTE, not DATA.** `mx::gather_qmm` (inside `moe_block`)
+produces different float results from bit-identical packed weights, scales,
+biases, scores and slot indices. This is an MLX GPU-kernel nondeterminism
+specific to these real layer-8 values, not a host read race, not weight loading,
+not routing, not the GDN/SDPA paths. A Heisenbug caveat: the hashing itself
+(forcing `mx::eval` of intermediates) moved the earliest divergence from
+step 1 to step 2 and made step-0 deterministic, so evaluation ordering matters
+as well.
+
+**No fix applied.** A deterministic gather_qmm path (e.g. dequantizing the
+streamed expert rows and using dense `mx::matmul`, or forcing an explicit
+single-K launch) would need verification under the guard. Shared primitives
+untouched.
 
 ## Files touched
 

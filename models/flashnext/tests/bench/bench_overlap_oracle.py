@@ -242,20 +242,38 @@ def install_switch_patch(language, state: dict, cfg: dict) -> None:
                 for b in blocks}
     first_layer = min(order)
 
-    def issue_prefetch():
+    def issue_prefetch(layer):
+        """Issue each future expert set EXACTLY ONCE.
+
+        A previous version looped delta=1..depth, so every route was prefetched
+        `depth` times (3x traffic) — an oracle must not waste bytes that way.
+        Two modes:
+          next_token : at (token t, layer L) prefetch the recorded route for
+                       (token t+1, layer L). One full token of lead time; this
+                       is the realistic, once-per-target oracle.
+          lookahead  : at flat call index i, prefetch the route for i+lead.
+                       Also once per target.
+        """
         prefetch = cfg.get("prefetch")
         if not prefetch:
             return
-        recorded = prefetch["routes"]
-        for delta in range(1, prefetch["depth"] + 1):
-            k = state["exec"] + delta - 1
-            entry = recorded.get(k)
-            if not entry:
-                continue
-            future_layer, experts = entry
-            pool = prefetch["pool"]
-            pool.submit(_prefetch_rows, prefetch["store"],
-                        prefixes[future_layer], experts[:prefetch["width"]])
+        mode = prefetch.get("mode", "next_token")
+        pool = prefetch["pool"]
+        store = prefetch["store"]
+        width = prefetch["width"]
+        if mode == "next_token":
+            # state["token"] is 1-based current token; routes_nt keys are 0-based,
+            # so state["token"] IS the next token's 0-based key.
+            entry = prefetch["routes_nt"].get((state["token"], layer))
+            if entry:
+                pool.submit(_prefetch_rows, store, prefixes[layer], entry[:width])
+        else:
+            k = state["exec"] - 1 + prefetch["depth"]
+            entry = prefetch["routes_flat"].get(k)
+            if entry:
+                future_layer, experts = entry
+                pool.submit(_prefetch_rows, store,
+                            prefixes[future_layer], experts[:width])
 
     def call(self, x, inds, *args, **kwargs):
         # The one-sync path caches the original route on this object. A forced
@@ -267,9 +285,9 @@ def install_switch_patch(language, state: dict, cfg: dict) -> None:
         state["exec"] += 1
         real = _to_list(inds)
         if state["collect"] and cfg.get("route_log") is not None:
-            cfg["route_log"].append((state["exec"] - 1, layer, real))
+            cfg["route_log"].append((state["token"] - 1, layer, real))
         if state["prefetch_on"]:
-            issue_prefetch()
+            issue_prefetch(layer)
         fixed = cfg.get("fixed_route")
         if fixed is not None:
             width = inds.shape[-1]
@@ -548,7 +566,8 @@ def run_e1(args, language, tokenizer, store):
     reference = run_decode(language, token, cache, tokens=args.tokens,
                            state=state, stats=stats, chaos=chaos)
     state["collect"] = False
-    recorded = {idx: (layer, experts) for idx, layer, experts in route_log}
+    recorded_flat = {i: (layer, experts) for i, (t, layer, experts) in enumerate(route_log)}
+    recorded_nt = {(t, layer): experts for t, layer, experts in route_log}
 
     # The M4 Air is fanless: cool between the two loaded decode passes.
     if args.cooldown:
@@ -557,9 +576,10 @@ def run_e1(args, language, tokenizer, store):
     # pass 2: replay as prefetch hints; real router still decides.
     with ThreadPoolExecutor(max_workers=args.io_threads,
                             thread_name_prefix="flashnext-oracle") as pool:
-        cfg["route_log"] = None  # pass 1 routes already captured in `recorded`
+        cfg["route_log"] = None  # pass 1 routes already captured
         cfg["prefetch"] = {
-            "routes": recorded, "depth": args.ahead_depth,
+            "routes_flat": recorded_flat, "routes_nt": recorded_nt,
+            "mode": args.prefetch_mode, "depth": args.ahead_depth,
             "width": args.ahead_width, "pool": pool,
             "store": store, "prefixes": prefixes,
         }
@@ -594,7 +614,7 @@ def run_e1(args, language, tokenizer, store):
         "prefetch_mb_issued": candidate["stats"]["prefetch_bytes"] / 1e6,
         "warmup": args.warmup, "tokens": args.tokens, "prompt": args.prompt,
         "ahead_depth": args.ahead_depth, "ahead_width": args.ahead_width,
-        "chaos": args.chaos,
+        "prefetch_mode": args.prefetch_mode, "chaos": args.chaos,
         "gate_reference_sha": reference["token_sha256"],
         "gate_candidate_sha": candidate["token_sha256"],
         "vm_reference": reference["vm"], "vm_oracle": candidate["vm"],
@@ -613,7 +633,11 @@ def main() -> None:
     parser.add_argument("--experts", type=int, default=4,
                         help="E0: routed experts per layer (fixed route, pinned)")
     parser.add_argument("--ahead-depth", type=int, default=3,
-                        help="E1: how many future MoE calls to prefetch")
+                        help="E1: lookahead distance in MoE calls (lookahead mode)")
+    parser.add_argument("--prefetch-mode", choices=("next_token", "lookahead"),
+                        default="next_token",
+                        help="E1: next_token = prefetch next token's same-layer route "
+                             "(one token lead); lookahead = N calls ahead")
     parser.add_argument("--ahead-width", type=int, default=10,
                         help="E1: experts to prefetch per future call")
     parser.add_argument("--io-threads", type=int, default=8)

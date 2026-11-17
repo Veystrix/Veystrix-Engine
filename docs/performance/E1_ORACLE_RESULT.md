@@ -1,5 +1,12 @@
 # E1 — oracle pipeline (Opus plan), 2026-11-17
 
+> **UPDATE (in progress):** the first E1 result below was INVALIDATED by a bug in
+> the harness — it issued each future route 3 times (delta=1..3), wasting 5.3 TB
+> of prefetch traffic. The harness was fixed to issue each route exactly once
+> (`--prefetch-mode next_token`: at token t, layer L, prefetch the recorded route
+> for token t+1, layer L — one token of lead). A corrected 1,200-token rerun is
+> in flight; the verdict below will be replaced. Keep the *mechanism* notes.
+
 Decisive test: pass 1 records the REAL greedy route of every MoE call in
 execution order; pass 2 replays those exact routes as prefetch hints 1–3 calls
 ahead (buffered pread) while the real router still decides. This is the upper

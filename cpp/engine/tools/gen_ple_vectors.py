@@ -73,7 +73,17 @@ CFG_SEED = 1234
 
 
 def _np(a, dtype=DT):
+    # numpy has no bfloat16 buffer format; promote through MLX explicitly.
+    if isinstance(a, mx.array) and a.dtype in (mx.bfloat16, mx.float16):
+        a = mx.astype(a, mx.float32)
     return np.array(a, dtype=dtype)
+
+
+def _dump_shard_array(a):
+    """BF16 shard rows are dumped as raw uint16 bits (numpy cannot hold BF16)."""
+    if a.dtype == mx.bfloat16:
+        return np.array(mx.view(a, mx.uint16), dtype=np.uint16)
+    return np.array(a)
 
 
 def _digest(arr: np.ndarray) -> str:
@@ -90,8 +100,13 @@ def _describe(name: str, arr: np.ndarray) -> dict:
     }
 
 
-def build_weights(rng: np.random.Generator):
-    """Construct a Qwen4ExpPLELayer with deterministic synthetic weights."""
+def build_weights(rng: np.random.Generator, bf16_shards: bool = False):
+    """Construct a Qwen4ExpPLELayer with deterministic synthetic weights.
+
+    bf16_shards makes the n-gram shard scales/biases BF16, matching the real
+    checkpoint (mlx.nn.QuantizedEmbedding stores BF16 scales when its source
+    weight is BF16).
+    """
     cfg = types.SimpleNamespace(
         hidden_size=HIDDEN,
         hc_count=HC_COUNT,
@@ -114,7 +129,10 @@ def build_weights(rng: np.random.Generator):
     shards = []
     for i, sh in enumerate(emb.ngram_embedding.shards):
         rows, dims = sh.weight.shape
-        sh.weight = mx.array((rng.standard_normal((rows, dims)) * 0.1).astype(DT))
+        w = mx.array((rng.standard_normal((rows, dims)) * 0.1).astype(DT))
+        if bf16_shards:
+            w = mx.astype(w, mx.bfloat16)
+        sh.weight = w
         qsh = sh.to_quantized(group_size=Q_GROUP, bits=Q_BITS, mode=Q_MODE)
         emb.ngram_embedding.shards[i] = qsh
         shards.append(qsh)
@@ -155,8 +173,8 @@ def build_weights(rng: np.random.Generator):
     }
     for i, qsh in enumerate(shards):
         arrays[f"shard_{i}_w"] = _np(qsh.weight, np.uint32)
-        arrays[f"shard_{i}_s"] = _np(qsh.scales)
-        arrays[f"shard_{i}_b"] = _np(qsh.biases)
+        arrays[f"shard_{i}_s"] = _dump_shard_array(qsh.scales)
+        arrays[f"shard_{i}_b"] = _dump_shard_array(qsh.biases)
     return layer, arrays
 
 
@@ -203,17 +221,22 @@ def main() -> None:
     rng = np.random.default_rng(SEED)
     mx.random.seed(SEED)
     layer, weights = build_weights(rng)
+    # BF16 shard variant: matches the real checkpoint's ngram scales/biases.
+    rng_bf = np.random.default_rng(SEED + 1)
+    layer_bf, weights_bf = build_weights(rng_bf, bf16_shards=True)
     state_len = (CONV_KERNEL - 1) * NGRAM_SIZE
     context_len = NGRAM_SIZE - 1
 
     cases: list[dict] = []
 
     case_specs = [
-        ("decode_s1", 2, 1, False),
-        ("prefill_nomask", 2, 5, False),
-        ("prefill_mask", 2, 5, True),
+        ("decode_s1", 2, 1, False, False),
+        ("prefill_nomask", 2, 5, False, False),
+        ("prefill_mask", 2, 5, True, False),
+        ("decode_s1_bf16", 2, 1, False, True),
     ]
-    for cid, B, S, use_mask in case_specs:
+    for cid, B, S, use_mask, bf16 in case_specs:
+        active_layer = layer_bf if bf16 else layer
         ids = rng.integers(0, 60, size=(B, S), dtype=np.int64)
         # Force an EOS token into the prefill cases to exercise segmentation.
         if S > 1:
@@ -227,11 +250,11 @@ def main() -> None:
             mask[0, -2:] = False
             mask[1, -1] = False
 
-        out, out_cache, out_ctx = build_case(layer, B, S, ids, h, mask)
+        out, out_cache, out_ctx = build_case(active_layer, B, S, ids, h, mask)
 
         cd = out_dir / cid
         cd.mkdir(parents=True, exist_ok=True)
-        arrays = dict(weights)
+        arrays = dict(weights_bf if bf16 else weights)
         arrays.update({
             "hidden_states": h,
             "input_ids": ids,
@@ -245,6 +268,8 @@ def main() -> None:
             arrays["mask"] = mask
         for name, arr in arrays.items():
             np.save(cd / f"{name}.npy", arr)
+        if bf16:
+            (cd / "shard_bf16.flag").write_text("ngram shard scales/biases are BF16 raw uint16 bits\n")
 
         desc = {
             "id": cid,
@@ -275,6 +300,11 @@ def main() -> None:
             "quant_group_size": Q_GROUP,
             "quant_bits": Q_BITS,
             "quant_mode": Q_MODE,
+            # The oracle builds the module straight from language.py, i.e.
+            # WITHOUT models/flashnext/patch_rmsnorm.py, so its norms keep the
+            # zero-centered "1.0 + weight" convention.
+            "norm_one_centered": False,
+            "shard_scale_dtype": "bf16" if bf16 else "f32",
             "reproducible": True,
             "arrays": [_describe(n, a) for n, a in arrays.items()],
         }

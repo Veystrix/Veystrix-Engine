@@ -205,11 +205,47 @@ across prefill steps and first crossing a bf16 rounding boundary in layer 6's
 branch output.** Layers 0–5 hidden states stay bit-identical because the small
 float32 differences round away in bf16 until then.
 
-**No fix has been applied.** The precise fix cannot be chosen from loading-only
-data: the next required diagnostic is to SHA-256 the float32 `recurrent_state`
-(conv_state too) after each prefill step in two processes, which identifies the
-first step/layer where the state diverges. Only then can a targeted change be
-justified. Shared primitives remain untouched.
+## Per-step GDN state diagnostic — FIRST DIVERGENCE: step 1, layer 9
+
+Added opt-in `dump_gdn_states()` (REALGEN_DEBUG_HASHES) hashing conv_state and
+recurrent_state after every one of the 16 prefill steps for all 10 layers.
+Two guarded runs (floor 1.5, swap 2048, compressor 4096, thermal 99,
+10-layer config, 16 tokens):
+
+```
+run A: returncode=0 stopped=None seconds=6 floor=4.50GiB swapout_mib=0  step0 out=11  sha=d2a8f6e1...
+run B: returncode=0 stopped=None seconds=6 floor=4.55GiB swapout_mib=0  step0 out=220 sha=2b8c0ccf...
+160 state hashes per run.
+```
+
+Comparison results:
+
+* **Step 0: all 20 state hashes identical** (10 layers × conv+rec).
+* **Step 1: ONLY layer 9 diverges — both `conv` and `rec` simultaneously**
+  (`conv d6d9eeacaa71ed6a` vs `2872f5d97fed1224`,
+  `rec f4849594a42e31cd` vs `d04784e21265c9aa`). Layers 0–8 states identical.
+* Step 2: still only layer 9. Step 3 onward: layers 6 and 8 join (layer 6 rec
+  at step 3; layer 8 conv+rec at step 3); layers 0–4 and 5 never diverge.
+
+Interpretation: because both layer-9 state tensors diverge at the same moment
+and layer 9's own GDN state at step 0 is identical, the difference is in
+layer 9's **input** at step 1, i.e. layer 8's output. Layer 8's own GDN state is
+identical, so its attention branch is fine — the difference comes from layer
+8's **MoE**. Crucially, **layers 5 and 8 are the only `CrossShardMoE` layers**
+(the 2 of 10 whose 9 expert tensors split across two shards; in the full model
+12 of 48 do). The layers whose downstream GDN states diverge first are exactly
+6 (after layer 5) and 9 (after layer 8). This is a strong, specific correlation.
+
+**Implicated op:** the tool-local `CrossShardMoE::forward` split-shard expert
+path (host-buffer-backed slot arrays + `gather_qmm` + `mx::eval`), NOT the GDN
+kernel, NOT weight loading, NOT lazy GDN state. Layer 8's full-attention
+neighbour (layer 7) is a secondary suspect for layer 8's own later divergence.
+
+**Minimal fix (NOT applied, needs verification):** for the cross-shard layers,
+avoid the persistent no-op-deleter host buffers — copy the gathered expert rows
+into fresh owned `mx::array`s per step in `CrossShardMoE::forward`, or route
+those layers through a fully-resident dequantized expert path. Verify with one
+more guarded reduced-config run before touching anything shared.
 
 ## Files touched
 

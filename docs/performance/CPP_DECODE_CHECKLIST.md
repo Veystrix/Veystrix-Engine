@@ -29,6 +29,15 @@
 - [ ] If slower → keep flag off, record NO GAIN
 - [ ] If faster + bit-exact → ACCEPTED, promote baseline, update `SPEEDUP_ROADMAP.md`
 
+## Investigation results (2026-11-17)
+- [x] MLX C++ toolchain verified: `cpp/decode/` builds with venv MLX 0.32.2; `mlx_probe` runs (metal=1).
+- [x] Decode path mapped: per-token syncs `flashnext.py:1270,1302,1309`; per-layer router sync `adaptive_topk.py:95-103`; expert route `expert_cache.py:787-788,1781-1787`.
+- [x] **Critical contrary evidence:** `hostwindow.py:7-8` recorded that adding `mx.eval` + `tolist()` + host work was **free** (498.5 vs 499.3 ms/token) because both devices were idle. Production already does one sync/layer (`FLASHNEXT_ONE_SYNC=1`, `settings/launch.py:53`). The reference's 41% sync share may not apply to this codebase.
+- [x] No C++ safetensors loader exists; porting the full reference stack (~330 KB) is high effort with unproven payoff here.
+
+## Decision gate
+Before writing the full port, measure Veystrix's own per-token sync/SSD/GPU split with the existing `FLASHNEXT_HOST_WINDOW=1` profiler. This is a guarded hardware run and needs explicit owner permission. If host sync is already hidden, prefer the narrower native I/O path (Methods #2/#3) over the full C++ decode port.
+
 ## Status
-- **Current phase:** investigation
-- **Blocked on:** hardware run permission (for baseline profile and A/B)
+- **Current phase:** investigation complete; awaiting decision gate
+- **Blocked on:** hardware run permission (for the profile and any A/B)

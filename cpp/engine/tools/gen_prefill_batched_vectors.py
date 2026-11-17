@@ -214,9 +214,10 @@ def make_weights(rng, cfg):
             attn.o_proj.weight = R((H, N_HEADS * HEAD_DIM))
             attn.q_norm.weight = R((HEAD_DIM,), 0.02)
             attn.k_norm.weight = R((HEAD_DIM,), 0.02)
-            # g = 1 + weight, matching C++ qsa_rms_norm.
-            attn.q_norm._flashnext_one_centered = False
-            attn.k_norm._flashnext_one_centered = False
+            # Production patches ALL Qwen4ExpRMSNorm to one-centered (g = weight).
+            # Attention q_norm/k_norm are one-centered; C++ uses the one-centered form.
+            attn.q_norm._flashnext_one_centered = True
+            attn.k_norm._flashnext_one_centered = True
             idx = attn.indexer
             idx.index_qk_proj.weight = R(
                 ((N_IDX_HEADS + N_IDX_KV) * IDX_HEAD_DIM, H))

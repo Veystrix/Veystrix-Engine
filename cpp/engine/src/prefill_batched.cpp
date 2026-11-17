@@ -40,11 +40,19 @@ FullAttentionOutput full_attention_dense_batched(
   mx::array q = halves[0];
   mx::array gate = mx::reshape(halves[1], mx::Shape{B, S, Hq * D});
 
-  // q_norm/k_norm gains are stored zero-centered; qsa_rms_norm adds the 1.0.
-  q = mx::transpose(qsa_rms_norm(q, w.q_norm_w, cfg.eps), {0, 2, 1, 3});
+  // Production patches ALL Qwen4ExpRMSNorm (incl. attention q_norm/k_norm) to
+  // one-centered gains: gain = weight (NO +1.0). qsa_rms_norm adds +1.0 (the
+  // unpatched vector convention), so use the one-centered form here.
+  auto qnorm = [&](const mx::array& a, const mx::array& gain) {
+    auto d = a.dtype();
+    mx::array y = mx::astype(a, mx::float32);
+    y = y * mx::rsqrt(mx::mean(mx::square(y), -1, true) + cfg.eps);
+    y = y * mx::astype(gain, mx::float32);
+    return mx::astype(y, d);
+  };
+  q = mx::transpose(qnorm(q, w.q_norm_w), {0, 2, 1, 3});
   mx::array k = mx::transpose(
-      qsa_rms_norm(mx::reshape(kproj, mx::Shape{B, S, Hkv, D}), w.k_norm_w,
-                   cfg.eps),
+      qnorm(mx::reshape(kproj, mx::Shape{B, S, Hkv, D}), w.k_norm_w),
       {0, 2, 1, 3});
   mx::array v = mx::transpose(
       mx::reshape(vproj, mx::Shape{B, S, Hkv, D}), {0, 2, 1, 3});

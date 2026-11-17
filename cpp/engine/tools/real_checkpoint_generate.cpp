@@ -516,11 +516,19 @@ FullAttentionOutput full_attention_dense(
   mx::array q = halves[0];
   mx::array gate = mx::reshape(halves[1], mx::Shape{B, S, Hq * D});
 
-  // q_norm/k_norm gains are stored zero-centered; qsa_rms_norm adds the 1.0.
-  q = mx::transpose(qsa_rms_norm(q, w.q_norm_w, cfg.eps), {0, 2, 1, 3});
+  // Production patches ALL Qwen4ExpRMSNorm (incl. attention q_norm/k_norm) to
+  // one-centered gains: gain = weight (NO +1.0). qsa_rms_norm adds +1.0 (the
+  // unpatched vector convention), so use the one-centered form here.
+  auto qnorm = [&](const mx::array& a, const mx::array& gain) {
+    auto d = a.dtype();
+    mx::array y = mx::astype(a, mx::float32);
+    y = y * mx::rsqrt(mx::mean(mx::square(y), -1, true) + cfg.eps);
+    y = y * mx::astype(gain, mx::float32);
+    return mx::astype(y, d);
+  };
+  q = mx::transpose(qnorm(q, w.q_norm_w), {0, 2, 1, 3});
   mx::array k = mx::transpose(
-      qsa_rms_norm(mx::reshape(kproj, mx::Shape{B, S, Hkv, D}), w.k_norm_w,
-                   cfg.eps),
+      qnorm(mx::reshape(kproj, mx::Shape{B, S, Hkv, D}), w.k_norm_w),
       {0, 2, 1, 3});
   mx::array v = mx::transpose(
       mx::reshape(vproj, mx::Shape{B, S, Hkv, D}), {0, 2, 1, 3});
@@ -1345,8 +1353,18 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
       return mx::reshape(row, mx::Shape{1, static_cast<int>(f.size()), H});
     };
+    BatchedPrefillDebug bpdbg;
     logits = run_prefill_batched(ids_arr, embed_all, bl, bh, dcfg, fa, caches,
-                                 group_size, bits);
+                                 group_size, bits,
+                                 std::getenv("REALGEN_DUMP_BATCH_LAYERS") ? &bpdbg : nullptr);
+    if (const char* hd = std::getenv("REALGEN_DUMP_BATCH_LAYERS")) {
+      for (size_t l = 0; l < bpdbg.hidden_after_layer.size(); ++l) {
+        mx::array hf = mx::reshape(mx::astype(bpdbg.hidden_after_layer[l], mx::float32), mx::Shape{-1});
+        mx::eval(hf);
+        char pth[512]; std::snprintf(pth, sizeof(pth), "%s.L%02zu.f32", hd, l);
+        FILE* fp=fopen(pth,"wb"); if(fp){fwrite(hf.data<float>(),sizeof(float),hf.size(),fp);fclose(fp);}
+      }
+    }
     // copy back mutable PLE caches
     for (int l = 0; l < n_layers; ++l)
       if (bl[l].ple) layers[l].ple_cache = bl[l].ple_cache;

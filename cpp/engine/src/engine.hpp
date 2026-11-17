@@ -110,4 +110,20 @@ std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::a
 mx::array gdn_gate_sigmoid(const mx::array& y, const mx::array& gate);
 mx::array gdn_gate_silu(const mx::array& y, const mx::array& gate);
 
+// Qwen4 gated residual / hyper-connection (Qwen4ExpGatedResidual.__call__).
+// Returns (mixed_input, hyper_input, injection_weights). The hc_norm is applied
+// with the one-centered convention via rms_norm with group_size (passed as the
+// pre-shaped weight). Weights: down (hc_hidden -> lowrank), up (lowrank -> hc_hidden),
+// block_inject (hc_hidden -> hc_count). No bias on any Linear.
+struct GatedResidualOutput {
+  mx::array mixed_input;
+  mx::array injection_weights;
+};
+GatedResidualOutput gated_residual(
+    const mx::array& hyper_input,
+    const mx::array& norm_weight,   // hc_norm gain, shape [hc_hidden]
+    const mx::array& down_w, const mx::array& up_w,
+    const mx::array& inject_w,
+    int hc_count, int hidden_size, float eps);
+
 }  // namespace veystrix::engine

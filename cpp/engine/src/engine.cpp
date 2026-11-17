@@ -102,6 +102,41 @@ mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps) {
   return mx::astype(y, dtype);
 }
 
+GatedResidualOutput gated_residual(
+    const mx::array& hyper_input,
+    const mx::array& norm_weight,
+    const mx::array& down_w, const mx::array& up_w,
+    const mx::array& inject_w,
+    int hc_count, int hidden_size, float eps) {
+  // Qwen4ExpGatedResidual.__call__ (one-centered hc_norm via fast rms_norm).
+  // norm_weight gain is [hc_count, hidden_size]; grouped norm == rms_norm over
+  // the last axis of the flattened [..., hc_count*hidden_size] with that 2D gain.
+  int hc_hidden = hc_count * hidden_size;
+  mx::array w2d = mx::reshape(norm_weight, mx::Shape{hc_count, hidden_size});
+  // Manual grouped RMSNorm, one-centered gain, matching patch_rmsnorm._rms_norm.
+  // Reshape [..., hc_hidden] -> [..., hc_count, hidden_size], normalize last
+  // axis, multiply by 2D gain, reshape back.
+  mx::Shape gs(hyper_input.shape().begin(), hyper_input.shape().end() - 1);
+  gs.push_back(hc_count);
+  gs.push_back(hidden_size);
+  mx::array yg = mx::astype(mx::reshape(hyper_input, gs), mx::float32);
+  yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, /*keepdims=*/true) + eps);
+  yg = yg * mx::astype(w2d, mx::float32);
+  mx::array normed = mx::astype(mx::reshape(yg, hyper_input.shape()),
+                                hyper_input.dtype());
+  // Linear weights are stored [out, in]; compute x @ W.T (nn.Linear).
+  // mix = sigmoid(up(silu(down(normed)/hc_count)))
+  mx::array low = mx::matmul(normed, mx::transpose(down_w)) / static_cast<float>(hc_count);
+  mx::array silu_low = low * mx::sigmoid(low);
+  mx::array mix = mx::sigmoid(mx::matmul(silu_low, mx::transpose(up_w)));
+  mx::array mixg = mx::reshape(mix, gs);
+  mx::array normg = mx::reshape(normed, gs);
+  mx::array mixed_input = mx::mean(mixg * normg, -2);
+  mx::array inj = 2.0f * mx::sigmoid(
+      mx::matmul(normed, mx::transpose(inject_w)) / static_cast<float>(hc_count));
+  return {mixed_input, inj};
+}
+
 std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::array& k) {
   float scale = 1.0f / std::sqrt(static_cast<float>(q.shape().back()));
   mx::array qn = mx::astype(q, mx::float32);

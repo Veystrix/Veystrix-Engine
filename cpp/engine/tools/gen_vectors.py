@@ -136,11 +136,33 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     gate_sig = gy.astype(mx.float32) * mx.sigmoid(gg.astype(mx.float32))
     import mlx.nn as nn
     gate_silu = gy.astype(mx.float32) * nn.silu(gg.astype(mx.float32))
+    # Gated residual (hyper-connection), one-centered grouped norm.
+    HC, HD, LOW, EPS = 4, 8, 6, 1e-6
+    hc_hidden = HC * HD
+    hyp = mx.array(rng.normal(size=(1, hc_hidden)).astype(np.float32))
+    nw = mx.array((rng.random(hc_hidden).astype(np.float32) + 0.5))
+    nw2 = mx.reshape(nw, (HC, HD))
+    # Manual grouped norm (patch_rmsnorm._rms_norm with group_size), one-centered.
+    yg = mx.reshape(hyp, (1, HC, HD)).astype(mx.float32)
+    yg = yg * mx.rsqrt(mx.mean(mx.square(yg), axis=-1, keepdims=True) + EPS)
+    yg = yg * nw2.astype(mx.float32)   # one-centered gain (no +1)
+    normed = mx.reshape(yg, (1, hc_hidden)).astype(hyp.dtype)
+    dw = mx.array(rng.normal(size=(LOW, hc_hidden)).astype(np.float32) * 0.1)
+    uw = mx.array(rng.normal(size=(hc_hidden, LOW)).astype(np.float32) * 0.1)
+    iw = mx.array(rng.normal(size=(HC, hc_hidden)).astype(np.float32) * 0.1)
+    low = mx.matmul(normed, dw.T) / HC
+    mix = mx.sigmoid(mx.matmul(nn.silu(low), uw.T))
+    mixg = mx.reshape(mix, (1, HC, HD))
+    normg = mx.reshape(normed, (1, HC, HD))
+    gr_mixed = mx.mean(mixg * normg, axis=-2)
+    gr_inj = 2 * mx.sigmoid(mx.matmul(normed, iw.T) / HC)
     arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected,
               "norm_x": norm_x, "norm_w": norm_w, "norm_expected": norm_expected,
               "sample_logits": sample_logits, "greedy": greedy,
               "gdn_q": q, "gdn_k": k, "gdn_qn": qn, "gdn_kn": kn,
-              "gdn_gy": gy, "gdn_gg": gg, "gdn_sig": gate_sig, "gdn_silu": gate_silu}
+              "gdn_gy": gy, "gdn_gg": gg, "gdn_sig": gate_sig, "gdn_silu": gate_silu,
+              "gr_hyp": hyp, "gr_nw": nw, "gr_dw": dw, "gr_uw": uw, "gr_iw": iw,
+              "gr_mixed": gr_mixed, "gr_inj": gr_inj}
     for k, v in arrays.items():
         save(d / f"{k}.npy", v)
     meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,

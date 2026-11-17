@@ -81,8 +81,18 @@ static int run_case(const std::string& root, const std::string& name, int G) {
       extra_ok = false;
     }
     if (!bit_equal(silu, esilu)) {
-      std::fprintf(stderr, "[%s] GDN silu gate differs (info)\n", name.c_str());
-      // Not fatal yet — report but don't fail until we confirm expected.
+      std::fprintf(stderr, "[%s] GDN silu gate differs\n", name.c_str());
+      extra_ok = false;
+    }
+    // Gated residual (hyper-connection).
+    mx::array hyp = load("gr_hyp"), gr_nw = load("gr_nw");
+    mx::array gr_dw = load("gr_dw"), gr_uw = load("gr_uw"), gr_iw = load("gr_iw");
+    mx::array emixed = load("gr_mixed"), einj = load("gr_inj");
+    auto gr = gated_residual(hyp, gr_nw, gr_dw, gr_uw, gr_iw, 4, 8, 1e-6f);
+    mx::eval(gr.mixed_input, gr.injection_weights);
+    if (!bit_equal(gr.mixed_input, emixed) || !bit_equal(gr.injection_weights, einj)) {
+      std::fprintf(stderr, "[%s] gated_residual differs\n", name.c_str());
+      extra_ok = false;
     }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "[%s] extra primitive load failed: %s\n", name.c_str(), e.what());

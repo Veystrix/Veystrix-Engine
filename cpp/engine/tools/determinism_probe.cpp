@@ -30,7 +30,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <map>
+#include <unordered_map>
 #include <optional>
 #include <random>
 #include <string>
@@ -344,6 +347,131 @@ void probe_gdnsub(){
   }
 }
 
+// ------- (k) GDN projection matmul shapes (M=1 GEMV, various N) ------------- //
+void probe_matmul(){
+  std::printf("\n=== mx::matmul GEMV shapes used by GDN projections ===\n");
+  struct S{int K,N;const char* name;};
+  const S shapes[]={{2560,10240,"in_proj_qkv"},{2560,6144,"in_proj_z"},
+                    {2560,48,"in_proj_b"},{2560,48,"in_proj_a"},
+                    {6144,2560,"out_proj"},{2560,128,"norm-ish"}};
+  for(const S& s:shapes){
+    auto xf=rand_floats(s.K,91,0.02f);
+    auto wf=rand_floats((size_t)s.N*s.K,92,0.02f);
+    for(mx::Dtype dt:{mx::float32,mx::bfloat16}){
+      char tag[64];std::snprintf(tag,sizeof(tag),"%s-%s",s.name,dt==mx::float32?"f32":"bf16");
+      std::vector<float> ref;
+      for(int r=0;r<5;++r){
+        mx::array x=make_array(xf,mx::Shape{1,1,s.K},dt);
+        mx::array w=make_array(wf,mx::Shape{s.N,s.K},dt);
+        mx::array out=mx::matmul(x,mx::transpose(w));
+        std::vector<float> cur=to_host(out);if(r==0)ref=cur;
+        report(tag,r,hash_vec(cur),cur,ref);
+      }
+    }
+  }
+}
+
+// ---------- (j) checkpoint weight hashing (generator's exact load path) ----- //
+namespace wprobe {
+using Config = std::map<std::string, std::string>;
+
+Config read_config(const std::string& path) {
+  Config cfg;std::ifstream f(path);std::string line;
+  while(std::getline(f,line)){
+    if(line.empty()||line[0]=='#')continue;
+    auto eq=line.find('=');if(eq==std::string::npos)continue;
+    std::string v=line.substr(eq+1);
+    while(!v.empty()&&(v.back()=='\r'||v.back()=='\n'))v.pop_back();
+    cfg[line.substr(0,eq)]=v;
+  }
+  return cfg;
+}
+int get_int(const Config& c,const std::string& k,int d=0){auto i=c.find(k);return i==c.end()?d:std::stoi(i->second);}
+
+struct Loader {
+  std::string dir;int gs,bits;
+  std::map<std::string,std::string> shard_of;
+  std::map<std::string,std::unordered_map<std::string,mx::array>> shards;
+  Loader(const std::string& d,const Config& c,int g,int b):dir(d),gs(g),bits(b){
+    for(const auto& [k,v]:c) if(k.rfind("shard.",0)==0) shard_of[k.substr(6)]=v;
+  }
+  mx::array raw(const std::string& name){
+    auto it=shard_of.find(name);
+    if(it==shard_of.end()) throw std::runtime_error("no shard for "+name);
+    auto sit=shards.find(it->second);
+    if(sit==shards.end()){
+      auto [w,m]=mx::load_safetensors(dir+"/"+it->second);
+      sit=shards.emplace(it->second,std::move(w)).first;
+      std::fprintf(stderr,"[wprobe] loaded shard %s (%zu tensors)\n",it->second.c_str(),sit->second.size());
+    }
+    auto t=sit->second.find(name);
+    if(t==sit->second.end()) throw std::runtime_error("missing tensor "+name);
+    return t->second;
+  }
+  static mx::array as_bf16(mx::array a){
+    if(static_cast<mx::Dtype::Val>(a.dtype())==mx::uint16) return mx::view(a,mx::bfloat16);
+    return a;
+  }
+  mx::array dense(const std::string& name){
+    const std::string base=name.size()>7&&name.compare(name.size()-7,7,".weight")==0
+        ?name.substr(0,name.size()-7):name;
+    if(shard_of.count(base+".scales")==0) return raw(name);
+    mx::array w=raw(base+".weight");
+    mx::array s=as_bf16(raw(base+".scales"));
+    mx::array b=as_bf16(raw(base+".biases"));
+    mx::array out=mx::dequantize(w,s,b,gs,bits,"affine");
+    mx::eval(out);
+    return out;
+  }
+};
+
+std::string hash_array(const mx::array& a){
+  mx::array f=mx::reshape(mx::astype(a,mx::float32),mx::Shape{-1});
+  mx::eval(f);
+  const float* p=f.data<float>();
+  return sha256_hex(p,static_cast<size_t>(f.size())*sizeof(float));
+}
+
+void probe_weights(const std::string& ckpt,const std::string& cfgpath){
+  Config c=read_config(cfgpath);
+  int gs=get_int(c,"group_size",32),bits=get_int(c,"bits",4);
+  int H=get_int(c,"hidden_size"),kc=get_int(c,"key_dim"),vc=get_int(c,"value_dim");
+  int nkh=get_int(c,"num_k_heads"),nvh=get_int(c,"num_v_heads");
+  int dk=get_int(c,"head_k_dim"),dv=get_int(c,"head_v_dim"),convk=get_int(c,"conv_kernel");
+  Loader L(ckpt,c,gs,bits);
+  for(int layer:{0,5,6,7}){
+    const std::string b="language_model.model.layers."+std::to_string(layer)+".";
+    std::fprintf(stderr,"[wprobe] === layer %d ===\n",layer);
+    auto emit=[&](const char* tag,mx::array a){
+      std::printf("L%d %-22s %s\n",layer,tag,hash_array(a).c_str());
+    };
+    const std::string q=b+"linear_attn.";
+    if(L.shard_of.count(q+"in_proj_qkv.weight")){
+      emit("in_proj_qkv",L.dense(q+"in_proj_qkv"));
+      emit("in_proj_z",L.dense(q+"in_proj_z"));
+      emit("in_proj_b",L.dense(q+"in_proj_b"));
+      emit("in_proj_a",L.dense(q+"in_proj_a"));
+      emit("conv1d.weight",L.dense(q+"conv1d.weight"));
+      emit("A_log",L.dense(q+"A_log"));
+      emit("dt_bias",L.dense(q+"dt_bias"));
+      emit("norm.weight",L.dense(q+"norm.weight"));
+      emit("out_proj",L.dense(q+"out_proj"));
+    }else{
+      const std::string a=b+"self_attn.";
+      emit("q_proj(fullattn)",L.dense(a+"q_proj"));
+      emit("k_proj(fullattn)",L.dense(a+"k_proj"));
+    }
+  }
+  // Step 3: hash the GDN cache-state initialization bytes (mx::zeros shapes).
+  int cdim=2*kc+vc;
+  mx::array cz=mx::zeros(mx::Shape{1,convk-1,cdim},mx::float32);
+  mx::array rz=mx::zeros(mx::Shape{1,nvh,dv,dk},mx::float32);
+  std::printf("CACHE conv_state  %s\n",hash_array(cz).c_str());
+  std::printf("CACHE rec_state   %s\n",hash_array(rz).c_str());
+  (void)H;
+}
+}  // namespace wprobe
+
 // --------------------- (f) NaN / Inf stress on the ops ---------------------- //
 void probe_nan(){
   const int N=248320,K=2560,GS=32,BITS=4,SN=K/GS,WPACK=K/8;
@@ -446,6 +574,11 @@ void probe_sdpa(){
 int main(int argc,char** argv){
   std::string mode=argc>1?argv[1]:"all";
   std::printf("MLX determinism probe | mode=%s\n",mode.c_str());
+  if(mode=="weights"){
+    if(argc<4){std::fprintf(stderr,"usage: det_probe weights <checkpoint-dir> <config>\n");return 2;}
+    wprobe::probe_weights(argv[2],argv[3]);
+    return 0;
+  }
   if(mode=="all"||mode=="qmm")  probe_qmm(false);
   if(mode=="all"||mode=="dqmm") probe_qmm(true);
   if(mode=="all"||mode=="gdn")  probe_gdn();
@@ -456,5 +589,6 @@ int main(int argc,char** argv){
   if(mode=="all"||mode=="race") probe_race();
   if(mode=="all"||mode=="gdnsub") probe_gdnsub();
   if(mode=="all"||mode=="reduce") probe_reduce();
+  if(mode=="all"||mode=="matmul") probe_matmul();
   return 0;
 }

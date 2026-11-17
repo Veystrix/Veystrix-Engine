@@ -166,13 +166,50 @@ from `50dd638d…` to `76220810…`) but not the *divergence pattern*. Therefore
 * lazy state aliasing / missing materialization barriers are NOT the cause;
 * the divergence is upstream of the delta step in layer 6's input path.
 
-**New clue:** layer 6 is the first layer whose GDN weights are loaded from
-`model-00009-of-00022.safetensors` (layers 0–5 use shards 1/7/8). The leading
-hypothesis is now in the weight-loading/dequantize path for that shard, or a
-value-dependent reduction in `gated_residual` for layer 6's specific weight
-values — not in the recurrent kernel. Next cheap diagnostic (no decode): hash
-the dequantized layer-6 GDN weights across processes to see whether the loaded
-weights themselves differ. No further fix was applied.
+## Weight-loading diagnostic — weights are IDENTICAL (shard-9 lead disproven)
+
+Added `det_probe weights <checkpoint> <config>` mode, which replicates
+`DenseLoader` exactly (`mx::load_safetensors` + `as_bf16` + `mx::dequantize` +
+`mx::eval`) and SHA-256s every dequantized GDN tensor for layers 0,5,6,7 plus
+the two `mx::zeros` cache-state initializers. Ran in THREE separate processes:
+
+```
+all 31 hashes IDENTICAL across processes 1/2/3 (diff empty both comparisons)
+L6 in_proj_qkv    468fd01ebbe7e9fae2ef6fbafa5da3a8e7251574ba41445e294c6d1ec9bfd613
+L6 in_proj_z      7eaeef1a85d9980e4cae98f356f656cde59d585eba96e4b862f5d81b692e455f
+L6 in_proj_b      528874bcc5d4da7111abfe1c03d95982f6dbdba427467f3629a99121d08a76d1
+L6 in_proj_a      94c687fb1d35e5bbd05d8644351ae2253bfa63069f7591c9f09da5a96d7ff7ca
+L6 conv1d.weight  00211cc80e643b1e5c839016ebf054e5634fe6fbb60804aae1fe17b631b9a7a7
+L6 A_log          f8180f113a616da15604fb94e5be61c3e0acb93513b7b9cf61d8505f302a43cf
+L6 dt_bias        85c0afa2891a778908ccac17c4c5fcd267211d92dcbc8b145ea5b746e680093e
+L6 norm.weight    5e7c123d772c1dfe1b0e2bb94f7731740a11bb10f259a18a3a4abd90f8f1a747
+L6 out_proj       95cb3f050c79950b95982b90869967229bc1ded81aaaf4bff2d949fafbd44839
+CACHE conv_state  e7c57dec499c6bfb0695e9568a1e44ff563ec9b3546b05a156904019af6f8c1f
+CACHE rec_state   1d1ca7719669a57942a643ec132e9a0880a98f0e53ca4ab75129d4bd6d71852b
+```
+(Layers 0/5 shards 1/7/8 and layer 7 QSA shards also all stable.)
+
+Additional synthetic `matmul` probe over the exact GDN projection shapes
+([1,2560] @ [10240,2560], [6144,2560], [2560,6144], …) in f32 and bf16: all
+deterministic 5/5.
+
+## Confirmed status and remaining cause
+
+Ruled out by evidence: weight loading / dequantize (identical hashes), cache
+initialization (identical), lm_head split-K (disproven), fused GDN delta kernel
+and lazy-state aliasing (replacing both did not change the divergence pattern),
+every isolated MLX op and reduction (deterministic in synthetic probes), NaN/Inf
+(none). **Confirmed: the divergence is a value-dependent numerical difference in
+the composed forward path, accumulating in the float32 GDN recurrent state
+across prefill steps and first crossing a bf16 rounding boundary in layer 6's
+branch output.** Layers 0–5 hidden states stay bit-identical because the small
+float32 differences round away in bf16 until then.
+
+**No fix has been applied.** The precise fix cannot be chosen from loading-only
+data: the next required diagnostic is to SHA-256 the float32 `recurrent_state`
+(conv_state too) after each prefill step in two processes, which identifies the
+first step/layer where the state diverges. Only then can a targeted change be
+justified. Shared primitives remain untouched.
 
 ## Files touched
 

@@ -162,6 +162,21 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     rgg = mx.array(rng.normal(size=(1, 16)).astype(np.float32))
     gy2 = mx.fast.rms_norm(gx, gw, 1e-6).astype(mx.float32)
     gated_sigmoid = (gy2 * mx.sigmoid(rgg.astype(mx.float32))).astype(gx.dtype)
+    # GDN delta-rule step — EXACT kernel path (production decode), using the
+    # real mlx_vlm kernel + compute_g_beta so C++ can be checked bit-for-bit.
+    from mlx_vlm.models.qwen3_5.gated_delta import (
+        gated_delta_kernel, _compute_g_beta)
+    Bd, Td, Hkd, Hvd, Dkd, Dvd = 1, 1, 4, 8, 128, 128  # small but real dims
+    dq = mx.array(rng.normal(size=(Bd, Td, Hkd, Dkd)).astype(np.float32) * 0.1)
+    dk_ = mx.array(rng.normal(size=(Bd, Td, Hkd, Dkd)).astype(np.float32) * 0.1)
+    dv = mx.array(rng.normal(size=(Bd, Td, Hvd, Dvd)).astype(np.float32) * 0.1)
+    A_log = mx.array(rng.normal(size=(Hvd,)).astype(np.float32))
+    da = mx.array(rng.normal(size=(Bd, Td, Hvd)).astype(np.float32) * 0.01)
+    db = mx.array(rng.normal(size=(Bd, Td, Hvd)).astype(np.float32) * 0.01)
+    dt_bias = mx.ones((Hvd,))
+    dg, dbeta = _compute_g_beta(A_log, da, db, dt_bias)
+    dstate = mx.array(rng.normal(size=(Bd, Hvd, Dvd, Dkd)).astype(np.float32) * 0.01)
+    dy, dstate_out = gated_delta_kernel(dq, dk_, dv, dg, dbeta, dstate)
     arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected,
               "norm_x": norm_x, "norm_w": norm_w, "norm_expected": norm_expected,
               "sample_logits": sample_logits, "greedy": greedy,
@@ -169,7 +184,16 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
               "gdn_gy": gy, "gdn_gg": gg, "gdn_sig": gate_sig, "gdn_silu": gate_silu,
               "gr_hyp": hyp, "gr_nw": nw, "gr_dw": dw, "gr_uw": uw, "gr_iw": iw,
               "gr_mixed": gr_mixed, "gr_inj": gr_inj,
-              "rng_gx": gx, "rng_gw": gw, "rng_gg": rgg, "rng_gated": gated_sigmoid}
+              "rng_gx": gx, "rng_gw": gw, "rng_gg": rgg, "rng_gated": gated_sigmoid,
+              # GDN delta-rule step — EXACT kernel path reference (production decode).
+              # Inputs (dq/dk_/dv/dstate) + g/beta gates (from A_log,da,db,dt_bias)
+              # and the kernel outputs (dy, dstate_out) for byte-for-byte C++ parity.
+              "gdn_delta_q": dq, "gdn_delta_k": dk_, "gdn_delta_v": dv,
+              "gdn_delta_A_log": A_log, "gdn_delta_a": da, "gdn_delta_b": db,
+              "gdn_delta_dt_bias": dt_bias,
+              "gdn_delta_g": dg, "gdn_delta_beta": dbeta,
+              "gdn_delta_state": dstate,
+              "gdn_delta_y": dy, "gdn_delta_state_out": dstate_out}
     for k, v in arrays.items():
         save(d / f"{k}.npy", v)
     meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,

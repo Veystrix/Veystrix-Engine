@@ -12,7 +12,7 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx)
 set_target_properties(veystrix_engine PROPERTIES
@@ -36,6 +36,12 @@ target_link_libraries(test_relu2_parity PRIVATE veystrix_engine)
 set_target_properties(test_relu2_parity PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# GDN delta-rule STEP KERNEL bit-exact parity (production decode path).
+add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
+target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
+set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # End-to-end native layer load (no Python feeding weights).
 add_executable(test_native_layer tests/test_native_layer.cpp)
 target_link_libraries(test_native_layer PRIVATE veystrix_engine)
@@ -48,6 +54,9 @@ add_test(NAME engine_parity COMMAND test_engine_parity
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 add_test(NAME engine_relu2 COMMAND test_relu2_parity
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/case3_nemotron_relu2")
+# GDN delta-rule kernel vs the exact Python gated_delta_kernel (bit-for-bit).
+add_test(NAME gdn_delta COMMAND test_gdn_delta
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
   add_test(NAME engine_parity_real COMMAND test_engine_parity

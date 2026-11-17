@@ -102,6 +102,31 @@ mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps) {
   return mx::astype(y, dtype);
 }
 
+DeltaStepOutput gated_delta_step(const mx::array& q, const mx::array& k,
+                                 const mx::array& v, const mx::array& g,
+                                 const mx::array& beta, const mx::array& state) {
+  // Mirrors _gated_delta_step_ops (scalar gate g of shape [B,H]).
+  // state: [B,H,Dv,Dk]; k,q: [B,H,Dk]; v: [B,H,Dv].
+  mx::array decay = mx::expand_dims(g, std::vector<int>{-1, -1});  // [B,H,1,1]
+  mx::array new_state = state * decay;
+  mx::array kv_mem = mx::sum(new_state * mx::expand_dims(k, -1), -1);  // [B,H,Dv]
+  mx::array delta = (v - kv_mem) * mx::expand_dims(beta, -1);          // [B,H,Dv]
+  new_state = new_state + mx::expand_dims(k, -1) * mx::expand_dims(delta, -1);
+  mx::array y = mx::sum(new_state * mx::expand_dims(q, -1), -1);  // [B,H,Dv]
+  return {mx::astype(y, q.dtype()), new_state};
+}
+
+std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
+                                               const mx::array& a,
+                                               const mx::array& b,
+                                               const mx::array& dt_bias) {
+  // compute_g = exp(-exp(A_log) * softplus(a + dt_bias)); beta = sigmoid(b).
+  mx::array A = mx::exp(mx::astype(A_log, mx::float32));
+  mx::array sp = mx::logaddexp(a + dt_bias, mx::array(0.0f));
+  mx::array g = mx::exp(-A * sp);
+  return {g, mx::sigmoid(b)};
+}
+
 GatedResidualOutput gated_residual(
     const mx::array& hyper_input,
     const mx::array& norm_weight,

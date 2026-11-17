@@ -116,6 +116,35 @@ std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::a
 mx::array gdn_gate_sigmoid(const mx::array& y, const mx::array& gate);
 mx::array gdn_gate_silu(const mx::array& y, const mx::array& gate);
 
+// GDN gated-delta-rule recurrence — ops-based reference path, matching
+// _gated_delta_step_ops in mlx_vlm qwen3_5/gated_delta.py. Bit-exact via the
+// same MLX ops (decode uses T=1). Inputs for one recurrent step:
+//   q, k: [B, H, Dk], v: [B, H, Dv], g: [B, H] (scalar gate), beta: [B, H],
+//   state: [B, H, Dv, Dk] float32. Returns (y [B,H,Dv], new_state).
+struct DeltaStepOutput {
+  mx::array y;
+  mx::array state;
+};
+DeltaStepOutput gated_delta_step(const mx::array& q, const mx::array& k,
+                                 const mx::array& v, const mx::array& g,
+                                 const mx::array& beta, const mx::array& state);
+
+// Bit-exact decode path: runs the EXACT fused Metal kernel source used by the
+// Python engine (gdn_kernel.h), matching its reduction order (simd_sum).
+// q,k: [B,T,Hk,Dk], v: [B,T,Hv,Dv], g: [B,T,Hv], beta: [B,T,Hv],
+// state: [B,Hv,Dv,Dk]. Returns (y [B,T,Hv,Dv], new_state [B,Hv,Dv,Dk]).
+// Falls back to gated_delta_step (ops) if Metal is unavailable.
+DeltaStepOutput gated_delta_step_kernel(const mx::array& q, const mx::array& k,
+                                        const mx::array& v, const mx::array& g,
+                                        const mx::array& beta, const mx::array& state);
+
+// g and beta for the delta rule (gated_delta.compute_g / _compute_g_beta):
+//   g = exp(-exp(A_log.f32) * softplus(a + dt_bias)); beta = sigmoid(b)
+std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
+                                               const mx::array& a,
+                                               const mx::array& b,
+                                               const mx::array& dt_bias);
+
 // Qwen4 gated residual / hyper-connection (Qwen4ExpGatedResidual.__call__).
 // Returns (mixed_input, hyper_input, injection_weights). The hc_norm is applied
 // with the one-centered convention via rms_norm with group_size (passed as the

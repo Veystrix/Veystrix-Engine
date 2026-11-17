@@ -674,10 +674,27 @@ inline mx::array inject(const mx::array& hidden, const mx::array& branch,
 // --------------------------------------------------------------------------- //
 // TOOL-LOCAL GDN forward for the opt-in determinism verification. Identical to
 // gdn_layer_forward except: (1) the fused mx::fast::metal_kernel delta step is
-// replaced by the ops-based gated_delta_step; (2) conv_state / recurrent_state
-// are mx::eval'd at every step boundary so the next step consumes a materialized
-// buffer instead of a 16-deep lazy graph. No shared primitive is modified.
+// replaced by an ops-based delta step (the shared engine.cpp version uses
+// mx::expand_dims({-1,-1}) which this MLX rejects, and expects Hv-head q/k);
+// (2) conv_state / recurrent_state are mx::eval'd at every step boundary so the
+// next step consumes a materialized buffer instead of a 16-deep lazy graph.
+// No shared primitive is modified.
 // --------------------------------------------------------------------------- //
+DeltaStepOutput gated_delta_step_local(const mx::array& q, const mx::array& k,
+                                       const mx::array& v, const mx::array& g,
+                                       const mx::array& beta,
+                                       const mx::array& state) {
+  // q,k: [B,T,Hv,Dk]; v: [B,T,Hv,Dv]; g,beta: [B,T,Hv]; state: [B,Hv,Dv,Dk].
+  const int B = g.shape(0), T = g.shape(1), Hv = g.shape(2);
+  mx::array decay = mx::reshape(g, mx::Shape{B, T, Hv, 1, 1});
+  mx::array new_state = state * decay;                                  // [B,T,Hv,Dv,Dk]
+  mx::array kv_mem = mx::sum(new_state * mx::expand_dims(k, -1), -1);   // [B,T,Hv,Dv]
+  mx::array delta = (v - kv_mem) * mx::expand_dims(beta, -1);           // [B,T,Hv,Dv]
+  new_state = new_state + mx::expand_dims(k, -1) * mx::expand_dims(delta, -1);
+  mx::array y = mx::sum(new_state * mx::expand_dims(q, -1), -1);        // [B,T,Hv,Dv]
+  return {mx::astype(y, q.dtype()), new_state};
+}
+
 GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
                                        const GDNCacheState& cache,
                                        const GDNConfig& cfg) {
@@ -720,8 +737,16 @@ GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
 
     auto qk = gdn_normalize_qk(q, k);
     auto gb = compute_g_beta(w.A_log, a, b, w.dt_bias);
-    auto step = gated_delta_step(qk.first, qk.second, v, gb.first, gb.second,
-                                 rec_state);
+    // The fused kernel maps Hv value heads onto Hk key heads internally; the
+    // ops-based path needs explicit Hk->Hv head replication before the step.
+    std::vector<int32_t> hk_idx;
+    for (int h = 0; h < Hk; ++h)
+      for (int r = 0; r < Hv / Hk; ++r) hk_idx.push_back(h);
+    mx::array hidx(hk_idx.data(), mx::Shape{Hv}, mx::int32);
+    mx::array qv = mx::take(qk.first, hidx, 2);
+    mx::array kv = mx::take(qk.second, hidx, 2);
+    auto step = gated_delta_step_local(qv, kv, v, gb.first, gb.second,
+                                       rec_state);
     // Materialization barriers: both state tensors are concrete before the next
     // token/layer reads them (breaks the lazy alias chain across prefill steps).
     mx::eval(step.state);

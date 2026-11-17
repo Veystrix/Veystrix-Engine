@@ -137,14 +137,42 @@ steps, or a value-dependent path inside the fused `mx::fast::metal_kernel`
 gated-delta kernel for layer 6. This is consistent with the earlier threshold:
 a 6-layer config (layers 0–5) was deterministic, adding layer 6 made it vary.
 
-Proposed fix (NOT applied — needs verification run): replace the fused
-`gated_delta_step_kernel` with the already-available ops-based
-`gated_delta_step` (`engine.hpp`) **in a tool-local copy of `gdn_layer_forward`**,
-so no shared primitive is touched; and/or force `mx::eval` of the GDN
-conv/recurrent state at the end of each layer in the tool's `run_step` so each
-step consumes a materialized buffer rather than a 16-deep lazy chain. Verify
-with one more guarded reduced-config run comparing digests before promoting to
-shared code.
+## Verification run of the lazy-aliasing fix — FAILED (hypothesis disproven)
+
+Applied, behind `REALGEN_DEBUG_HASHES`, a tool-local `gdn_layer_forward_local`
+that (a) replaces the fused `gated_delta_step_kernel` with a tool-local
+ops-based delta step (the shared `engine.cpp` version calls
+`mx::expand_dims(g,{-1,-1})`, which MLX 0.32.2 rejects, and needs Hk->Hv head
+replication) and (b) `mx::eval`s conv_state and recurrent_state at every step
+boundary. Two guarded 10-layer runs (same envelope, plus `--thermal-level 99`):
+
+```
+run A: returncode=0 stopped=None seconds=5 floor=5.06GiB swapout_mib=0
+       step0 out=281    sha=60514eb380c3...
+run B: returncode=0 stopped=None seconds=5 floor=4.64GiB swapout_mib=0
+       step0 out=8821   sha=bfff846dcd9d...
+```
+
+(NB: one earlier invocation aborted in 1 s with `[expand_dims] Received duplicate
+axes.` before any compute; the ops-step shape bug was fixed before runs A/B.)
+
+**Result: the fix did NOT remove the nondeterminism.** All 42 arrays: layers 0–5
+still bit-identical, **first divergence still `L06_branch_gdn`**, NaN/Inf still
+0 everywhere. The step-0 token/digest still differ. Replacing the fused kernel
+and adding materialization barriers changed the *values* (L05_hidden hash moved
+from `50dd638d…` to `76220810…`) but not the *divergence pattern*. Therefore:
+
+* the fused GDN `metal_kernel` is NOT the cause;
+* lazy state aliasing / missing materialization barriers are NOT the cause;
+* the divergence is upstream of the delta step in layer 6's input path.
+
+**New clue:** layer 6 is the first layer whose GDN weights are loaded from
+`model-00009-of-00022.safetensors` (layers 0–5 use shards 1/7/8). The leading
+hypothesis is now in the weight-loading/dequantize path for that shard, or a
+value-dependent reduction in `gated_residual` for layer 6's specific weight
+values — not in the recurrent kernel. Next cheap diagnostic (no decode): hash
+the dequantized layer-6 GDN weights across processes to see whether the loaded
+weights themselves differ. No further fix was applied.
 
 ## Files touched
 

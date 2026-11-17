@@ -38,7 +38,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | +20% decode, 9× fewer read-ops | digest | PENDING |
 | 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
 | 9 | #6 | Overlap / double-buffered async I/O | Overlap | decode | +32% (source bit-exact) | digest | PENDING |
-| 10 | #1 | Native / sync-removed decode path | Sync removal | decode | **demoted:** local profile caps gain at 1.065× (3.55 tok/s); C++ cannot reach 5× here | raw logits + cache tensors | DEFERRED (measured low value) |
+| 10 | #1 | Native / sync-removed decode path | Sync removal | decode | 1.065× Qwen / 1.386× Nemotron ceilings measured; owner wants full port later for future-model reuse | raw logits + cache tensors | PLANNED LATER (owner decision 2026-11-17) |
 | 11 | #14 | Wave-Partitional Prefill | Prefill | prefill | 2.28→5.65 tok/s | digest, fixed chunk boundaries | PENDING |
 | 12 | #13 | Prefix / prompt caching | Prefill | prefill | 4.94×–57× TTFT | digest, fixed chunking | PENDING |
 | 13 | #16 | Pre-packed fp32 prefill GEMM | Prefill | prefill | 1.44×, max-abs-diff 0 | digest (avoid BNNS Graph) | PENDING |
@@ -62,9 +62,11 @@ this short-prompt harness): **I/O wait 156.86 ms = 52.3%**, all exclusive host t
 **18.22 ms = 6.1%** (largest: `route_tolist` 12.50 ms). Removing 100% of host work
 would yield only 3.55 tok/s (1.065×). Therefore:
 
-- **Step 10 (C++ decode / sync removal) is demoted to DEFERRED** — it cannot reach 5 tok/s.
-- **Read-path Steps 6–7 and prefetch/overlap Steps 8–9 are promoted** — they target the
-  52.3% I/O wait. See `docs/performance/CPP_DECODE_CHECKLIST.md` for full profile and pivot.
+- **Step 10 (full C++ engine port) is PLANNED LATER by owner decision (2026-11-17)** — real
+  but bounded gain (1.065× Qwen / 1.386× Nemotron), wanted for future-model reuse; do not
+  start until the owner says so. Scaffold at `cpp/decode/`, plan at `CPP_DECODE_CHECKLIST.md`.
+- **Steps 5–9 (I/O: cache sizing, merged pread, coalescing, prefetch, overlap) are ACTIVE NOW** —
+  they target the 52.3% / 67.9% I/O wait.
 
 Local evidence supersedes the reference's 41%-sync profile here:
 `models/flashnext/hostwindow.py:7-8` (added host work is free),

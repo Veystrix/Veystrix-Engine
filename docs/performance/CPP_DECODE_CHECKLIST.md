@@ -104,7 +104,13 @@ I/O wait (67.9%) dominates, and the 43.7% hit rate shows the cache is undersized
 NOT the path to 15 tok/s. Priority is increasing the expert cache hit rate (break-even rule,
 Method #5) and reducing I/O wait (Methods #2/#3/#5). C++ remains optional/low priority.
 
+## Owner decision (2026-11-17)
+- **Full C++ engine port: PLANNED, NOT NOW.** The owner explicitly wants it eventually for
+  future-model reuse. Keep this checklist and `cpp/decode/` scaffold as the entry point.
+  Do not start the full port until the owner says so.
+- **Now: I/O improvements** (Methods #2 merged pread, #3 expert coalescing, #5 cache sizing),
+  targeting the measured I/O wait (Qwen 52.3%, Nemotron 67.9%) and Nemotron's 43.7% cache hit rate.
+
 ## Status
-- **Current phase:** Qwen investigation + profile complete; pivoted to Methods #2/#3
-- **Unblocked:** owner authorized the Qwen profile run; future A/B runs still need permission
-- **Nemotron:** pending profile authorization; no C++ decision possible yet
+- **Current phase:** I/O improvements active; C++ full port deferred by owner decision
+- **Unblocked:** owner authorized both profile runs; future A/B runs still need permission

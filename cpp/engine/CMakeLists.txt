@@ -42,6 +42,13 @@ target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Final head (gated residual no-combine -> lm_head) bit-exact parity.
+add_executable(test_final_head tests/test_final_head.cpp)
+target_include_directories(test_final_head PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_final_head PRIVATE veystrix_engine)
+set_target_properties(test_final_head PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Model-agnostic adapter config verification (Qwen + Nemotron + future).
 add_executable(test_model_adapter tests/test_model_adapter.cpp)
 target_include_directories(test_model_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -97,6 +104,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors/cases.txt")
 endif()
 add_test(NAME model_adapter COMMAND test_model_adapter
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_adapter_flat")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head/expected.npy")
+  add_test(NAME final_head COMMAND test_final_head
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head")
+endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
   add_test(NAME engine_parity_real COMMAND test_engine_parity

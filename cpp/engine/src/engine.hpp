@@ -161,4 +161,13 @@ GatedResidualOutput gated_residual(
     const mx::array& inject_w,
     int hc_count, int hidden_size, float eps);
 
+// Final head (Qwen4ExpModel output): Qwen4ExpGatedResidual with
+// use_combine=False returns only the mixed_input, then lm_head (no bias):
+//   logits = matmul(gated_residual_mix(hidden), lm_head_w.T)
+mx::array final_head(const mx::array& hidden,
+                     const mx::array& norm_weight,
+                     const mx::array& down_w, const mx::array& up_w,
+                     const mx::array& lm_head_w,
+                     int hc_count, int hidden_size, float eps);
+
 }  // namespace veystrix::engine

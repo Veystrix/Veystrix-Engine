@@ -197,7 +197,7 @@ std::optional<mx::array> qsa_full_indexer(
 
   // block_starts = arange(blocks) * ratio
   // block_position_ids = full_position_ids[..., block_starts]
-  mx::array block_starts = mx::arange(max_complete_blocks) * ratio;
+  mx::array block_starts = mx::astype(mx::arange(max_complete_blocks), mx::int32) * ratio;
   mx::array block_pos = mx::take(full_pos, block_starts, -1);  // [B, blocks]
   // pooled_keys = self._apply_rope(pooled_keys, block_position_ids)
   pooled = qsa_apply_rope(pooled, block_pos, cfg.rope);        // [B, 1, blocks, D]
@@ -213,12 +213,14 @@ std::optional<mx::array> qsa_full_indexer(
   scores = scores / scale;
 
   // query_ends = past_len + arange(seq_len) + 1               [S]
-  mx::array query_ends = mx::arange(past_len + 1, past_len + S + 1);
+  mx::array query_ends =
+      mx::astype(mx::arange(past_len + 1, past_len + S + 1), mx::int32);
   // complete_counts = query_ends // compress_ratio             [S]
   mx::array complete_counts = query_ends / ratio;
   // valid_blocks = arange(blocks)[None,None,:] < complete_counts[None,:,None]
   mx::array valid = mx::less(
-      mx::expand_dims(mx::expand_dims(mx::arange(max_complete_blocks), 0), 0),
+      mx::expand_dims(mx::expand_dims(
+          mx::astype(mx::arange(max_complete_blocks), mx::int32), 0), 0),
       mx::expand_dims(complete_counts, {0, 2}));
   // scores = where(valid_blocks, scores, -inf)
   mx::array neg_inf(-std::numeric_limits<float>::infinity(), mx::float32);
@@ -231,7 +233,7 @@ std::optional<mx::array> qsa_full_indexer(
       {B, S, max_complete_blocks}, {1, 1, 1});
 
   // token_indices = arange(key_len); token_blocks = token_indices // ratio
-  mx::array token_indices = mx::arange(key_len);
+  mx::array token_indices = mx::astype(mx::arange(key_len), mx::int32);
   mx::array token_blocks = token_indices / ratio;
 
   // selected_tokens = any(token_blocks[None,None,None,:] ==

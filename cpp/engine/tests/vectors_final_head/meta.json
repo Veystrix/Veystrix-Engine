@@ -1,0 +1,7 @@
+{
+  "hc_count": 4,
+  "hidden_size": 32,
+  "lowrank": 16,
+  "vocab": 64,
+  "eps": 1e-06
+}

@@ -40,8 +40,16 @@ import numpy as np
 
 sys.path.insert(0, ".venv/lib/python3.12/site-packages")
 import mlx.core as mx  # noqa: E402
+import mlx.nn as nn  # noqa: E402
 from mlx_vlm.models.qwen4_exp.language import (  # noqa: E402
     Qwen4ExpGatedDeltaNet,
+)
+from mlx_vlm.models.qwen3_5.language import (  # noqa: E402
+    _qwen3_5_decode_depthwise_conv,
+)
+from mlx_vlm.models.qwen3_5.gated_delta import (  # noqa: E402
+    gated_delta_kernel,
+    _compute_g_beta,
 )
 
 
@@ -71,6 +79,11 @@ def make_case(cfg: SimpleNamespace, seed: int):
     model.norm.weight = mx.array(np.ones(Dv, dtype=np.float32))  # f32 ones
     model.out_proj.weight = mxrand((H, value_dim), dtype=mx.bfloat16)
 
+    # nn.Module.training defaults to True; __call__ passes
+    # use_kernel = not self.training. The production DECODE path uses the fused
+    # gated_delta kernel, so switch the model to eval mode.
+    model.eval()
+
     # Decode cache: [B, K-1, conv_dim] (f32 to match x) and [B,Hv,Dv,Dk] f32.
     conv_state = mxrand((B, K - 1, conv_dim), scale=0.1)
     rec_state = mxrand((B, Hv, Dv, Dk), scale=0.05)
@@ -80,7 +93,37 @@ def make_case(cfg: SimpleNamespace, seed: int):
     out = model(x, cache=cache)
     mx.eval(out, cache[0], cache[1])
 
+    # Recompute the real intermediates (same ops as __call__) so a failing C++
+    # layer can be isolated to the exact diverging primitive.
+    mixed_qkv = model.in_proj_qkv(x)
+    z_proj = model.in_proj_z(x)
+    bp = model.in_proj_b(x)
+    ap = model.in_proj_a(x)
+    z4 = z_proj.reshape(B, 1, Hv, Dv)
+    conv_input = mx.concatenate([conv_state, mixed_qkv], axis=1)
+    prep_w = model.conv1d.weight[:, :, 0].T.astype(mx.float32)
+    conv_out_pre = _qwen3_5_decode_depthwise_conv(conv_input, prep_w)
+    conv_out = nn.silu(conv_out_pre)
+    q, k, v = [
+        t.reshape(B, 1, h, d)
+        for t, h, d in zip(
+            mx.split(conv_out, [key_dim, 2 * key_dim], -1),
+            [Hk, Hk, Hv], [Dk, Dk, Dv],
+        )
+    ]
+    qn, kn = model._normalize_qk(q, k)
+    g, beta = _compute_g_beta(model.A_log, ap, bp, model.dt_bias)
+    y, state_out = gated_delta_kernel(qn, kn, v, g, beta, rec_state)
+    normed = model.norm(y, z4)
+    mx.eval(mixed_qkv, z_proj, ap, bp, conv_input, conv_out_pre, conv_out,
+            q, k, v, qn, kn, g, beta, y, state_out, normed)
+
     arrays = {
+        "i_mixed_qkv": mixed_qkv, "i_z": z_proj, "i_a": ap, "i_b": bp,
+        "i_conv_input": conv_input, "i_conv_pre": conv_out_pre,
+        "i_conv_out": conv_out, "i_q": q, "i_k": k, "i_v": v,
+        "i_qn": qn, "i_kn": kn, "i_g": g, "i_beta": beta,
+        "i_y": y, "i_state": state_out, "i_normed": normed,
         "x": x,
         "w_qkv": model.in_proj_qkv.weight,
         "w_z": model.in_proj_z.weight,

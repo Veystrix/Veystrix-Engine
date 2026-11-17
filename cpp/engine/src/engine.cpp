@@ -162,6 +162,29 @@ GatedResidualOutput gated_residual(
   return {mixed_input, inj};
 }
 
+mx::array final_head(const mx::array& hidden,
+                     const mx::array& norm_weight,
+                     const mx::array& down_w, const mx::array& up_w,
+                     const mx::array& lm_head_w,
+                     int hc_count, int hidden_size, float eps) {
+  // gated_residual with use_combine=False -> mixed_input only. Reuse the same
+  // math but skip the injection-weight projection (no block_inject_weight).
+  int hc_hidden = hc_count * hidden_size;
+  mx::array w2d = mx::reshape(norm_weight, mx::Shape{hc_count, hidden_size});
+  mx::Shape gs(hidden.shape().begin(), hidden.shape().end() - 1);
+  gs.push_back(hc_count);
+  gs.push_back(hidden_size);
+  mx::array yg = mx::astype(mx::reshape(hidden, gs), mx::float32);
+  yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, /*keepdims=*/true) + eps);
+  yg = yg * mx::astype(w2d, mx::float32);
+  mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
+  mx::array low = mx::matmul(normed, mx::transpose(down_w)) / static_cast<float>(hc_count);
+  mx::array mix = mx::sigmoid(mx::matmul(low * mx::sigmoid(low), mx::transpose(up_w)));
+  mx::array mixed_input = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
+  // lm_head: nn.Linear(hidden, vocab, bias=False) -> matmul(x, W.T).
+  return mx::matmul(mixed_input, mx::transpose(lm_head_w));
+}
+
 mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,
                          const mx::array& gate, float eps, bool sigmoid_act) {
   auto dtype = x.dtype();

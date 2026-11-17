@@ -13,6 +13,150 @@
     "batch": 1
   },
   "seed": 20261117,
+  "i_mixed_qkv": {
+    "shape": [
+      1,
+      1,
+      256
+    ],
+    "dtype": "float32"
+  },
+  "i_z": {
+    "shape": [
+      1,
+      1,
+      128
+    ],
+    "dtype": "float32"
+  },
+  "i_a": {
+    "shape": [
+      1,
+      1,
+      4
+    ],
+    "dtype": "float32"
+  },
+  "i_b": {
+    "shape": [
+      1,
+      1,
+      4
+    ],
+    "dtype": "float32"
+  },
+  "i_conv_input": {
+    "shape": [
+      1,
+      4,
+      256
+    ],
+    "dtype": "float32"
+  },
+  "i_conv_pre": {
+    "shape": [
+      1,
+      1,
+      256
+    ],
+    "dtype": "float32"
+  },
+  "i_conv_out": {
+    "shape": [
+      1,
+      1,
+      256
+    ],
+    "dtype": "float32"
+  },
+  "i_q": {
+    "shape": [
+      1,
+      1,
+      2,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_k": {
+    "shape": [
+      1,
+      1,
+      2,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_v": {
+    "shape": [
+      1,
+      1,
+      4,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_qn": {
+    "shape": [
+      1,
+      1,
+      2,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_kn": {
+    "shape": [
+      1,
+      1,
+      2,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_g": {
+    "shape": [
+      1,
+      1,
+      4
+    ],
+    "dtype": "float32"
+  },
+  "i_beta": {
+    "shape": [
+      1,
+      1,
+      4
+    ],
+    "dtype": "float32"
+  },
+  "i_y": {
+    "shape": [
+      1,
+      1,
+      4,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_state": {
+    "shape": [
+      1,
+      4,
+      32,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "i_normed": {
+    "shape": [
+      1,
+      1,
+      4,
+      32
+    ],
+    "dtype": "float32"
+  },
   "x": {
     "shape": [
       1,

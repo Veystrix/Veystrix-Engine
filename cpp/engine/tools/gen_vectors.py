@@ -82,7 +82,18 @@ def emit_case(out: Path, name: str, E, H, I, G, K, T, seed):
     weights = {"gw": gw, "gs": gs, "gb": gb, "uw": uw, "us": us, "ub": ub,
                "dw": dw, "ds": ds, "db": db}
     expected = ref_moe_block(x, route, scores, weights, G, 4)
-    arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected}
+    # RMSNorm vectors (one-centered production convention, eps=1e-6).
+    norm_x = mx.array(rng.normal(size=(T, H)).astype(np.float32))
+    norm_w = mx.array(rng.random(H).astype(np.float32) + 0.5)  # one-centered gains
+    ny = norm_x.astype(mx.float32)
+    ny = ny * mx.rsqrt(mx.mean(mx.square(ny), axis=-1, keepdims=True) + 1e-6)
+    norm_expected = (ny * norm_w).astype(norm_x.dtype)
+    # Greedy sample vector: production takes ONE logit row and returns shape (1,).
+    sample_logits = mx.array(rng.normal(size=(E,)).astype(np.float32))
+    greedy = mx.astype(mx.reshape(mx.argmax(sample_logits.reshape(-1), axis=-1), (1,)), mx.uint32)
+    arrays = {"x": x, "route": route, "scores": scores, **weights, "expected": expected,
+              "norm_x": norm_x, "norm_w": norm_w, "norm_expected": norm_expected,
+              "sample_logits": sample_logits, "greedy": greedy}
     for k, v in arrays.items():
         save(d / f"{k}.npy", v)
     meta = {"E": E, "H": H, "I": I, "G": G, "K": K, "T": T, "bits": 4,

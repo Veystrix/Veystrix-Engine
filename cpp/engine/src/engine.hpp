@@ -85,4 +85,13 @@ mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
                                 int top_k, float renorm_blend,
                                 const ExpertWeights& w);
 
+// RMSNorm with the production one-centered convention (patch_rmsnorm.py):
+//   y = x.f32 * rsqrt(mean(x.f32^2, -1, keepdims) + eps) * weight.f32
+// `weight` is the checkpoint gain (float32; one-centered means no +1).
+mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps);
+
+// Greedy sampler: argmax over the last axis -> uint32 scalar-ish array,
+// matching veystrix.sampling.Sampler.__call__ for greedy decoding.
+mx::array sample_greedy(const mx::array& logits);
+
 }  // namespace veystrix::engine

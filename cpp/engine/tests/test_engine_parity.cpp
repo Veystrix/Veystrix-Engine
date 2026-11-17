@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -52,6 +53,26 @@ static int run_case(const std::string& root, const std::string& name, int G) {
                   Q4Projection(dw, ds, db), G, 4);
   mx::array out = moe_block(x, route, scores, w);
   mx::eval(out);
+
+  // RMSNorm and greedy sampler parity.
+  bool extra_ok = true;
+  try {
+    mx::array nx = load("norm_x"), nw = load("norm_w"), ne = load("norm_expected");
+    mx::array norm_out = rms_norm(nx, nw, 1e-6f);
+    mx::eval(norm_out);
+    extra_ok = extra_ok && bit_equal(norm_out, ne);
+    mx::array sl = load("sample_logits"), ge = load("greedy");
+    mx::array greedy = sample_greedy(sl);
+    mx::eval(greedy);
+    extra_ok = extra_ok && bit_equal(greedy, ge);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "[%s] extra primitive load failed: %s\n", name.c_str(), e.what());
+    extra_ok = false;
+  }
+  if (!extra_ok) {
+    std::fprintf(stderr, "[%s] RMSNorm or greedy sampler differs\n", name.c_str());
+    return 1;
+  }
   if (!bit_equal(out, expected)) {
     mx::array ov = mx::astype(mx::reshape(out, {-1}), mx::uint32);
     mx::array ev = mx::astype(mx::reshape(expected, {-1}), mx::uint32);

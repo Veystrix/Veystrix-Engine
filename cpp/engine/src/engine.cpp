@@ -75,4 +75,24 @@ mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
   return moe_block(x, r.indices, r.scores, w);
 }
 
+mx::array rms_norm(const mx::array& x, const mx::array& weight, float eps) {
+  // Mirrors patch_rmsnorm._rms_norm (one-centered, non-compiled path):
+  // f32 cast, rsqrt(mean(square)+eps), multiply by f32 gain, cast back.
+  auto dtype = x.dtype();
+  mx::array y = mx::astype(x, mx::float32);
+  mx::array mean = mx::mean(mx::square(y), -1, /*keepdims=*/true);
+  y = y * mx::rsqrt(mean + eps);
+  y = y * mx::astype(weight, mx::float32);
+  y = mx::reshape(y, x.shape());
+  return mx::astype(y, dtype);
+}
+
+mx::array sample_greedy(const mx::array& logits) {
+  // veystrix.sampling.Sampler.__call__ (greedy): logits.reshape(-1),
+  // argmax(axis=-1).reshape(1).astype(uint32).
+  mx::array row = mx::reshape(logits, {-1});
+  mx::array idx = mx::argmax(row, -1);
+  return mx::astype(mx::reshape(idx, {1}), mx::uint32);
+}
+
 }  // namespace veystrix::engine

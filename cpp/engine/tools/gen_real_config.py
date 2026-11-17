@@ -55,6 +55,22 @@ def needed_dense_tensors(cfg: dict, n_layers: int) -> list[str]:
             out += [f"{base}.self_attn.{s}" for s in fa]
         out += [f"{base}.mlp_hyper_connection.{s}" for s in hc]
         out += [f"{base}.mlp.{s}" for s in mlp]
+    # PLE at layers whose 1-based index is in ple_layer_ids (layer index 1 here).
+    ple_layers = tc.get("ple_layer_ids", [])
+    for pl in ple_layers:
+        li = int(pl) - 1
+        pb = f"language_model.model.layers.{li}.ple"
+        out += [f"{pb}.key_proj", f"{pb}.value_proj",
+                f"{pb}.norm_key.weight", f"{pb}.norm_query.weight",
+                f"{pb}.norm_conv.weight", f"{pb}.conv1d.weight",
+                f"{pb}.ple_embedding.layer_multipliers",
+                f"{pb}.ple_embedding.ngram_heads_offsets",
+                f"{pb}.ple_embedding.ngram_heads_vocab_sizes"]
+        # 128 n-gram embedding shards, each a Q4 triplet.
+        for s in range(int(tc.get("split_ngram_parts", 128))):
+            out += [f"{pb}.ple_embedding.ngram_embedding.shard_{s}.weight",
+                    f"{pb}.ple_embedding.ngram_embedding.shard_{s}.scales",
+                    f"{pb}.ple_embedding.ngram_embedding.shard_{s}.biases"]
     out += ["language_model.model.embed_tokens",
             "language_model.model.hyper_connection_mixer.hc_norm.weight",
             "language_model.model.hyper_connection_mixer.input_mix_weight_down",

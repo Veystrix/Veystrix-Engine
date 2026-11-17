@@ -1078,6 +1078,17 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     std::string digest = sha256_hex(
         row.data<float>(), static_cast<size_t>(row.size()) * sizeof(float));
 
+    // Opt-in full fp32 logit dump (numeric comparison vs Python). No effect off.
+    if (const char* df = std::getenv("REALGEN_DUMP_LOGITS")) {
+      char pth[512];
+      std::snprintf(pth, sizeof(pth), "%s.step%d.f32", df, step);
+      std::FILE* f = std::fopen(pth, "wb");
+      if (f) {
+        std::fwrite(row.data<float>(), sizeof(float), row.size(), f);
+        std::fclose(f);
+      }
+    }
+
     records.push_back({step, token, next_id, digest});
     std::fprintf(stderr, "[step %d] in=%d out=%d sha=%s\n", step, token,
                  next_id, digest.c_str());

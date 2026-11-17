@@ -21,12 +21,21 @@ set_target_properties(mlx_probe PROPERTIES
   INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Portable part of Method #11: expert id-remap + batched-read plan.
-add_library(io_pager STATIC src/io_pager.cpp)
+set(NATIVE_READ ${CMAKE_CURRENT_SOURCE_DIR}/../../models/flashnext/native_read.c)
+add_library(io_pager STATIC src/io_pager.cpp ${NATIVE_READ})
 target_include_directories(io_pager PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_io_pager tests/test_io_pager.cpp)
 target_include_directories(test_io_pager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(test_io_pager PRIVATE io_pager)
 
+add_executable(test_pager_read tests/test_pager_read.cpp)
+target_include_directories(test_pager_read PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
+target_link_libraries(test_pager_read PRIVATE io_pager mlx)
+set_target_properties(test_pager_read PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib"
+  INSTALL_RPATH "${MLX_ROOT}/lib")
+
 enable_testing()
 add_test(NAME io_pager COMMAND test_io_pager)
+add_test(NAME pager_read COMMAND test_pager_read)

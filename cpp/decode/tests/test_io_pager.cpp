@@ -25,9 +25,9 @@ int main() {
   // Two reads only: expert 2 (slot 3) and expert 9 (slot 4); deduplicated.
   assert(p.reads.size() == 2);
   assert(p.reads[0].offset == header + 2 * row_bytes);
-  assert(p.reads[0].dst == buf.data() + 3 * stride);
+  assert(p.reads[0].dst == reinterpret_cast<uint64_t>(buf.data() + 3 * stride));
   assert(p.reads[1].offset == header + 9 * row_bytes);
-  assert(p.reads[1].dst == buf.data() + 4 * stride);
+  assert(p.reads[1].dst == reinterpret_cast<uint64_t>(buf.data() + 4 * stride));
 
   // Determinism: same inputs -> identical plan.
   PagerPlan q = plan_remap(route, resident, free_slots, 42, header, row_bytes,
@@ -37,6 +37,7 @@ int main() {
   for (size_t i = 0; i < p.reads.size(); ++i) {
     assert(q.reads[i].offset == p.reads[i].offset);
     assert(q.reads[i].dst == p.reads[i].dst);
+    assert(q.reads[i].pad == 0);
     assert(q.reads[i].length == p.reads[i].length);
   }
 

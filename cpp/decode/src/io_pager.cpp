@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <unordered_map>
 
+// The existing batched reader: libdispatch concurrent positioned reads with
+// GIL-released semantics. Identical struct layout to PagerRead (fd, pad,
+// offset, length, dst-as-uintptr). We link its source directly to stay bit-exact
+// with the Python engine's reader.
+extern "C" int flashnext_batch_pread(const void* reads, int32_t count, int32_t width);
+
 namespace veystrix {
 
 PagerPlan plan_remap(const std::vector<int32_t>& route,
@@ -42,10 +48,17 @@ PagerPlan plan_remap(const std::vector<int32_t>& route,
     int32_t slot = free_slots[next_free++];
     assigned[expert] = slot;
     plan.slots.push_back(slot);
-    plan.reads.push_back({fd, header + static_cast<int64_t>(expert) * row_bytes,
-                          row_bytes, slot_base + slot * slot_stride});
+    plan.reads.push_back({fd, 0, header + static_cast<int64_t>(expert) * row_bytes,
+                          row_bytes, reinterpret_cast<uint64_t>(slot_base + slot * slot_stride)});
   }
   return plan;
+}
+
+int run_batched_reads(const std::vector<PagerRead>& reads, int width) {
+  // PagerRead must be ABI-compatible with flashnext_read:
+  //   int32 fd; int32 pad; int64 offset; int64 length; uint64 dst.
+  static_assert(sizeof(PagerRead) == 32, "PagerRead ABI mismatch with native_read.c");
+  return flashnext_batch_pread(reads.data(), static_cast<int32_t>(reads.size()), width);
 }
 
 }  // namespace veystrix

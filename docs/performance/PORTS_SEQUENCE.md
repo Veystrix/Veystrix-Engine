@@ -35,8 +35,12 @@ The source's 16–22 tok/s came from three things. We can only port one:
   fails closed (-1) when the slot pool is exhausted. Zero GPU, pure function.
 - [x] `cpp/decode/tests/test_io_pager.cpp` — bit-exact/determinism/fail-closed test:
   **ctest 1/1 passed**.
-- [ ] TODO: `run_batched_reads` C shim over `native_read.c`; zero-copy `mx::array` wrap;
-  opt-in Python flag; guarded A/B (needs owner permission).
+- [x] `run_batched_reads` wired to the existing `native_read.c` `flashnext_batch_pread`
+  (ABI-matched 32-byte PagerRead struct), bit-exact.
+- [x] `test_pager_read.cpp`: writes a fake expert file, plans a route with dupes +
+  a resident expert, reads via native batched pread, wraps a slot zero-copy as
+  `mx::array`, confirms bytes identical. **ctest 2/2 passed** (`io_pager`, `pager_read`).
+- [ ] TODO: opt-in Python flag + engine hookup; guarded A/B (needs owner permission).
 - Honest expectation: this alone cannot reach 5+/15+; it is the seed of the full port.
 
 ## Per-port gate (all ports)

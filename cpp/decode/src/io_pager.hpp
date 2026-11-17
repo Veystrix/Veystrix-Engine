@@ -15,10 +15,11 @@ namespace veystrix {
 
 // A single expert-record read: read `length` bytes at `offset` into `dst`.
 struct PagerRead {
-  int fd;
+  int32_t fd;
+  int32_t pad;      // ABI padding to match flashnext_read in native_read.c
   int64_t offset;
   int64_t length;
-  uint8_t* dst;
+  uint64_t dst;     // uintptr of destination buffer
 };
 
 // Result of a remap: the cache slots assigned to each routed expert (in the

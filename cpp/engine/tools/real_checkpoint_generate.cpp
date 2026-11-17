@@ -83,6 +83,8 @@ struct Capture {
   bool enabled = false;
   bool use_local_gdn = false;
   bool copy_cross_shard = false;
+  bool moe_hash = false;
+  int current_step = -1;
   std::vector<std::string> names;
   std::vector<mx::array> arrays;
   void add(const char* name, mx::array a) {
@@ -193,6 +195,23 @@ void dump_gdn_states(const std::vector<DecoderFullLayerCache>& caches,
                  sha256_hex(cv.data<float>(), static_cast<size_t>(cv.size()) * sizeof(float)).c_str(),
                  sha256_hex(rs.data<float>(), static_cast<size_t>(rs.size()) * sizeof(float)).c_str());
   }
+}
+
+// Opt-in MoE diagnostics: hash raw expert bytes, routes, and MoE I/O.
+void dbg_emit(const char* tag, const void* data, size_t len) {
+  std::fprintf(stderr, "[MOEHASH] %s %s\n", tag,
+               sha256_hex(data, len).c_str());
+}
+void dbg_emit_array(const char* tag, const mx::array& a) {
+  mx::array f = mx::reshape(mx::astype(a, mx::float32), mx::Shape{-1});
+  mx::eval(f);
+  dbg_emit(tag, f.data<float>(), static_cast<size_t>(f.size()) * sizeof(float));
+}
+void dbg_emit_ints(const char* tag, const std::vector<int32_t>& v) {
+  dbg_emit(tag, v.data(), v.size() * sizeof(int32_t));
+}
+bool dbg_should_hash() {
+  return debug_capture::get().moe_hash && debug_capture::get().current_step <= 2;
 }
 
 // --------------------------------------------------------------------------- //
@@ -416,6 +435,10 @@ class CrossShardMoE {
   CrossShardMoE(const std::string& dir, const Config& cfg,
                 const std::string& prefix, int num_slots, int gs, int bits)
       : num_slots_(num_slots), group_size_(gs), bits_(bits) {
+    {
+      size_t p = prefix.find("layers.");
+      if (p != std::string::npos) layer_idx_ = std::stoi(prefix.substr(p + 7));
+    }
     static constexpr int K = 9;
     static const char* names[K] = {
         "gate_proj.weight", "gate_proj.scales", "gate_proj.biases",
@@ -553,6 +576,28 @@ class CrossShardMoE {
     if (!reads.empty() && veystrix::run_batched_reads(reads, 8) != 0)
       throw std::runtime_error("cross-shard batched read failed");
 
+    // OPT-IN: hash the ACTUAL expert bytes just read into the persistent slot
+    // buffers, plus the route, before they are wrapped/computed.
+    if (dbg_should_hash()) {
+      const int st = debug_capture::get().current_step;
+      char tag[160];
+      for (int i = 0; i < 9; ++i) {
+        size_t n = static_cast<size_t>(num_slots_) * static_cast<size_t>(t_[i].row_bytes);
+        std::snprintf(tag, sizeof(tag), "step%d L%d cross buf_read_t%d", st, layer_idx_, i);
+        dbg_emit(tag, buf_[i].get(), n);
+      }
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross route_ids", st, layer_idx_);
+      dbg_emit_ints(tag, ids);
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross route_scores", st, layer_idx_);
+      dbg_emit_array(tag, scores);
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross slots", st, layer_idx_);
+      dbg_emit_ints(tag, slots);
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross miss_e", st, layer_idx_);
+      dbg_emit_ints(tag, miss_e);
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross miss_s", st, layer_idx_);
+      dbg_emit_ints(tag, miss_s);
+    }
+
     std::vector<mx::array> a;
     a.reserve(9);
     for (int i = 0; i < 9; ++i) {
@@ -586,6 +631,17 @@ class CrossShardMoE {
                           mx::int32);
     mx::array out = moe_block(x, route_slots, scores, ew);
     mx::eval(out);
+    if (dbg_should_hash()) {
+      const int st = debug_capture::get().current_step;
+      char tag[160];
+      for (int i = 0; i < 9; ++i) {
+        size_t n = static_cast<size_t>(num_slots_) * static_cast<size_t>(t_[i].row_bytes);
+        std::snprintf(tag, sizeof(tag), "step%d L%d cross buf_after_eval_t%d", st, layer_idx_, i);
+        dbg_emit(tag, buf_[i].get(), n);
+      }
+      std::snprintf(tag, sizeof(tag), "step%d L%d cross moe_out", st, layer_idx_);
+      dbg_emit_array(tag, out);
+    }
     for (int32_t s : used) --slot_ref_[s];
     for (int32_t s : used) slot_last_[s] = ++tick_;
     return {out, slots, miss_e};
@@ -593,6 +649,7 @@ class CrossShardMoE {
 
  private:
   int num_slots_, group_size_, bits_;
+  int layer_idx_ = -1;
   std::map<std::string, int> fds_;
   std::vector<int> fd_of_;
   std::vector<xsmoe::TensorMeta> t_;
@@ -840,6 +897,12 @@ mx::array run_step(
       debug_capture::get().add(nm, branch);
     }
     hidden = inject(hidden, branch, ar.injection_weights);
+    if (dbg_should_hash()) {
+      char tag[160];
+      std::snprintf(tag, sizeof(tag), "step%d L%02d hidden_after_attn",
+                    debug_capture::get().current_step, l);
+      dbg_emit_array(tag, hidden);
+    }
     {
       char nm[64];
       std::snprintf(nm, sizeof(nm), "L%02d_hidden_attn", l);
@@ -872,6 +935,29 @@ mx::array run_step(
     }
 
     hidden = inject(hidden, moe, mr.injection_weights);
+    if (dbg_should_hash()) {
+      const int st = debug_capture::get().current_step;
+      const char* kind = L.stream ? "stream" : "cross";
+      char tag[160];
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s moe_in_m2d", st, l, kind);
+      dbg_emit_array(tag, m2d);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s gate_logits", st, l, kind);
+      dbg_emit_array(tag, gate_logits);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s route_indices", st, l, kind);
+      dbg_emit_array(tag, routes.indices);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s route_scores", st, l, kind);
+      dbg_emit_array(tag, routes.scores);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s slots", st, l, kind);
+      dbg_emit_ints(tag, sf.slots);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s misses", st, l, kind);
+      dbg_emit_ints(tag, sf.misses);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s moe_out", st, l, kind);
+      dbg_emit_array(tag, sf.output);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s moe2d", st, l, kind);
+      dbg_emit_array(tag, moe2d);
+      std::snprintf(tag, sizeof(tag), "step%d L%02d %s hidden_after_layer", st, l, kind);
+      dbg_emit_array(tag, hidden);
+    }
     {
       char nm[64];
       std::snprintf(nm, sizeof(nm), "L%02d_hidden", l);
@@ -1099,11 +1185,13 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   // step (mirrors Python's fresh per-step buffer) instead of reusing buf_[i].
   debug_capture::get().copy_cross_shard =
       std::getenv("REALGEN_CROSS_SHARD_COPY") != nullptr;
+  debug_capture::get().moe_hash = std::getenv("REALGEN_DEBUG_MOE") != nullptr;
   int pos = 0;
   std::optional<mx::array> logits;
   for (size_t i = 0; i < prompt.size(); ++i) {
     std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
     mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+    debug_capture::get().current_step = static_cast<int>(i);
     // Opt-in: capture only the LAST prefill step (the one whose logits feed
     // step 0). Disabled by default, so normal runs are byte-identical.
     debug_capture::get().enabled = dbg_requested && (i + 1 == prompt.size());

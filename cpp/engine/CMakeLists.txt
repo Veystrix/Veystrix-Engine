@@ -12,7 +12,7 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/sampling.cpp src/model_adapter.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx)
 set_target_properties(veystrix_engine PROPERTIES
@@ -40,6 +40,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Full GDN linear-attention layer bit-exact parity.
+add_executable(test_gdn_layer tests/test_gdn_layer.cpp)
+target_include_directories(test_gdn_layer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_gdn_layer PRIVATE veystrix_engine)
+set_target_properties(test_gdn_layer PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Final head (gated residual no-combine -> lm_head) bit-exact parity.
@@ -107,6 +114,10 @@ add_test(NAME model_adapter COMMAND test_model_adapter
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head/expected.npy")
   add_test(NAME final_head COMMAND test_final_head
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_gdn_layer/meta.json")
+  add_test(NAME gdn_layer COMMAND test_gdn_layer
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_gdn_layer")
 endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")

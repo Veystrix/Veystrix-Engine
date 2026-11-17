@@ -216,7 +216,10 @@ std::optional<mx::array> qsa_full_indexer(
   mx::array query_ends =
       mx::astype(mx::arange(past_len + 1, past_len + S + 1), mx::int32);
   // complete_counts = query_ends // compress_ratio             [S]
-  mx::array complete_counts = query_ends / ratio;
+  // NB: MLX C++ promotes int32 / int-scalar to float32; use floor_divide with
+  // an int32 divisor to reproduce Python's `//` exactly.
+  mx::array ratio_arr(ratio, mx::int32);
+  mx::array complete_counts = mx::floor_divide(query_ends, ratio_arr);
   // valid_blocks = arange(blocks)[None,None,:] < complete_counts[None,:,None]
   mx::array valid = mx::less(
       mx::expand_dims(mx::expand_dims(
@@ -234,7 +237,7 @@ std::optional<mx::array> qsa_full_indexer(
 
   // token_indices = arange(key_len); token_blocks = token_indices // ratio
   mx::array token_indices = mx::astype(mx::arange(key_len), mx::int32);
-  mx::array token_blocks = token_indices / ratio;
+  mx::array token_blocks = mx::floor_divide(token_indices, ratio_arr);
 
   // selected_tokens = any(token_blocks[None,None,None,:] ==
   //                        selected_blocks[..., None], axis=2)

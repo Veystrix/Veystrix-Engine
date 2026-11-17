@@ -31,7 +31,9 @@ layers, 128 routed experts/layer, top-6, Q4 affine G64. Decode ~7 tok/s (436 MB/
 token, 181 ms/token: I/O 123ms=68%, host 27.8%). Expert = 5,612,544 B. TARGET 15+.
 
 HARD RULE: NO QUALITY LOSS. Bit-identical tokens, BF16 rounding, Q4 G32/G64, exact
-top-10/512 and top-9/240 routing. Any logit/token change = OUT.
+top-10/512 (Qwen) and top-6/128 (Nemotron Lightning, Model B) routing.
+Any logit/token change = OUT. NOTE: an older line in our briefs said "top-9/240";
+that is the OTHER Nemotron (Bolt 74B-A9B, 240 experts/layer, top-9), NOT Model B.
 
 ================================================================================
 2. THE HARD MEASUREMENTS (do not ignore these)

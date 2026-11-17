@@ -1,0 +1,50 @@
+[
+  {
+    "dir": "case0_float32_small",
+    "n_heads": 2,
+    "kv_heads": 1,
+    "head_dim": 16,
+    "compress_ratio": 2,
+    "eps": 1e-06,
+    "B": 1,
+    "S": 8,
+    "H": 55,
+    "blocks": 4,
+    "token_budget": 8,
+    "block_topk": 4,
+    "dtype": "mlx.core.float32",
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case1_bfloat16_decode",
+    "n_heads": 4,
+    "kv_heads": 1,
+    "head_dim": 32,
+    "compress_ratio": 4,
+    "eps": 1e-06,
+    "B": 1,
+    "S": 16,
+    "H": 103,
+    "blocks": 4,
+    "token_budget": 16,
+    "block_topk": 4,
+    "dtype": "mlx.core.bfloat16",
+    "mlx_version": "0.32.2"
+  },
+  {
+    "dir": "case2_float16_batch2",
+    "n_heads": 3,
+    "kv_heads": 1,
+    "head_dim": 24,
+    "compress_ratio": 3,
+    "eps": 1e-06,
+    "B": 2,
+    "S": 12,
+    "H": 79,
+    "blocks": 4,
+    "token_budget": 12,
+    "block_topk": 4,
+    "dtype": "mlx.core.float16",
+    "mlx_version": "0.32.2"
+  }
+]

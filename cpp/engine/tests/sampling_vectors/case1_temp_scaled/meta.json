@@ -1,0 +1,14 @@
+{
+  "name": "case1_temp_scaled",
+  "vocab": 64,
+  "temperature": 0.7,
+  "top_p": 1.0,
+  "top_k": 0,
+  "min_p": 0.0,
+  "presence_penalty": 0.0,
+  "seen": [],
+  "seed": 12,
+  "has_ids": false,
+  "masked_len": 64,
+  "mlx_version": "0.32.2"
+}

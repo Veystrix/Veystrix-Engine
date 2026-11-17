@@ -1,0 +1,10 @@
+case0_temp_only
+case1_temp_scaled
+case2_topk_only
+case3_minp_only
+case4_topp_only
+case5_thinking_full
+case6_presence_full
+case7_presence_topk
+case8_topk_one
+case9_dominant_nucleus

@@ -1,0 +1,14 @@
+{
+  "name": "case3_minp_only",
+  "vocab": 48,
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "min_p": 0.2,
+  "presence_penalty": 0.0,
+  "seen": [],
+  "seed": 14,
+  "has_ids": false,
+  "masked_len": 48,
+  "mlx_version": "0.32.2"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "case2_topk_only",
+  "vocab": 64,
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": 20,
+  "min_p": 0.0,
+  "presence_penalty": 0.0,
+  "seen": [],
+  "seed": 13,
+  "has_ids": true,
+  "masked_len": 20,
+  "mlx_version": "0.32.2"
+}

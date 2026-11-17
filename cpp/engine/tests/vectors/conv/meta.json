@@ -1,0 +1,35 @@
+{
+  "dtype": "bfloat16",
+  "conv_input": {
+    "shape": [
+      2,
+      4,
+      256
+    ],
+    "dtype": "bfloat16"
+  },
+  "conv_weight": {
+    "shape": [
+      256,
+      4,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "expected": {
+    "shape": [
+      2,
+      1,
+      256
+    ],
+    "dtype": "bfloat16"
+  },
+  "expected_silu": {
+    "shape": [
+      2,
+      1,
+      256
+    ],
+    "dtype": "bfloat16"
+  }
+}

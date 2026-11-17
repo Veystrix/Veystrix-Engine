@@ -32,6 +32,33 @@ comparison (uint32 view), not tolerances.
 Evidence: `cd cpp/engine && rm -rf build && cmake -S . -B build && cmake --build
 build -j && ctest --test-dir build --output-on-failure` -> 5/5 passed.
 
+## Update 2026-11-17 (parallel subagent push): now 9/9 ctests pass
+
+Added and bit-exact-verified (each compared byte-for-byte to the real Python
+op/kernel path, integrated into CMake + ctest):
+- `gated_delta_step_kernel()` — the EXACT fused Metal kernel for the GDN
+  delta-rule recurrence (source extracted byte-identically from the Python
+  engine), y + state bit-identical to `gated_delta_kernel` (test `gdn_delta`).
+  NOTE: the ops path and the kernel are NOT bit-identical; decode uses the kernel.
+- `gdn_causal_conv_decode[_silu]()` — GDN causal-conv1d decode chain
+  (depthwise conv + silu), bit-exact on bf16/fp16 (`gdn_conv`).
+- QSA indexer pre-RoPE path (`qsa_indexer_pre_rope`, `qsa_rms_norm`) in
+  `src/qsa.cpp`, generic `QSAConfig` parameterization, bit-exact on 3 cases
+  (`qsa`). RoPE + block scoring + KV cache remain (highest-risk follow-ups).
+- Extended sampling in `src/sampling.cpp`: `sampling_mask`, `sampling_distribution`,
+  `sample_non_greedy` — bit-exact on 10 cases INCLUDING the seeded categorical
+  draw (Python and C++ MLX 0.32.2 produce identical draws for the same seed)
+  (`sampling`). Greedy remains in engine.cpp.
+
+Full suite: `cd cpp/engine && cmake -S . -B build && cmake --build build -j &&
+ctest --test-dir build --output-on-failure` -> 9/9 passed.
+
+Architecture decision (owner): the engine targets BOTH Qwen3.8-Flash-Next and
+Nemotron 3.5 Lightning and must be reusable for future models. MoE block has
+both SwiGLU (`moe_block`) and relu2 (`moe_block_relu2`) variants; QSA is a
+Qwen-family adapter (Nemotron uses Mamba/SSM + attention); core ops/IO/sampling
+are model-agnostic. See `docs/performance/CPP_ENGINE_INTEGRATION_PLAN.md`.
+
 ## What is NOT yet ported (the remaining large piece for a FULL standalone engine)
 
 The dominant per-token compute (routed MoE) is native and bit-exact. Still

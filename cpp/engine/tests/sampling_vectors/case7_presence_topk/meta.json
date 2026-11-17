@@ -1,0 +1,20 @@
+{
+  "name": "case7_presence_topk",
+  "vocab": 100,
+  "temperature": 1.0,
+  "top_p": 0.9,
+  "top_k": 10,
+  "min_p": 0.05,
+  "presence_penalty": 1.0,
+  "seen": [
+    0,
+    5,
+    19,
+    60,
+    88
+  ],
+  "seed": 18,
+  "has_ids": true,
+  "masked_len": 10,
+  "mlx_version": "0.32.2"
+}

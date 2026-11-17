@@ -12,7 +12,7 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/sampling.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx)
 set_target_properties(veystrix_engine PROPERTIES
@@ -42,6 +42,25 @@ target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# QSA indexer (pre-RoPE) bit-exact parity.
+add_executable(test_qsa tests/test_qsa.cpp)
+target_include_directories(test_qsa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_qsa PRIVATE veystrix_engine)
+set_target_properties(test_qsa PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Extended (non-greedy) sampling bit-exact parity, incl. seeded categorical draw.
+add_executable(test_sampling tests/test_sampling.cpp)
+target_link_libraries(test_sampling PRIVATE veystrix_engine)
+set_target_properties(test_sampling PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# GDN causal-conv1d decode chain bit-exact parity.
+add_executable(test_conv tests/test_conv.cpp)
+target_link_libraries(test_conv PRIVATE veystrix_engine)
+set_target_properties(test_conv PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # End-to-end native layer load (no Python feeding weights).
 add_executable(test_native_layer tests/test_native_layer.cpp)
 target_link_libraries(test_native_layer PRIVATE veystrix_engine)
@@ -57,6 +76,18 @@ add_test(NAME engine_relu2 COMMAND test_relu2_parity
 # GDN delta-rule kernel vs the exact Python gated_delta_kernel (bit-for-bit).
 add_test(NAME gdn_delta COMMAND test_gdn_delta
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/conv/meta.json")
+  add_test(NAME gdn_conv COMMAND test_conv
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/conv")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_qsa/cases.json")
+  add_test(NAME qsa COMMAND test_qsa
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_qsa")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors/cases.txt")
+  add_test(NAME sampling COMMAND test_sampling
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors")
+endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
   add_test(NAME engine_parity_real COMMAND test_engine_parity

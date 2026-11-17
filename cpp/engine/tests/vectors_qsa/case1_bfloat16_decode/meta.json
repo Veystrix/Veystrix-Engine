@@ -1,0 +1,15 @@
+{
+  "n_heads": 4,
+  "kv_heads": 1,
+  "head_dim": 32,
+  "compress_ratio": 4,
+  "eps": 1e-06,
+  "B": 1,
+  "S": 16,
+  "H": 103,
+  "blocks": 4,
+  "token_budget": 16,
+  "block_topk": 4,
+  "dtype": "mlx.core.bfloat16",
+  "mlx_version": "0.32.2"
+}

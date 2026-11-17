@@ -1,0 +1,14 @@
+{
+  "name": "case9_dominant_nucleus",
+  "vocab": 32,
+  "temperature": 1.0,
+  "top_p": 0.5,
+  "top_k": 0,
+  "min_p": 0.0,
+  "presence_penalty": 0.0,
+  "seen": [],
+  "seed": 20,
+  "has_ids": false,
+  "masked_len": 32,
+  "mlx_version": "0.32.2"
+}

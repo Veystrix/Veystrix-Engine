@@ -1,0 +1,991 @@
+// real_checkpoint_generate -- standalone C++ greedy generation from the REAL
+// Qwen3.8-Flash-Next MLX-4bit checkpoint, with no Python in the generation loop.
+//
+// WHAT THIS IS
+// ------------
+// Decisive integration evidence for the C++ engine rewrite: the 113 GB Q4
+// checkpoint's NON-expert dense weights are read straight from the safetensors
+// shards with mx::load_safetensors + mx::dequantize, every MoE layer is served
+// by a persistent StreamingMoE (real expert rows via the native pager), all 48
+// layers (GDN linear + QSA full attention, hyper-connections, shared experts)
+// are composed by the SAME primitives as `run_decoder_step_full`, and greedy
+// decoding runs token-by-token in C++. Per-step logit SHA-256 uses the exact
+// float32-little-endian convention of capture_real_reference.py.
+//
+// HONEST SCOPE (see the note in research_notes/Cerebras inference and IO
+// splitting/real_checkpoint_generate.md for the full write-up):
+//  * The decoder loop is a byte-for-byte adaptation of run_decoder_step_full
+//    with ONE substitution: the routed experts come from StreamingMoE::forward
+//    (slot-remapped gather_qmm) instead of a fully-resident ExpertWeights.
+//    run_decoder_step_full itself cannot accept streamed experts because it
+//    re-computes the raw router indices internally and would gather stale
+//    slots. Every other primitive call is identical.
+//  * Prefill is fed as sequential single-token steps (S=1). run_decoder_step's
+//    MoE reshape is [1,H]-only, so S>1 is not a supported shape; the GDN path
+//    is token-by-token anyway. Python's chunked prefill is a different path.
+//  * QSA indexer returns None for <2048 past tokens, so production uses dense
+//    causal attention. That is the fallback implemented here (the library's
+//    full_attention_forward throws on None). KV is dense, not int8 quantized.
+//  * PLE (layer 2), fused-Metal RoPE, quantized dense matmul, quantized shared
+//    expert, prompt prefix cache and MTP are NOT reproduced. Bit-exact parity
+//    with the Python reference is NOT expected; the parity checker reports the
+//    exact first divergent step without weakening the gate.
+//
+// USAGE
+// -----
+//   /tmp/real_gen <checkpoint-dir> <reference.json> <num_tokens> [flat-config]
+//
+// The 4th argument is optional. When omitted, the flat config is looked up at
+// <reference-dir>/real_config.txt (written by gen_real_config.py). That flat
+// config carries the tensor->shard map and the deterministic prompt ids.
+//
+// Build (from repo root): see the note / the handoff report.
+// Output: one line per generated token,
+//   step=<i> in=<token_in> out=<token_out> sha256=<64 hex>
+#include "decoder_full.hpp"
+#include "moe_stream.hpp"
+#include "io_pager.hpp"
+
+#include <mlx/mlx.h>
+
+#include <algorithm>
+#include <array>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace mx = mlx::core;
+using namespace veystrix::engine;
+
+// --------------------------------------------------------------------------- //
+// Self-contained SHA-256 (no OpenSSL/CommonCrypto linking needed).             //
+// Identical to veystrix_native_generate.cpp.                                   //
+// --------------------------------------------------------------------------- //
+namespace {
+
+struct Sha256 {
+  uint32_t h[8] = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                   0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
+
+  static uint32_t rotr(uint32_t x, int n) {
+    return (x >> n) | (x << (32 - n));
+  }
+
+  static void compress(uint32_t h[8], const uint8_t block[64]) {
+    static const uint32_t K[64] = {
+        0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u,
+        0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
+        0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u,
+        0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u,
+        0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu,
+        0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau,
+        0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u,
+        0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u,
+        0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu, 0x53380d13u,
+        0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
+        0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u,
+        0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
+        0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u,
+        0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
+        0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u,
+        0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u};
+    uint32_t w[64];
+    for (int i = 0; i < 16; ++i) {
+      w[i] = (uint32_t(block[4 * i]) << 24) |
+             (uint32_t(block[4 * i + 1]) << 16) |
+             (uint32_t(block[4 * i + 2]) << 8) | uint32_t(block[4 * i + 3]);
+    }
+    for (int i = 16; i < 64; ++i) {
+      uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
+    uint32_t e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int i = 0; i < 64; ++i) {
+      uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      uint32_t ch = (e & f) ^ ((~e) & g);
+      uint32_t t1 = hh + S1 + ch + K[i] + w[i];
+      uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+      uint32_t t2 = S0 + maj;
+      hh = g; g = f; f = e; e = d + t1;
+      d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+    h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  }
+};
+
+std::string sha256_hex(const void* data, size_t len) {
+  Sha256 s;
+  const size_t total = ((len + 9 + 63) / 64) * 64;
+  std::vector<uint8_t> buf(total, 0);
+  const uint8_t* in = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < len; ++i) buf[i] = in[i];
+  buf[len] = 0x80;
+  const uint64_t bits = uint64_t(len) * 8;
+  for (int i = 0; i < 8; ++i) buf[total - 1 - i] = uint8_t(bits >> (8 * i));
+  for (size_t i = 0; i < total; i += 64) Sha256::compress(s.h, buf.data() + i);
+  static const char* HD = "0123456789abcdef";
+  std::string out(64, '0');
+  for (int i = 0; i < 8; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      out[i * 8 + j * 2] = HD[(s.h[i] >> (28 - 8 * j)) & 0xf];
+      out[i * 8 + j * 2 + 1] = HD[(s.h[i] >> (24 - 8 * j)) & 0xf];
+    }
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------------- //
+// Flat config parsing (produced by gen_real_config.py).                        //
+// --------------------------------------------------------------------------- //
+using Config = std::map<std::string, std::string>;
+
+Config read_config(const std::string& path) {
+  std::ifstream f(path);
+  if (!f) throw std::runtime_error("cannot open flat config: " + path);
+  Config cfg;
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    auto eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    std::string val = line.substr(eq + 1);
+    while (!val.empty() && (val.back() == '\r' || val.back() == '\n')) val.pop_back();
+    cfg[line.substr(0, eq)] = val;
+  }
+  return cfg;
+}
+
+int get_int(const Config& c, const std::string& key, int def = 0) {
+  auto it = c.find(key);
+  return it == c.end() ? def : std::stoi(it->second);
+}
+
+float get_float(const Config& c, const std::string& key, float def = 1e-6f) {
+  auto it = c.find(key);
+  return it == c.end() ? def : std::stof(it->second);
+}
+
+std::string get_str(const Config& c, const std::string& key,
+                    const std::string& def = "") {
+  auto it = c.find(key);
+  return it == c.end() ? def : it->second;
+}
+
+std::vector<std::string> split(const std::string& s, char sep) {
+  std::vector<std::string> out;
+  std::stringstream ss(s);
+  std::string item;
+  while (std::getline(ss, item, sep)) {
+    while (!item.empty() && item.back() == '\r') item.pop_back();
+    if (!item.empty()) out.push_back(item);
+  }
+  return out;
+}
+
+std::vector<int> split_ints(const std::string& s) {
+  std::vector<int> out;
+  for (const auto& x : split(s, ',')) out.push_back(std::stoi(x));
+  return out;
+}
+
+// --------------------------------------------------------------------------- //
+// Dense weight loader: only NON-expert tensors, grouped by shard.               //
+// --------------------------------------------------------------------------- //
+class DenseLoader {
+ public:
+  DenseLoader(const std::string& dir, const Config& cfg, int group_size, int bits)
+      : dir_(dir), group_size_(group_size), bits_(bits) {
+    for (const auto& [key, shard] : cfg) {
+      if (key.rfind("shard.", 0) == 0) shard_of_[key.substr(6)] = shard;
+    }
+  }
+
+  mx::array raw(const std::string& name) {
+    auto it = shard_of_.find(name);
+    if (it == shard_of_.end())
+      throw std::runtime_error("dense tensor not in shard map: " + name);
+    auto sit = shards_.find(it->second);
+    if (sit == shards_.end()) {
+      auto [weights, meta] = mx::load_safetensors(dir_ + "/" + it->second);
+      sit = shards_.emplace(it->second, std::move(weights)).first;
+      std::fprintf(stderr, "[load] shard %s (%zu tensors)\n",
+                   it->second.c_str(), sit->second.size());
+    }
+    auto tit = sit->second.find(name);
+    if (tit == sit->second.end())
+      throw std::runtime_error("tensor missing from shard: " + name);
+    return tit->second;
+  }
+
+  // Dequantize an affine-Q4 dense tensor (weight/scales/biases), or return the
+  // raw tensor when no `.scales` companion exists (norm gains, A_log, ...).
+  mx::array dense(const std::string& name) {
+    // `name` may already end in ".weight" (norm gains, gate, A_log, ...) or be
+    // the base of an affine-Q4 triplet. Probes always use the triplet BASE.
+    const std::string base =
+        name.size() > 7 && name.compare(name.size() - 7, 7, ".weight") == 0
+            ? name.substr(0, name.size() - 7)
+            : name;
+    if (shard_of_.count(base + ".scales") == 0) return raw(name);
+    mx::array w = raw(base + ".weight");
+    mx::array s = as_bf16(raw(base + ".scales"));
+    mx::array b = as_bf16(raw(base + ".biases"));
+    mx::array out = mx::dequantize(w, s, b, group_size_, bits_, "affine");
+    mx::eval(out);
+    return out;
+  }
+
+  // Quantized triplet kept in packed form (embed table + lm_head): dequantize
+  // only the gathered embedding row / use quantized_matmul for the head. This
+  // both saves ~2.5 GB and matches Python's nn.quantize'd Embedding/Linear.
+  struct QTriplet {
+    mx::array w, s, b;
+  };
+  QTriplet quantized(const std::string& name) {
+    return {raw(name + ".weight"), as_bf16(raw(name + ".scales")),
+            as_bf16(raw(name + ".biases"))};
+  }
+
+ private:
+  static mx::array as_bf16(mx::array a) {
+    if (static_cast<mx::Dtype::Val>(a.dtype()) == mx::uint16)
+      return mx::view(a, mx::bfloat16);
+    return a;
+  }
+
+  std::string dir_;
+  int group_size_, bits_;
+  std::map<std::string, std::string> shard_of_;
+  std::map<std::string, std::unordered_map<std::string, mx::array>> shards_;
+};
+
+// --------------------------------------------------------------------------- //
+// Cross-shard streaming MoE.                                                    //
+// The shared StreamingMoE fails closed when a layer's 9 expert tensors are not //
+// all in one shard; 12 of this checkpoint's 48 layers split one small scales/  //
+// biases tensor into the next shard. This class is the SAME slot-pool + native //
+// pager design with one fd per tensor, so it handles those layers without      //
+// touching the shared source. For single-shard layers we use StreamingMoE.     //
+// --------------------------------------------------------------------------- //
+namespace xsmoe {
+
+struct TensorMeta {
+  std::vector<int> shape;
+  int64_t offset = -1;   // relative to the shard's data section
+  int64_t row_bytes = 0;
+};
+
+bool find_value(const std::string& s, const std::string& key, size_t from,
+                size_t& value_begin) {
+  std::string pat = "\"" + key + "\"";
+  size_t p = s.find(pat, from);
+  if (p == std::string::npos) return false;
+  size_t colon = s.find(':', p + pat.size());
+  if (colon == std::string::npos) return false;
+  size_t b = colon + 1;
+  while (b < s.size() && (s[b] == ' ' || s[b] == '\t' || s[b] == '\n' || s[b] == '\r'))
+    ++b;
+  value_begin = b;
+  return true;
+}
+
+bool parse_int_array(const std::string& obj, const std::string& key,
+                     std::vector<int64_t>& out) {
+  size_t b;
+  if (!find_value(obj, key, 0, b)) return false;
+  if (b >= obj.size() || obj[b] != '[') return false;
+  size_t p = b + 1;
+  out.clear();
+  while (p < obj.size() && obj[p] != ']') {
+    if (obj[p] == '-' || (obj[p] >= '0' && obj[p] <= '9')) {
+      size_t q = p;
+      if (obj[q] == '-') ++q;
+      while (q < obj.size() && obj[q] >= '0' && obj[q] <= '9') ++q;
+      out.push_back(std::strtoll(obj.substr(p, q - p).c_str(), nullptr, 10));
+      p = q;
+    } else {
+      ++p;
+    }
+  }
+  return !out.empty();
+}
+
+bool parse_tensor(const std::string& header, const std::string& name,
+                  TensorMeta& out) {
+  std::string pat = "\"" + name + "\"";
+  size_t p = header.find(pat);
+  if (p == std::string::npos) return false;
+  size_t colon = header.find(':', p + pat.size());
+  size_t obj = header.find('{', colon);
+  if (obj == std::string::npos) return false;
+  size_t close = header.find('}', obj);
+  if (close == std::string::npos) return false;
+  std::string body = header.substr(obj, close - obj + 1);
+  std::vector<int64_t> shape, offs;
+  if (!parse_int_array(body, "shape", shape)) return false;
+  if (!parse_int_array(body, "data_offsets", offs) || offs.empty()) return false;
+  out.shape.assign(shape.begin(), shape.end());
+  out.offset = offs[0];
+  return true;
+}
+
+int64_t read_header(const std::string& path, std::string& header) {
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) throw std::runtime_error("cannot open shard: " + path);
+  unsigned char lenbuf[8];
+  ssize_t got = ::pread(fd, lenbuf, 8, 0);
+  if (got != 8) {
+    ::close(fd);
+    throw std::runtime_error("short safetensors length: " + path);
+  }
+  uint64_t n = 0;
+  for (int i = 0; i < 8; ++i) n |= static_cast<uint64_t>(lenbuf[i]) << (8 * i);
+  header.resize(n);
+  got = ::pread(fd, header.data(), n, 8);
+  ::close(fd);
+  if (got != static_cast<ssize_t>(n))
+    throw std::runtime_error("short safetensors header: " + path);
+  return static_cast<int64_t>(8 + n);
+}
+
+}  // namespace xsmoe
+
+class CrossShardMoE {
+ public:
+  CrossShardMoE(const std::string& dir, const Config& cfg,
+                const std::string& prefix, int num_slots, int gs, int bits)
+      : num_slots_(num_slots), group_size_(gs), bits_(bits) {
+    static constexpr int K = 9;
+    static const char* names[K] = {
+        "gate_proj.weight", "gate_proj.scales", "gate_proj.biases",
+        "up_proj.weight",   "up_proj.scales",   "up_proj.biases",
+        "down_proj.weight", "down_proj.scales", "down_proj.biases"};
+    static const bool is_weight[K] = {true, false, false, true, false, false,
+                                      true, false, false};
+    t_.resize(K);
+    absolute_.resize(K);
+    for (int i = 0; i < K; ++i) {
+      std::string key = prefix + "." + names[i];
+      auto it = cfg.find("shard." + key);
+      if (it == cfg.end())
+        throw std::runtime_error("no shard map for expert tensor: " + key);
+      std::string shard = it->second;
+      auto fit = fds_.find(shard);
+      if (fit == fds_.end()) {
+        int fd = ::open((dir + "/" + shard).c_str(), O_RDONLY);
+        if (fd < 0) throw std::runtime_error("cannot open expert shard: " + shard);
+        fit = fds_.emplace(shard, fd).first;
+      }
+      std::string header;
+      int64_t data_start = xsmoe::read_header(dir + "/" + shard, header);
+      if (!xsmoe::parse_tensor(header, key, t_[i]))
+        throw std::runtime_error("cannot parse expert tensor: " + key);
+      int64_t itemsize = is_weight[i] ? 4 : 2;
+      int64_t row = 1;
+      for (size_t d = 1; d < t_[i].shape.size(); ++d) row *= t_[i].shape[d];
+      t_[i].row_bytes = row * itemsize;
+      absolute_[i] = data_start + t_[i].offset;
+      fd_of_.push_back(fit->second);
+    }
+
+    buf_.resize(K);
+    for (int i = 0; i < K; ++i) {
+      size_t bytes = static_cast<size_t>(num_slots) *
+                     static_cast<size_t>(t_[i].row_bytes);
+      void* raw = nullptr;
+      if (::posix_memalign(&raw, 64, bytes) != 0)
+        throw std::runtime_error("posix_memalign failed (cross-shard MoE)");
+      std::memset(raw, 0, bytes);
+      buf_[i] = std::shared_ptr<uint8_t>(static_cast<uint8_t*>(raw),
+                                         [](uint8_t* p) { std::free(p); });
+    }
+    slot_expert_.assign(num_slots, -1);
+    slot_ref_.assign(num_slots, 0);
+    slot_last_.assign(num_slots, 0);
+    for (int s = 0; s < num_slots; ++s) free_slots_.push_back(s);
+  }
+
+  ~CrossShardMoE() {
+    for (auto& [shard, fd] : fds_)
+      if (fd >= 0) ::close(fd);
+  }
+
+  StreamForwardResult forward(const mx::array& x, const mx::array& route,
+                              const mx::array& scores) {
+    mx::array r = mx::astype(route, mx::int32);
+    mx::eval(r);
+    const int32_t* rp = r.data<int32_t>();
+    std::vector<int32_t> ids(rp, rp + r.size());
+    if (ids.empty()) throw std::runtime_error("empty route (cross-shard MoE)");
+    size_t T = route.shape().size() >= 2 ? route.shape(0) : 1;
+    size_t K = ids.size() / T;
+
+    std::vector<int32_t> needed = ids;
+    std::sort(needed.begin(), needed.end());
+    needed.erase(std::unique(needed.begin(), needed.end()), needed.end());
+
+    std::vector<int32_t> pairs;
+    for (int s = 0; s < num_slots_; ++s)
+      if (slot_expert_[s] >= 0) {
+        pairs.push_back(slot_expert_[s]);
+        pairs.push_back(s);
+      }
+    size_t misses = 0;
+    for (int32_t e : needed)
+      if (std::find(pairs.begin(), pairs.end(), e) == pairs.end()) ++misses;
+    if (misses > free_slots_.size()) {
+      std::vector<int> cand;
+      for (int s = 0; s < num_slots_; ++s) {
+        if (slot_expert_[s] < 0 || slot_ref_[s] > 0) continue;
+        if (std::find(needed.begin(), needed.end(), slot_expert_[s]) != needed.end())
+          continue;
+        cand.push_back(s);
+      }
+      std::sort(cand.begin(), cand.end(),
+                [&](int a, int b) { return slot_last_[a] < slot_last_[b]; });
+      for (int s : cand) {
+        if (misses <= free_slots_.size()) break;
+        slot_expert_[s] = -1;
+        free_slots_.push_back(s);
+      }
+    }
+    if (misses > free_slots_.size())
+      throw std::runtime_error("cross-shard MoE slot pool exhausted");
+    std::vector<int32_t> free_snapshot = free_slots_;
+
+    std::vector<veystrix::PagerRead> reads;
+    std::vector<int32_t> slots;
+    for (int i = 0; i < 9; ++i) {
+      veystrix::PagerPlan plan = veystrix::plan_remap(
+          ids, pairs, free_snapshot, fd_of_[i], absolute_[i], t_[i].row_bytes,
+          buf_[i].get(), t_[i].row_bytes);
+      if (i == 0) {
+        slots = plan.slots;
+      } else if (plan.slots != slots) {
+        throw std::runtime_error("inconsistent slot plan across expert tensors");
+      }
+      for (auto& rd : plan.reads) reads.push_back(rd);
+    }
+
+    std::vector<int32_t> used = slots;
+    std::sort(used.begin(), used.end());
+    used.erase(std::unique(used.begin(), used.end()), used.end());
+    // Derive (expert, slot) misses from the first tensor's reads.
+    std::vector<int32_t> miss_e, miss_s;
+    int64_t off0 = absolute_[0], rb0 = t_[0].row_bytes;
+    uint8_t* base0 = buf_[0].get();
+    for (const auto& rd : reads) {
+      if (rd.offset < off0 || (rd.offset - off0) % rb0 != 0) continue;
+      int32_t e = static_cast<int32_t>((rd.offset - off0) / rb0);
+      int32_t s = static_cast<int32_t>(
+          (reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(rd.dst)) - base0) /
+          rb0);
+      miss_e.push_back(e);
+      miss_s.push_back(s);
+    }
+    for (int32_t s : used) ++slot_ref_[s];
+    for (size_t i = 0; i < miss_e.size(); ++i) {
+      slot_expert_[miss_s[i]] = miss_e[i];
+      auto it = std::find(free_slots_.begin(), free_slots_.end(), miss_s[i]);
+      if (it != free_slots_.end()) free_slots_.erase(it);
+    }
+    if (!reads.empty() && veystrix::run_batched_reads(reads, 8) != 0)
+      throw std::runtime_error("cross-shard batched read failed");
+
+    std::vector<mx::array> a;
+    a.reserve(9);
+    for (int i = 0; i < 9; ++i) {
+      mx::Shape shape(t_[i].shape.begin(), t_[i].shape.end());
+      shape[0] = num_slots_;
+      mx::Dtype dtype = (i % 3 == 0) ? mx::uint32 : mx::bfloat16;
+      auto keep = buf_[i];
+      a.emplace_back(buf_[i].get(), std::move(shape), dtype,
+                     [keep](void*) {});
+    }
+    ExpertWeights ew(Q4Projection(a[0], a[1], a[2]),
+                     Q4Projection(a[3], a[4], a[5]),
+                     Q4Projection(a[6], a[7], a[8]),
+                     group_size_, bits_);
+    mx::array route_slots(slots.begin(),
+                          mx::Shape{static_cast<int>(T), static_cast<int>(K)},
+                          mx::int32);
+    mx::array out = moe_block(x, route_slots, scores, ew);
+    mx::eval(out);
+    for (int32_t s : used) --slot_ref_[s];
+    for (int32_t s : used) slot_last_[s] = ++tick_;
+    return {out, slots, miss_e};
+  }
+
+ private:
+  int num_slots_, group_size_, bits_;
+  std::map<std::string, int> fds_;
+  std::vector<int> fd_of_;
+  std::vector<xsmoe::TensorMeta> t_;
+  std::vector<int64_t> absolute_;
+  std::vector<std::shared_ptr<uint8_t>> buf_;
+  std::vector<int32_t> slot_expert_, free_slots_;
+  std::vector<int> slot_ref_;
+  std::vector<uint64_t> slot_last_;
+  uint64_t tick_ = 0;
+};
+
+// --------------------------------------------------------------------------- //
+// Per-layer real weights.                                                      //
+// --------------------------------------------------------------------------- //
+struct RealLayer {
+  mx::array attn_norm_w, attn_down_w, attn_up_w, attn_inject_w;
+  mx::array mlp_norm_w, mlp_down_w, mlp_up_w, mlp_inject_w;
+  mx::array gate_w;
+  mx::array shared_gw, shared_uw, shared_dw, shared_glw;
+  std::optional<GDNWeights> gdn;
+  std::optional<FullAttentionWeights> full;
+  std::unique_ptr<StreamingMoE> stream;       // single-shard layers
+  std::unique_ptr<CrossShardMoE> cross;       // layers split across two shards
+  int top_k = 0;
+  AttnKind kind = AttnKind::Linear;
+
+  RealLayer(mx::array an, mx::array ad, mx::array au, mx::array ai,
+            mx::array mn, mx::array md, mx::array mu, mx::array mi,
+            mx::array gw, mx::array sg, mx::array su, mx::array sd,
+            mx::array sgl, std::optional<GDNWeights> g,
+            std::optional<FullAttentionWeights> f,
+            std::unique_ptr<StreamingMoE> st, std::unique_ptr<CrossShardMoE> cr,
+            int tk, AttnKind k)
+      : attn_norm_w(std::move(an)), attn_down_w(std::move(ad)),
+        attn_up_w(std::move(au)), attn_inject_w(std::move(ai)),
+        mlp_norm_w(std::move(mn)), mlp_down_w(std::move(md)),
+        mlp_up_w(std::move(mu)), mlp_inject_w(std::move(mi)),
+        gate_w(std::move(gw)), shared_gw(std::move(sg)),
+        shared_uw(std::move(su)), shared_dw(std::move(sd)),
+        shared_glw(std::move(sgl)), gdn(std::move(g)), full(std::move(f)),
+        stream(std::move(st)), cross(std::move(cr)), top_k(tk), kind(k) {}
+};
+
+struct RealHead {
+  mx::array norm_w, down_w, up_w;
+  DenseLoader::QTriplet lm;
+};
+
+// --------------------------------------------------------------------------- //
+// Dense (non-sparse) full-attention branch. The QSA indexer returns None for   //
+// <2048 past tokens; production then uses a causal mask. This mirrors          //
+// full_attention_forward() with that None path composed.                       //
+// --------------------------------------------------------------------------- //
+FullAttentionOutput full_attention_dense(
+    const mx::array& x, const FullAttentionWeights& w,
+    const FullAttentionConfig& cfg, FullAttentionCache& cache,
+    const mx::array& position_ids) {
+  const int B = static_cast<int>(x.shape(0));
+  const int S = static_cast<int>(x.shape(1));
+  const int Hq = cfg.n_heads, Hkv = cfg.kv_heads, D = cfg.head_dim;
+
+  mx::array qproj = mx::matmul(x, mx::transpose(w.q_w));
+  mx::array kproj = mx::matmul(x, mx::transpose(w.k_w));
+  mx::array vproj = mx::matmul(x, mx::transpose(w.v_w));
+
+  mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, Hq, 2 * D});
+  std::vector<mx::array> halves = mx::split(q4, 2, -1);
+  mx::array q = halves[0];
+  mx::array gate = mx::reshape(halves[1], mx::Shape{B, S, Hq * D});
+
+  // q_norm/k_norm gains are stored zero-centered; qsa_rms_norm adds the 1.0.
+  q = mx::transpose(qsa_rms_norm(q, w.q_norm_w, cfg.eps), {0, 2, 1, 3});
+  mx::array k = mx::transpose(
+      qsa_rms_norm(mx::reshape(kproj, mx::Shape{B, S, Hkv, D}), w.k_norm_w,
+                   cfg.eps),
+      {0, 2, 1, 3});
+  mx::array v = mx::transpose(
+      mx::reshape(vproj, mx::Shape{B, S, Hkv, D}), {0, 2, 1, 3});
+
+  q = qsa_apply_rope(q, position_ids, cfg.rope);
+  k = qsa_apply_rope(k, position_ids, cfg.rope);
+
+  if (!cache.keys.has_value()) {
+    cache.keys = k;
+    cache.values = v;
+  } else {
+    cache.keys = mx::concatenate({*cache.keys, k}, 2);
+    cache.values = mx::concatenate({*cache.values, v}, 2);
+  }
+
+  const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
+  mx::array out = mx::fast::scaled_dot_product_attention(
+      q, *cache.keys, *cache.values, scale, /*mask_mode=*/"causal",
+      /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
+  out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, Hq * D});
+  out = mx::matmul(out * mx::sigmoid(gate), mx::transpose(w.o_w));
+
+  cache.offset += S;
+  // Placeholder mask: this branch is the dense (indexer=None) fallback, so no
+  // sparse mask is produced. Only `.output` is consumed by the caller.
+  std::vector<int32_t> dummy{0};
+  mx::array mask(dummy.begin(), mx::Shape{1}, mx::int32);
+  return {out, mask};
+}
+
+inline mx::array inject(const mx::array& hidden, const mx::array& branch,
+                        const mx::array& inj) {
+  mx::array b4 = mx::expand_dims(branch, -2);
+  mx::array i4 = mx::expand_dims(inj, -1);
+  return hidden + mx::reshape(b4 * i4, hidden.shape());
+}
+
+// --------------------------------------------------------------------------- //
+// One decode step: run_decoder_step_full with the routed MoE served by          //
+// StreamingMoE. All other primitive calls and their order are identical.       //
+// --------------------------------------------------------------------------- //
+mx::array run_step(
+    const mx::array& input_embeddings,
+    const std::vector<RealLayer>& layers,
+    const RealHead& head,
+    const DecoderConfig& cfg,
+    const FullAttentionConfig& fa_cfg,
+    const mx::array& position_ids,
+    std::vector<DecoderFullLayerCache>& caches,
+    int group_size, int bits) {
+  mx::array hidden =
+      mx::tile(input_embeddings, std::vector<int>{1, 1, cfg.hc_count});
+
+  for (int l = 0; l < cfg.n_layers; ++l) {
+    const RealLayer& L = layers[l];
+
+    GatedResidualOutput ar = gated_residual(
+        hidden, L.attn_norm_w, L.attn_down_w, L.attn_up_w, L.attn_inject_w,
+        cfg.hc_count, cfg.hidden_size, cfg.eps);
+
+    mx::array branch = [&]() -> mx::array {
+      if (L.kind == AttnKind::Linear) {
+        GDNLayerOutput g = gdn_layer_forward(ar.mixed_input, *L.gdn,
+                                             caches[l].base.gdn, cfg.gdn);
+        caches[l].base.gdn = GDNCacheState(g.conv_state, g.recurrent_state);
+        return g.output;
+      }
+      return full_attention_dense(ar.mixed_input, *L.full, fa_cfg,
+                                  caches[l].full, position_ids)
+          .output;
+    }();
+    hidden = inject(hidden, branch, ar.injection_weights);
+
+    GatedResidualOutput mr = gated_residual(
+        hidden, L.mlp_norm_w, L.mlp_down_w, L.mlp_up_w, L.mlp_inject_w,
+        cfg.hc_count, cfg.hidden_size, cfg.eps);
+
+    mx::array m2d = mx::reshape(mr.mixed_input, mx::Shape{1, cfg.hidden_size});
+    mx::array gate_logits = mx::matmul(m2d, mx::transpose(L.gate_w));
+    RouterOutput routes = router(gate_logits, L.top_k, 0.0f);
+    StreamForwardResult sf =
+        L.stream ? L.stream->forward(m2d, routes.indices, routes.scores)
+                 : L.cross->forward(m2d, routes.indices, routes.scores);
+
+    // Non-zero dense shared expert (Qwen3_5MoeSparseMoeBlock combine).
+    mx::array sgl = mx::matmul(m2d, mx::transpose(L.shared_glw));
+    mx::array sg = mx::sigmoid(sgl);
+    mx::array g = mx::matmul(m2d, mx::transpose(L.shared_gw));
+    mx::array u = mx::matmul(m2d, mx::transpose(L.shared_uw));
+    mx::array s = mx::matmul(swiglu(g, u), mx::transpose(L.shared_dw));
+    mx::array moe2d = sf.output + sg * s;
+    mx::array moe = mx::reshape(moe2d, mx::Shape{1, 1, cfg.hidden_size});
+
+    hidden = inject(hidden, moe, mr.injection_weights);
+  }
+
+  // final_head with a quantized lm_head (matches nn.Linear after nn.quantize).
+  const int hc = cfg.hc_count, H = cfg.hidden_size;
+  mx::Shape gs{static_cast<int>(hidden.shape(0)),
+               static_cast<int>(hidden.shape(1)), hc, H};
+  mx::array w2d = mx::reshape(head.norm_w, mx::Shape{hc, H});
+  mx::array yg = mx::astype(mx::reshape(hidden, gs), mx::float32);
+  yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, true) + cfg.eps);
+  yg = yg * mx::astype(w2d, mx::float32);
+  mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
+  mx::array low =
+      mx::matmul(normed, mx::transpose(head.down_w)) / static_cast<float>(hc);
+  mx::array mix = mx::sigmoid(
+      mx::matmul(low * mx::sigmoid(low), mx::transpose(head.up_w)));
+  mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
+
+  return mx::quantized_matmul(mixed, head.lm.w, head.lm.s, head.lm.b,
+                              /*transpose=*/true, group_size, bits, "affine");
+}
+
+// --------------------------------------------------------------------------- //
+// Generation driver.                                                           //
+// --------------------------------------------------------------------------- //
+struct StepRecord {
+  int step;
+  int token_in;
+  int token_out;
+  std::string digest;
+};
+
+}  // namespace
+
+namespace {
+
+mx::array embed_token(const DenseLoader::QTriplet& embed, int token,
+                      int group_size, int bits, int hidden) {
+  std::vector<int32_t> ids{static_cast<int32_t>(token)};
+  mx::array idx(ids.begin(), mx::Shape{1}, mx::int32);
+  mx::array w = mx::take(embed.w, idx, 0);
+  mx::array s = mx::take(embed.s, idx, 0);
+  mx::array b = mx::take(embed.b, idx, 0);
+  mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
+  return mx::reshape(row, mx::Shape{1, 1, hidden});
+}
+
+std::vector<StepRecord> run_generation(const std::string& ckpt,
+                                       const Config& cfg, int num_tokens) {
+  const int n_layers = get_int(cfg, "n_layers");
+  const int H = get_int(cfg, "hidden_size");
+  const int hc_count = get_int(cfg, "hc_count");
+  const int hc_lowrank = get_int(cfg, "hc_lowrank");
+  const int vocab = get_int(cfg, "vocab");
+  const int top_k = get_int(cfg, "top_k");
+  const int group_size = get_int(cfg, "group_size", 32);
+  const int bits = get_int(cfg, "bits", 4);
+  const int num_slots = get_int(cfg, "num_slots", 16);
+  const float eps = get_float(cfg, "eps", 1e-6f);
+  const std::vector<int> prompt = split_ints(get_str(cfg, "prompt_ids"));
+  const std::vector<std::string> layer_types =
+      split(get_str(cfg, "layer_types"), ',');
+  if (static_cast<int>(layer_types.size()) != n_layers)
+    throw std::runtime_error("layer_types size != n_layers");
+
+  DecoderConfig dcfg;
+  dcfg.hidden_size = H;
+  dcfg.hc_count = hc_count;
+  dcfg.hc_lowrank = hc_lowrank;
+  dcfg.n_layers = n_layers;
+  dcfg.vocab = vocab;
+  dcfg.eps = eps;
+  dcfg.gdn = GDNConfig{H, get_int(cfg, "key_dim"),
+                       get_int(cfg, "value_dim"), get_int(cfg, "num_k_heads"),
+                       get_int(cfg, "num_v_heads"), get_int(cfg, "head_k_dim"),
+                       get_int(cfg, "head_v_dim"), get_int(cfg, "conv_kernel"),
+                       eps, GDNActivation::Sigmoid};
+
+  FullAttentionConfig fa;
+  fa.n_heads = get_int(cfg, "n_heads");
+  fa.kv_heads = get_int(cfg, "kv_heads");
+  fa.head_dim = get_int(cfg, "head_dim");
+  fa.n_idx_heads = get_int(cfg, "n_idx_heads");
+  fa.n_idx_kv = get_int(cfg, "n_idx_kv", 1);
+  fa.idx_head_dim = get_int(cfg, "idx_head_dim");
+  fa.compress_ratio = get_int(cfg, "compress_ratio", 4);
+  fa.token_budget = get_int(cfg, "token_budget");
+  fa.eps = eps;
+  fa.rope.dim = get_int(cfg, "rope_dim");
+  fa.rope.base = get_float(cfg, "rope_base", 10000.0f);
+  fa.rope.style = get_str(cfg, "rope_style", "interleaved");
+  fa.rope.attention_scaling = get_float(cfg, "rope_scaling", 1.0f);
+  fa.rope.max_position_embeddings = get_int(cfg, "rope_max_pos", 2048);
+  {
+    auto sec = split(get_str(cfg, "rope_mrope"), ',');
+    for (auto& x : sec) fa.rope.mrope_section.push_back(std::stoi(x));
+  }
+
+  DenseLoader dl(ckpt, cfg, group_size, bits);
+  const std::string prefix_fmt = get_str(
+      cfg, "expert_prefix",
+      "language_model.model.layers.{L}.mlp.switch_mlp");
+  auto layer_prefix = [&](int l) {
+    std::string p = prefix_fmt;
+    size_t pos = p.find("{L}");
+    p.replace(pos, 3, std::to_string(l));
+    return p;
+  };
+
+  std::vector<RealLayer> layers;
+  std::vector<DecoderFullLayerCache> caches;
+  layers.reserve(n_layers);
+  caches.reserve(n_layers);
+
+  const int conv_dim = 2 * dcfg.gdn.key_dim + dcfg.gdn.value_dim;
+  for (int l = 0; l < n_layers; ++l) {
+    const std::string b = "language_model.model.layers." + std::to_string(l) + ".";
+    const bool linear = layer_types[l] == "linear_attention";
+
+    mx::array anw = dl.dense(b + "attn_hyper_connection.hc_norm.weight");
+    mx::array adw = dl.dense(b + "attn_hyper_connection.input_mix_weight_down");
+    mx::array auw = dl.dense(b + "attn_hyper_connection.input_mix_weight_up");
+    mx::array aiw = dl.dense(b + "attn_hyper_connection.block_inject_weight");
+    mx::array mnw = dl.dense(b + "mlp_hyper_connection.hc_norm.weight");
+    mx::array mdw = dl.dense(b + "mlp_hyper_connection.input_mix_weight_down");
+    mx::array muw = dl.dense(b + "mlp_hyper_connection.input_mix_weight_up");
+    mx::array miw = dl.dense(b + "mlp_hyper_connection.block_inject_weight");
+    mx::array gate = dl.dense(b + "mlp.gate.weight");
+    mx::array sgw = dl.dense(b + "mlp.shared_expert.gate_proj");
+    mx::array suw = dl.dense(b + "mlp.shared_expert.up_proj");
+    mx::array sdw = dl.dense(b + "mlp.shared_expert.down_proj");
+    mx::array sglw = dl.dense(b + "mlp.shared_expert_gate.weight");
+
+    std::optional<GDNWeights> gdn;
+    std::optional<FullAttentionWeights> full;
+    if (linear) {
+      const std::string a = b + "linear_attn.";
+      gdn.emplace(dl.dense(a + "in_proj_qkv"), dl.dense(a + "in_proj_z"),
+                  dl.dense(a + "in_proj_b"), dl.dense(a + "in_proj_a"),
+                  dl.dense(a + "conv1d.weight"), dl.dense(a + "A_log"),
+                  dl.dense(a + "dt_bias"), dl.dense(a + "norm.weight"),
+                  dl.dense(a + "out_proj"));
+    } else {
+      const std::string a = b + "self_attn.";
+      full.emplace(dl.dense(a + "q_proj"), dl.dense(a + "k_proj"),
+                   dl.dense(a + "v_proj"), dl.dense(a + "o_proj"),
+                   dl.dense(a + "q_norm.weight"), dl.dense(a + "k_norm.weight"),
+                   dl.dense(a + "indexer.index_qk_proj"),
+                   dl.dense(a + "indexer.q_layernorm.weight"),
+                   dl.dense(a + "indexer.k_layernorm.weight"));
+    }
+
+    // Decide whether this layer's 9 expert tensors all live in one shard.
+    std::string ep = layer_prefix(l);
+    std::string first_shard;
+    bool split = false;
+    for (const char* part : {"gate_proj.weight", "gate_proj.scales",
+                             "gate_proj.biases", "up_proj.weight",
+                             "up_proj.scales", "up_proj.biases",
+                             "down_proj.weight", "down_proj.scales",
+                             "down_proj.biases"}) {
+      auto it = cfg.find("shard." + ep + "." + part);
+      if (it == cfg.end()) {
+        split = true;
+        break;
+      }
+      if (first_shard.empty()) first_shard = it->second;
+      else if (it->second != first_shard) split = true;
+    }
+
+    std::unique_ptr<StreamingMoE> stream;
+    std::unique_ptr<CrossShardMoE> cross;
+    if (split) {
+      cross = std::make_unique<CrossShardMoE>(ckpt, cfg, ep, num_slots,
+                                              group_size, bits);
+    } else {
+      stream = std::make_unique<StreamingMoE>(ckpt, l, num_slots, group_size,
+                                              bits, /*read_width=*/8, ep);
+    }
+    if ((l + 1) % 8 == 0 || l == n_layers - 1)
+      std::fprintf(stderr, "[load] prepared layer %d/%d%s\n", l + 1, n_layers,
+                   split ? " (cross-shard experts)" : "");
+
+    layers.emplace_back(
+        std::move(anw), std::move(adw), std::move(auw), std::move(aiw),
+        std::move(mnw), std::move(mdw), std::move(muw), std::move(miw),
+        std::move(gate), std::move(sgw), std::move(suw), std::move(sdw),
+        std::move(sglw), std::move(gdn), std::move(full), std::move(stream),
+        std::move(cross), top_k,
+        linear ? AttnKind::Linear : AttnKind::FullAttention);
+
+    GDNCacheState zero(
+        mx::zeros(mx::Shape{1, dcfg.gdn.conv_kernel - 1, conv_dim}, mx::float32),
+        mx::zeros(mx::Shape{1, dcfg.gdn.num_v_heads, dcfg.gdn.head_v_dim,
+                            dcfg.gdn.head_k_dim}, mx::float32));
+    caches.emplace_back(DecoderLayerCache(std::move(zero)));
+  }
+
+  RealHead head{
+      dl.dense("language_model.model.hyper_connection_mixer.hc_norm.weight"),
+      dl.dense("language_model.model.hyper_connection_mixer.input_mix_weight_down"),
+      dl.dense("language_model.model.hyper_connection_mixer.input_mix_weight_up"),
+      dl.quantized("language_model.lm_head")};
+  DenseLoader::QTriplet embed = dl.quantized("language_model.model.embed_tokens");
+  std::fprintf(stderr, "[load] all weights ready; starting generation\n");
+
+  std::vector<StepRecord> records;
+  records.reserve(num_tokens);
+
+  // Prefill: sequential single-token steps through the real stack. The logits
+  // after the last prompt token produce the first generated token.
+  int pos = 0;
+  std::optional<mx::array> logits;
+  for (size_t i = 0; i < prompt.size(); ++i) {
+    std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
+    mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+    logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
+                      layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
+  }
+  if (!logits.has_value())
+    throw std::runtime_error("empty prompt: no prefill logits");
+  int token = prompt.empty() ? 0 : prompt.back();
+
+  // Greedy decode steps. The prefill logits already give us step 0.
+  for (int step = 0; step < num_tokens; ++step) {
+    if (step > 0) {
+      std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
+      mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+      logits = run_step(embed_token(embed, token, group_size, bits, H), layers,
+                        head, dcfg, fa, pos_ids, caches, group_size, bits);
+    }
+
+    mx::array next = sample_greedy(*logits);
+    mx::eval(next);
+    int next_id = static_cast<int>(next.data<uint32_t>()[0]);
+
+    mx::array row = mx::reshape(mx::astype(*logits, mx::float32), mx::Shape{-1});
+    mx::eval(row);
+    std::string digest = sha256_hex(
+        row.data<float>(), static_cast<size_t>(row.size()) * sizeof(float));
+
+    records.push_back({step, token, next_id, digest});
+    std::fprintf(stderr, "[step %d] in=%d out=%d sha=%s\n", step, token,
+                 next_id, digest.c_str());
+    token = next_id;
+  }
+  return records;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 4) {
+    std::fprintf(stderr,
+                 "usage: %s <checkpoint-dir> <reference.json> <num_tokens> "
+                 "[flat-config]\n", argv[0]);
+    return 2;
+  }
+  const std::string ckpt = argv[1];
+  const std::string reference = argv[2];
+  const int num_tokens = std::atoi(argv[3]);
+
+  std::string config_path = argc >= 5 ? argv[4] : "";
+  if (config_path.empty()) {
+    // Derive <reference-dir>/real_config.txt (written by gen_real_config.py).
+    size_t slash = reference.find_last_of('/');
+    config_path = (slash == std::string::npos ? std::string(".")
+                                              : reference.substr(0, slash)) +
+                  "/real_config.txt";
+  }
+  try {
+    Config cfg = read_config(config_path);
+    if (cfg.empty())
+      throw std::runtime_error(
+          "empty flat config; run gen_real_config.py first: " + config_path);
+    if (get_int(cfg, "prompt_tokens", 0) == 0)
+      throw std::runtime_error("flat config has no prompt_ids");
+    std::vector<StepRecord> records = run_generation(ckpt, cfg, num_tokens);
+    for (const auto& r : records)
+      std::printf("step=%d in=%d out=%d sha256=%s\n", r.step, r.token_in,
+                  r.token_out, r.digest.c_str());
+    return 0;
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "real_checkpoint_generate failed: %s\n", e.what());
+    return 1;
+  }
+}

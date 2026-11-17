@@ -12,7 +12,7 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/sampling.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/sampling.cpp src/model_adapter.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx)
 set_target_properties(veystrix_engine PROPERTIES
@@ -40,6 +40,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Model-agnostic adapter config verification (Qwen + Nemotron + future).
+add_executable(test_model_adapter tests/test_model_adapter.cpp)
+target_include_directories(test_model_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_model_adapter PRIVATE veystrix_engine)
+set_target_properties(test_model_adapter PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # QSA indexer (pre-RoPE) bit-exact parity.
@@ -88,6 +95,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors/cases.txt")
   add_test(NAME sampling COMMAND test_sampling
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors")
 endif()
+add_test(NAME model_adapter COMMAND test_model_adapter
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_adapter_flat")
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
   add_test(NAME engine_parity_real COMMAND test_engine_parity

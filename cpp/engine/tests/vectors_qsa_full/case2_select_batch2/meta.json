@@ -1,0 +1,28 @@
+{
+  "n_heads": 2,
+  "kv_heads": 1,
+  "head_dim": 128,
+  "compress_ratio": 4,
+  "token_budget": 16,
+  "block_topk": 4,
+  "eps": 1e-06,
+  "B": 2,
+  "S": 2,
+  "H": 389,
+  "past_len": 20,
+  "key_len": 22,
+  "max_complete_blocks": 5,
+  "rotary_dim": 32,
+  "rope_base": 10000000.0,
+  "mrope_section": [
+    11,
+    11,
+    10
+  ],
+  "rope_style": "interleaved",
+  "attention_scaling": 1.0,
+  "max_position_embeddings": 2048,
+  "returned_none": false,
+  "dtype": "mlx.core.float32",
+  "mlx_version": "0.32.2"
+}

@@ -29,7 +29,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | Step | Method | Name | Phase | Target | Expectation | Gate | Status |
 |---|---|---|---|---|---|---|---|
 | 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | **DONE 2026-11-17:** host 6.1%, I/O wait 52.3% | guarded, clean | DONE |
-| 1 | #8 | High Power / AC mode | Free config | both | 1.4–2.17× | digest | PENDING |
+| 1 | #8 | High Power / AC mode | Free config | both | **not applicable:** already on AC, `lowpowermode 0`, and MacBook Air M4 has no High Power Mode | none needed | N/A — already optimal |
 | 2 | #7 | MLX command-buffer limits | Free config | decode | **A/B measured:** Qwen decode unresolved + TTFT +0.86 s regression; Nemotron decode **−0.5 tok/s resolved regression** | digest identical | REJECTED on our 16 GB M4 |
 | 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
 | 4 | #10 | `async_eval` one-step-ahead | Free config | decode | +50% at 4-bit | digest | PENDING |
@@ -82,6 +82,11 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 ---
 
 ## Phase 1 — Free, bit-exact config (Steps 1–4)
+
+**Step 1 — Method #8 NOT APPLICABLE (checked 2026-11-17).** Machine is a MacBook Air M4
+(`hw.model Mac16,12`): already on AC, `pmset lowpowermode 0`, and this model has no High Power
+Mode (that is MacBook Pro M1 Pro/Max+/Mac Studio only). The source's 1.4–2.17× compares
+Low-Power-on vs off; our state is already the "off/fast" side. No A/B possible or needed.
 
 **Step 2 A/B — Method #7 MEASURED & REJECTED 2026-11-17.** Both guarded, 3 rounds, digest identical.
 - Qwen (`results/flashnext/20261117-145953-performance-v2-flag-flashnext-mlx-auto-buffer-caps-manual/`):

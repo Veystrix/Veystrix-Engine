@@ -82,8 +82,27 @@ Owner asked (2026-11-17) whether C++ decode applies to Nemotron. It is a differe
   `route_sync_and_copy_ms` (host/sync) vs `expert_dispatch_and_wait_ms` (I/O wait), and enables
   `VEYSTRIX_BENCH_TOKEN_DIGEST=1` + `VEYSTRIX_BENCH_LOGIT_DIGEST=1` quality gates.
 
-**Status:** needs its own guarded profile before any C++/sync decision. Permission requested but
-NOT granted as of this writing — no Nemotron hardware run has been performed.
+**GUARDED PROFILE — MEASURED 2026-11-17 (owner authorized "run Nemotron teste").**
+Harness `bench_decode_profile.py --tokens 96 --pool-gb 2`. Guard clean: floor 3.63 GiB,
+swap growth 0. Token + logit digests captured, status `diagnostic`. Saved:
+`results/nemotron35/20261117-140232-decode-profile-manual/`.
+
+| Per token (181.4 ms, 5.51 tok/s) | ms | share |
+|---|---|---|
+| `expert_dispatch_and_wait_ms` (I/O) | 123.1 | 67.9% |
+| `route_sync_and_copy_ms` (host sync + route copy) | 50.5 | 27.8% |
+| other | 7.8 | 4.3% |
+
+2208 MoE layer calls / 96 tokens = 23/token. Cache **hit rate only 43.7%**
+(5792 hits / 7456 misses) with a 2 GB pool; **436 MB read per token**.
+
+**Upper bound if ALL host route sync were removed:** 181.4 → 130.9 ms =
+5.51 → **7.64 tok/s (1.386×)**. Better than Qwen's 1.065×, but still far short of 15.
+I/O wait (67.9%) dominates, and the 43.7% hit rate shows the cache is undersized.
+
+**Nemotron decision:** C++ / sync removal is a real but modest lever here (~1.39× ceiling),
+NOT the path to 15 tok/s. Priority is increasing the expert cache hit rate (break-even rule,
+Method #5) and reducing I/O wait (Methods #2/#3/#5). C++ remains optional/low priority.
 
 ## Status
 - **Current phase:** Qwen investigation + profile complete; pivoted to Methods #2/#3

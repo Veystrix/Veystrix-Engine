@@ -70,6 +70,13 @@ Local evidence supersedes the reference's 41%-sync profile here:
 `models/flashnext/hostwindow.py:7-8` (added host work is free),
 `models/flashnext/adaptive_topk.py:89-103` (one sync per layer already enabled).
 
+**Nemotron profiled separately 2026-11-17** (guarded, digests captured, saved at
+`results/nemotron35/20261117-140232-decode-profile-manual/`): 5.51 tok/s, 181.4 ms/token;
+I/O wait 67.9%, host route sync 27.8%. C++ ceiling is 1.386× (7.64 tok/s) — real but
+far short of 15. Cache hit rate only 43.7% at a 2 GB pool, 436 MB read/token, so
+**cache sizing (Method #5) and I/O reduction (#2/#3) are the top Nemotron levers too.**
+See `docs/performance/CPP_DECODE_CHECKLIST.md`.
+
 ---
 
 ## Phase 1 — Free, bit-exact config (Steps 1–4)

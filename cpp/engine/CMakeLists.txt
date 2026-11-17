@@ -34,3 +34,8 @@ enable_testing()
 add_test(NAME engine_smoke COMMAND test_engine_smoke)
 add_test(NAME engine_parity COMMAND test_engine_parity
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
+# Real-checkpoint parity (requires gen_real_vectors.py to have been run).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")
+  add_test(NAME engine_parity_real COMMAND test_engine_parity
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real" --real)
+endif()

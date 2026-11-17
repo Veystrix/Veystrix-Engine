@@ -73,6 +73,28 @@ static int run_case(const std::string& root, const std::string& name, int G) {
 
 int main(int argc, char** argv) {
   std::string root = argc > 1 ? argv[1] : "tests/vectors";
+
+  // Single real-checkpoint case: pass "--real <dir>" (meta.json present, no cases.json).
+  if (argc > 2 && std::string(argv[2]) == "--real") {
+    std::string dir = argv[1];
+    auto load = [&](const char* n) { return mx::load(dir + "/" + n + ".npy"); };
+    mx::array gw = load("gw"), gs = load("gs"), gb = load("gb");
+    mx::array uw = load("uw"), us = load("us"), ub = load("ub");
+    mx::array dw = load("dw"), ds = load("ds"), db = load("db");
+    mx::array x = load("x"), route = load("route"), scores = load("scores");
+    mx::array expected = load("expected");
+    ExpertWeights w(Q4Projection(gw, gs, gb), Q4Projection(uw, us, ub),
+                    Q4Projection(dw, ds, db), 32, 4);
+    mx::array out = moe_block(x, route, scores, w);
+    mx::eval(out);
+    if (!bit_equal(out, expected)) {
+      std::fprintf(stderr, "[real] MOE BLOCK differs on real Qwen weights\n");
+      return 1;
+    }
+    std::printf("[real] OK (bit-identical on real Qwen expert weights)\n");
+    return 0;
+  }
+
   // Read cases.json for names + group sizes (minimal hand-rolled parse).
   std::ifstream f(root + "/cases.json");
   if (!f) { std::fprintf(stderr, "cases.json missing; run gen_vectors.py\n"); return 2; }

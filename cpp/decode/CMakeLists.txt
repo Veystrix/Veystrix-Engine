@@ -19,3 +19,14 @@ target_link_libraries(mlx_probe PRIVATE mlx)
 set_target_properties(mlx_probe PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib"
   INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Portable part of Method #11: expert id-remap + batched-read plan.
+add_library(io_pager STATIC src/io_pager.cpp)
+target_include_directories(io_pager PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(test_io_pager tests/test_io_pager.cpp)
+target_include_directories(test_io_pager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_io_pager PRIVATE io_pager)
+
+enable_testing()
+add_test(NAME io_pager COMMAND test_io_pager)

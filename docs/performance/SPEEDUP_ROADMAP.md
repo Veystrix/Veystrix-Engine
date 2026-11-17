@@ -28,7 +28,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 
 | Step | Method | Name | Phase | Target | Expectation | Gate | Status |
 |---|---|---|---|---|---|---|---|
-| 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | decides Step 6 vs 7 priority | no code change | PENDING |
+| 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | **DONE 2026-11-17:** host 6.1%, I/O wait 52.3% | guarded, clean | DONE |
 | 1 | #8 | High Power / AC mode | Free config | both | 1.4–2.17× | digest | PENDING |
 | 2 | #7 | MLX command-buffer limits | Free config | decode | +11.9–13.7% | digest (source bit-identical) | PENDING |
 | 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
@@ -38,7 +38,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 7 | #3 | Per-expert coalescing / sidecar layout | Read path | decode+prefill | +20% decode, 9× fewer read-ops | digest | PENDING |
 | 8 | #4 | Next-layer router prefetch | Prefetch | decode | hit 84→95%, 9.17→9.73 | digest | PENDING |
 | 9 | #6 | Overlap / double-buffered async I/O | Overlap | decode | +32% (source bit-exact) | digest | PENDING |
-| 10 | #1 | Native / sync-removed decode path | Sync removal | decode | 9.0–9.6 tok/s (source, ≥64 GB) | raw logits + cache tensors | PENDING |
+| 10 | #1 | Native / sync-removed decode path | Sync removal | decode | **demoted:** local profile caps gain at 1.065× (3.55 tok/s); C++ cannot reach 5× here | raw logits + cache tensors | DEFERRED (measured low value) |
 | 11 | #14 | Wave-Partitional Prefill | Prefill | prefill | 2.28→5.65 tok/s | digest, fixed chunk boundaries | PENDING |
 | 12 | #13 | Prefix / prompt caching | Prefill | prefill | 4.94×–57× TTFT | digest, fixed chunking | PENDING |
 | 13 | #16 | Pre-packed fp32 prefill GEMM | Prefill | prefill | 1.44×, max-abs-diff 0 | digest (avoid BNNS Graph) | PENDING |
@@ -54,11 +54,21 @@ This is the execution ledger. We go **one method at a time**, in the order below
 
 ---
 
-## Phase 0 — Prerequisite: profile
+## Phase 0 — Prerequisite: profile — DONE 2026-11-17
 
-**Step 0 — profile the per-token split on our 16 GB M4.** No code change, no speed claim. Reproduce the reference profile: on the same model, GPU 27%, Python/`mx.eval` syncs 41%, SSD reads 29%, bookkeeping 3%. If our split resembles it, Step 10 (sync removal) jumps ahead of Steps 6–9; if SSD dominates, the read-path steps take priority. Record the profile in `results/...` and note the decision here before starting Step 1.
+**Step 0 measured (guarded, clean, token IDs identical across 3 passes).** Saved at
+`results/flashnext/20261117-host-window-profile/`. Per token (300.1 ms, 3.33 tok/s on
+this short-prompt harness): **I/O wait 156.86 ms = 52.3%**, all exclusive host time
+**18.22 ms = 6.1%** (largest: `route_tolist` 12.50 ms). Removing 100% of host work
+would yield only 3.55 tok/s (1.065×). Therefore:
 
-**Source:** `Jakevin/moe-offload` — https://github.com/Jakevin/moe-offload
+- **Step 10 (C++ decode / sync removal) is demoted to DEFERRED** — it cannot reach 5 tok/s.
+- **Read-path Steps 6–7 and prefetch/overlap Steps 8–9 are promoted** — they target the
+  52.3% I/O wait. See `docs/performance/CPP_DECODE_CHECKLIST.md` for full profile and pivot.
+
+Local evidence supersedes the reference's 41%-sync profile here:
+`models/flashnext/hostwindow.py:7-8` (added host work is free),
+`models/flashnext/adaptive_topk.py:89-103` (one sync per layer already enabled).
 
 ---
 

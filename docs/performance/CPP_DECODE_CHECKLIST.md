@@ -35,9 +35,36 @@
 - [x] **Critical contrary evidence:** `hostwindow.py:7-8` recorded that adding `mx.eval` + `tolist()` + host work was **free** (498.5 vs 499.3 ms/token) because both devices were idle. Production already does one sync/layer (`FLASHNEXT_ONE_SYNC=1`, `settings/launch.py:53`). The reference's 41% sync share may not apply to this codebase.
 - [x] No C++ safetensors loader exists; porting the full reference stack (~330 KB) is high effort with unproven payoff here.
 
-## Decision gate
-Before writing the full port, measure Veystrix's own per-token sync/SSD/GPU split with the existing `FLASHNEXT_HOST_WINDOW=1` profiler. This is a guarded hardware run and needs explicit owner permission. If host sync is already hidden, prefer the narrower native I/O path (Methods #2/#3) over the full C++ decode port.
+## Guard profile — MEASURED 2026-11-17 (owner authorized)
+Guarded run clean: floor 3.86 GiB, swap growth 0, compressor peak 4593 MB, no stop.
+Harness: `bench_host_window.py --tokens 24 --passes 3`, `FLASHNEXT_HOST_WINDOW=1`.
+Token IDs identical across all 3 passes. Saved:
+`results/flashnext/20261117-host-window-profile/` (log + guard JSONL).
+
+Per token (300.1 ms, 3.33 tok/s on this short-prompt harness):
+| Component | ms/token | share |
+|---|---|---|
+| `io_await` (shared, blocked on drive) | 156.86 | 52.3% |
+| `route_tolist` | 12.50 | 4.2% |
+| `to_mx_host` | 2.89 | 1.0% |
+| `keep_loop` | 1.93 | 0.6% |
+| `moe_issue_host` | 0.54 | 0.2% |
+| `plan_host` | 0.36 | 0.1% |
+| **all exclusive host time** | **18.22** | **6.1%** |
+
+**Upper bound if 100% of host work were removed:** 300.1 → 281.9 ms/token =
+3.33 → 3.55 tok/s = **1.065×**. A full C++ decode port cannot reach 5 tok/s on
+this hardware even in the impossible best case. The dominant cost is SSD I/O
+wait (52.3%), which C++ decode does not address.
+
+## DECISION — pivot
+Full C++ decode port is **DEFERRED / low priority**. The highest-value work is the
+native I/O path: Method #2 (explicit sorted, gap-merged pread) and Method #3
+(per-expert coalescing / sidecar), which target the 156.86 ms/token I/O wait.
+
+This is not a quality or correctness rejection — it is a measured value judgment.
+The C++ scaffold remains for later if I/O work changes the profile.
 
 ## Status
-- **Current phase:** investigation complete; awaiting decision gate
-- **Blocked on:** hardware run permission (for the profile and any A/B)
+- **Current phase:** investigation + profile complete; pivoted to Methods #2/#3
+- **Unblocked:** owner authorized this profile run; future A/B runs still need permission

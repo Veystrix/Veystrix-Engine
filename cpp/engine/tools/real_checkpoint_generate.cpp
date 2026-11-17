@@ -45,6 +45,8 @@
 #include "decoder_full.hpp"
 #include "moe_stream.hpp"
 #include "io_pager.hpp"
+#include "gdn_layer.hpp"
+#include "gdn_conv.h"
 
 #include <mlx/mlx.h>
 
@@ -79,6 +81,7 @@ using namespace veystrix::engine;
 namespace debug_capture {
 struct Capture {
   bool enabled = false;
+  bool use_local_gdn = false;
   std::vector<std::string> names;
   std::vector<mx::array> arrays;
   void add(const char* name, mx::array a) {
@@ -669,6 +672,71 @@ inline mx::array inject(const mx::array& hidden, const mx::array& branch,
 }
 
 // --------------------------------------------------------------------------- //
+// TOOL-LOCAL GDN forward for the opt-in determinism verification. Identical to
+// gdn_layer_forward except: (1) the fused mx::fast::metal_kernel delta step is
+// replaced by the ops-based gated_delta_step; (2) conv_state / recurrent_state
+// are mx::eval'd at every step boundary so the next step consumes a materialized
+// buffer instead of a 16-deep lazy graph. No shared primitive is modified.
+// --------------------------------------------------------------------------- //
+GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
+                                       const GDNCacheState& cache,
+                                       const GDNConfig& cfg) {
+  const int B = x.shape(0), S = x.shape(1);
+  const int H = cfg.hidden_size;
+  const int Hk = cfg.num_k_heads, Hv = cfg.num_v_heads;
+  const int Dk = cfg.head_k_dim, Dv = cfg.head_v_dim;
+  const int K = cfg.conv_kernel;
+  const int conv_dim = 2 * cfg.key_dim + cfg.value_dim;
+  const bool sigmoid = cfg.output_activation == GDNActivation::Sigmoid;
+
+  mx::array conv_state = cache.conv_state;
+  mx::array rec_state = cache.recurrent_state;
+  std::vector<mx::array> steps;
+  steps.reserve(S);
+
+  for (int t = 0; t < S; ++t) {
+    mx::array xt = mx::slice(x, mx::Shape{0, t, 0}, mx::Shape{B, t + 1, H});
+    mx::array mixed_qkv = mx::matmul(xt, mx::transpose(w.in_proj_qkv));
+    mx::array z = mx::matmul(xt, mx::transpose(w.in_proj_z));
+    mx::array b = mx::matmul(xt, mx::transpose(w.in_proj_b));
+    mx::array a = mx::matmul(xt, mx::transpose(w.in_proj_a));
+    z = mx::reshape(z, mx::Shape{B, 1, Hv, Dv});
+
+    mx::array conv_input = mx::concatenate({conv_state, mixed_qkv}, 1);
+    const int n_keep = K - 1;
+    const int Tconv = conv_input.shape(1);
+    conv_state = mx::contiguous(mx::slice(
+        conv_input, mx::Shape{0, Tconv - n_keep, 0}, mx::Shape{B, Tconv, conv_dim}));
+    mx::array conv_out = gdn_causal_conv_decode_silu(conv_input, w.conv1d_weight);
+
+    mx::array q = mx::slice(conv_out, mx::Shape{0, 0, 0}, mx::Shape{B, 1, cfg.key_dim});
+    mx::array k = mx::slice(conv_out, mx::Shape{0, 0, cfg.key_dim},
+                            mx::Shape{B, 1, 2 * cfg.key_dim});
+    mx::array v = mx::slice(conv_out, mx::Shape{0, 0, 2 * cfg.key_dim},
+                            mx::Shape{B, 1, conv_dim});
+    q = mx::reshape(q, mx::Shape{B, 1, Hk, Dk});
+    k = mx::reshape(k, mx::Shape{B, 1, Hk, Dk});
+    v = mx::reshape(v, mx::Shape{B, 1, Hv, Dv});
+
+    auto qk = gdn_normalize_qk(q, k);
+    auto gb = compute_g_beta(w.A_log, a, b, w.dt_bias);
+    auto step = gated_delta_step(qk.first, qk.second, v, gb.first, gb.second,
+                                 rec_state);
+    // Materialization barriers: both state tensors are concrete before the next
+    // token/layer reads them (breaks the lazy alias chain across prefill steps).
+    mx::eval(step.state);
+    rec_state = step.state;
+    mx::eval(conv_state);
+
+    mx::array normed = rms_norm_gated(step.y, w.norm_weight, z, cfg.eps, sigmoid);
+    mx::array flat = mx::reshape(normed, mx::Shape{B, 1, cfg.value_dim});
+    steps.push_back(mx::matmul(flat, mx::transpose(w.out_proj)));
+  }
+  mx::array out = (S == 1) ? steps[0] : mx::concatenate(steps, 1);
+  return {out, conv_state, rec_state};
+}
+
+// --------------------------------------------------------------------------- //
 // One decode step: run_decoder_step_full with the routed MoE served by          //
 // StreamingMoE. All other primitive calls and their order are identical.       //
 // --------------------------------------------------------------------------- //
@@ -693,8 +761,12 @@ mx::array run_step(
 
     mx::array branch = [&]() -> mx::array {
       if (L.kind == AttnKind::Linear) {
-        GDNLayerOutput g = gdn_layer_forward(ar.mixed_input, *L.gdn,
-                                             caches[l].base.gdn, cfg.gdn);
+        GDNLayerOutput g =
+            debug_capture::get().use_local_gdn
+                ? gdn_layer_forward_local(ar.mixed_input, *L.gdn,
+                                          caches[l].base.gdn, cfg.gdn)
+                : gdn_layer_forward(ar.mixed_input, *L.gdn,
+                                    caches[l].base.gdn, cfg.gdn);
         caches[l].base.gdn = GDNCacheState(g.conv_state, g.recurrent_state);
         return g.output;
       }
@@ -961,6 +1033,9 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   // Prefill: sequential single-token steps through the real stack. The logits
   // after the last prompt token produce the first generated token.
   const bool dbg_requested = std::getenv("REALGEN_DEBUG_HASHES") != nullptr;
+  // Opt-in fix: tool-local GDN path (ops delta step + state materialization)
+  // for every prefill/decode step when the debug flag is set.
+  debug_capture::get().use_local_gdn = dbg_requested;
   int pos = 0;
   std::optional<mx::array> logits;
   for (size_t i = 0; i < prompt.size(); ++i) {

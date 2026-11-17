@@ -53,6 +53,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,6 +69,27 @@
 
 namespace mx = mlx::core;
 using namespace veystrix::engine;
+
+// --------------------------------------------------------------------------- //
+// Opt-in localization instrumentation (REALGEN_DEBUG_HASHES=1). Off by default.
+// Captures the hidden state after every layer (plus branch / MoE / final mixed
+// / final logits) on the LAST prefill step, then hashes + NaN/Inf-counts them.
+// Used only by the determinism localization run; no effect when disabled.
+// --------------------------------------------------------------------------- //
+namespace debug_capture {
+struct Capture {
+  bool enabled = false;
+  std::vector<std::string> names;
+  std::vector<mx::array> arrays;
+  void add(const char* name, mx::array a) {
+    if (!enabled) return;
+    names.emplace_back(name);
+    arrays.push_back(std::move(a));
+  }
+  void clear() { names.clear(); arrays.clear(); }
+};
+Capture& get() { static Capture c; return c; }
+}  // namespace debug_capture
 
 // --------------------------------------------------------------------------- //
 // Self-contained SHA-256 (no OpenSSL/CommonCrypto linking needed).             //
@@ -680,7 +702,18 @@ mx::array run_step(
                                   caches[l].full, position_ids)
           .output;
     }();
+    {
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "L%02d_branch_%s", l,
+                    L.kind == AttnKind::Linear ? "gdn" : "qsa");
+      debug_capture::get().add(nm, branch);
+    }
     hidden = inject(hidden, branch, ar.injection_weights);
+    {
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "L%02d_hidden_attn", l);
+      debug_capture::get().add(nm, hidden);
+    }
 
     GatedResidualOutput mr = gated_residual(
         hidden, L.mlp_norm_w, L.mlp_down_w, L.mlp_up_w, L.mlp_inject_w,
@@ -701,8 +734,18 @@ mx::array run_step(
     mx::array s = mx::matmul(swiglu(g, u), mx::transpose(L.shared_dw));
     mx::array moe2d = sf.output + sg * s;
     mx::array moe = mx::reshape(moe2d, mx::Shape{1, 1, cfg.hidden_size});
+    {
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "L%02d_moe", l);
+      debug_capture::get().add(nm, moe);
+    }
 
     hidden = inject(hidden, moe, mr.injection_weights);
+    {
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "L%02d_hidden", l);
+      debug_capture::get().add(nm, hidden);
+    }
   }
 
   // final_head with a quantized lm_head (matches nn.Linear after nn.quantize).
@@ -719,9 +762,13 @@ mx::array run_step(
   mx::array mix = mx::sigmoid(
       mx::matmul(low * mx::sigmoid(low), mx::transpose(head.up_w)));
   mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
+  debug_capture::get().add("final_mixed", mixed);
 
-  return mx::quantized_matmul(mixed, head.lm.w, head.lm.s, head.lm.b,
-                              /*transpose=*/true, group_size, bits, "affine");
+  mx::array logits =
+      mx::quantized_matmul(mixed, head.lm.w, head.lm.s, head.lm.b,
+                           /*transpose=*/true, group_size, bits, "affine");
+  debug_capture::get().add("final_logits", logits);
+  return logits;
 }
 
 // --------------------------------------------------------------------------- //
@@ -913,13 +960,37 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
 
   // Prefill: sequential single-token steps through the real stack. The logits
   // after the last prompt token produce the first generated token.
+  const bool dbg_requested = std::getenv("REALGEN_DEBUG_HASHES") != nullptr;
   int pos = 0;
   std::optional<mx::array> logits;
   for (size_t i = 0; i < prompt.size(); ++i) {
     std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
     mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+    // Opt-in: capture only the LAST prefill step (the one whose logits feed
+    // step 0). Disabled by default, so normal runs are byte-identical.
+    debug_capture::get().enabled = dbg_requested && (i + 1 == prompt.size());
+    if (debug_capture::get().enabled) debug_capture::get().clear();
     logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
                       layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
+    debug_capture::get().enabled = false;
+  }
+  if (dbg_requested) {
+    auto& dbg = debug_capture::get();
+    std::fprintf(stderr, "[DBG] captured %zu arrays\n", dbg.arrays.size());
+    for (size_t k = 0; k < dbg.arrays.size(); ++k) {
+      mx::array f = mx::reshape(mx::astype(dbg.arrays[k], mx::float32), mx::Shape{-1});
+      mx::eval(f);
+      const float* p = f.data<float>();
+      size_t nan = 0, inf = 0;
+      for (size_t j = 0; j < f.size(); ++j) {
+        if (std::isnan(p[j])) ++nan;
+        else if (std::isinf(p[j])) ++inf;
+      }
+      std::fprintf(stderr, "[DBG %03zu] %-20s sha=%s nan=%zu inf=%zu\n", k,
+                   dbg.names[k].c_str(),
+                   sha256_hex(p, f.size() * sizeof(float)).c_str(), nan, inf);
+    }
+    dbg.clear();
   }
   if (!logits.has_value())
     throw std::runtime_error("empty prompt: no prefill logits");

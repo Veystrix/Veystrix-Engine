@@ -12,7 +12,7 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx)
 set_target_properties(veystrix_engine PROPERTIES
@@ -40,6 +40,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Full multi-layer decoder loop bit-exact parity (real mlx_vlm modules).
+add_executable(test_decoder tests/test_decoder.cpp)
+target_include_directories(test_decoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_decoder PRIVATE veystrix_engine)
+set_target_properties(test_decoder PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Full QSA indexer (RoPE + block scoring + KV cache) bit-exact parity.
@@ -129,6 +136,10 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_qsa_full/cases.json")
   add_test(NAME qsa_full COMMAND test_qsa_full
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_qsa_full")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder/meta.json")
+  add_test(NAME decoder COMMAND test_decoder
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder")
 endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")

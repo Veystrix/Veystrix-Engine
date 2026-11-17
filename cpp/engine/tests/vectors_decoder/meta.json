@@ -1,0 +1,560 @@
+{
+  "config": {
+    "hidden_size": 32,
+    "hc_count": 2,
+    "hc_lowrank": 16,
+    "n_layers": 2,
+    "key_dim": 32,
+    "value_dim": 64,
+    "num_k_heads": 1,
+    "num_v_heads": 2,
+    "head_k_dim": 32,
+    "head_v_dim": 32,
+    "conv_kernel": 4,
+    "n_experts": 8,
+    "top_k": 2,
+    "group_size": 32,
+    "bits": 4,
+    "moe_intermediate": 32,
+    "vocab": 64,
+    "eps": 1e-06,
+    "output_gate_type": "sigmoid"
+  },
+  "seed": 20261117,
+  "mlx_version": "0.32.2",
+  "tokens": {
+    "shape": [
+      1,
+      1
+    ],
+    "dtype": "int32"
+  },
+  "embeddings": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "embed_w": {
+    "shape": [
+      64,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "lm_head_w": {
+    "shape": [
+      64,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "mix_norm_w": {
+    "shape": [
+      64
+    ],
+    "dtype": "float32"
+  },
+  "mix_down_w": {
+    "shape": [
+      16,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "mix_up_w": {
+    "shape": [
+      64,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "expected_logits": {
+    "shape": [
+      1,
+      1,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "expected_logits_primitive": {
+    "shape": [
+      1,
+      1,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_attn_norm_w": {
+    "shape": [
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_attn_down_w": {
+    "shape": [
+      16,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_attn_up_w": {
+    "shape": [
+      64,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "L0_attn_inject_w": {
+    "shape": [
+      2,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_gdn_qkv": {
+    "shape": [
+      128,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_gdn_z": {
+    "shape": [
+      64,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_gdn_b": {
+    "shape": [
+      2,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_gdn_a": {
+    "shape": [
+      2,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_gdn_conv": {
+    "shape": [
+      128,
+      4,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_gdn_A_log": {
+    "shape": [
+      2
+    ],
+    "dtype": "float32"
+  },
+  "L0_gdn_dt_bias": {
+    "shape": [
+      2
+    ],
+    "dtype": "float32"
+  },
+  "L0_gdn_norm": {
+    "shape": [
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L0_gdn_out": {
+    "shape": [
+      32,
+      64
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_conv_state": {
+    "shape": [
+      1,
+      3,
+      128
+    ],
+    "dtype": "float32"
+  },
+  "L0_rec_state": {
+    "shape": [
+      1,
+      2,
+      32,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L0_mlp_norm_w": {
+    "shape": [
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_mlp_down_w": {
+    "shape": [
+      16,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_mlp_up_w": {
+    "shape": [
+      64,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "L0_mlp_inject_w": {
+    "shape": [
+      2,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L0_gate_w": {
+    "shape": [
+      8,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L0_expert_gw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L0_expert_gs": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_expert_gb": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_expert_uw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L0_expert_us": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_expert_ub": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_expert_dw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L0_expert_ds": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_expert_db": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L0_exp_gdn_out": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L0_exp_moe_out": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L0_exp_hidden": {
+    "shape": [
+      1,
+      1,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_attn_norm_w": {
+    "shape": [
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_attn_down_w": {
+    "shape": [
+      16,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_attn_up_w": {
+    "shape": [
+      64,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "L1_attn_inject_w": {
+    "shape": [
+      2,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_gdn_qkv": {
+    "shape": [
+      128,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_gdn_z": {
+    "shape": [
+      64,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_gdn_b": {
+    "shape": [
+      2,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_gdn_a": {
+    "shape": [
+      2,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_gdn_conv": {
+    "shape": [
+      128,
+      4,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_gdn_A_log": {
+    "shape": [
+      2
+    ],
+    "dtype": "float32"
+  },
+  "L1_gdn_dt_bias": {
+    "shape": [
+      2
+    ],
+    "dtype": "float32"
+  },
+  "L1_gdn_norm": {
+    "shape": [
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L1_gdn_out": {
+    "shape": [
+      32,
+      64
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_conv_state": {
+    "shape": [
+      1,
+      3,
+      128
+    ],
+    "dtype": "float32"
+  },
+  "L1_rec_state": {
+    "shape": [
+      1,
+      2,
+      32,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L1_mlp_norm_w": {
+    "shape": [
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_mlp_down_w": {
+    "shape": [
+      16,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_mlp_up_w": {
+    "shape": [
+      64,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "L1_mlp_inject_w": {
+    "shape": [
+      2,
+      64
+    ],
+    "dtype": "float32"
+  },
+  "L1_gate_w": {
+    "shape": [
+      8,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L1_expert_gw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L1_expert_gs": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_expert_gb": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_expert_uw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L1_expert_us": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_expert_ub": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_expert_dw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "L1_expert_ds": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_expert_db": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "L1_exp_gdn_out": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L1_exp_moe_out": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "L1_exp_hidden": {
+    "shape": [
+      1,
+      1,
+      64
+    ],
+    "dtype": "float32"
+  }
+}

@@ -32,7 +32,17 @@ comparison (uint32 view), not tolerances.
 Evidence: `cd cpp/engine && rm -rf build && cmake -S . -B build && cmake --build
 build -j && ctest --test-dir build --output-on-failure` -> 5/5 passed.
 
-## Update 2026-11-17 (second parallel push): now 13/13 ctests pass
+## Update 2026-11-17 (decoder milestone): now 14/14 ctests pass
+
+**Full multi-layer decoder loop is assembled and bit-exact** (`decoder`, 2 and 4
+layers, real mlx_vlm modules, per-layer logits + all intermediates byte-compared):
+`gated_residual` (attn HC) -> `gdn_layer_forward` -> inject -> `gated_residual`
+(mlp HC) -> `router` -> `moe_block` -> inject -> `final_head`. This is the core
+of a native token. Caveats: validated on all-linear-attention tiny config (QSA
+sparse full-attention branch carried as cache but not composed in the loop),
+shared expert zeroed, prefill S>1 not covered.
+
+## Update 2026-11-17 (second parallel push): 13/13 ctests pass
 
 New bit-exact primitives (all verified against the real Python op/kernel path,
 integrated into CMake + ctest):

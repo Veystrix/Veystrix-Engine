@@ -272,8 +272,17 @@ def install_switch_patch(language, state: dict, cfg: dict) -> None:
             issue_prefetch()
         fixed = cfg.get("fixed_route")
         if fixed is not None:
-            vals = fixed[layer]
-            inds = mx.broadcast_to(mx.array(vals, dtype=inds.dtype), inds.shape)
+            width = inds.shape[-1]
+            vals = list(fixed[layer])
+            # Repeat from the pinned pool to fill every top-k slot. Prefill has
+            # a token axis (shape ...,width); decode is a single row. A 1-D
+            # array of `width` indices broadcasts to either. Duplicate rows are
+            # summed bit-exactly, as in bench_read_ceiling.draw().
+            if len(vals) < width:
+                vals = (vals * (width // len(vals) + 1))[:width]
+            inds = mx.broadcast_to(
+                mx.array(vals[:width], dtype=inds.dtype), inds.shape
+            )
         return original(self, x, inds, *args, **kwargs)
 
     cls.__call__ = call

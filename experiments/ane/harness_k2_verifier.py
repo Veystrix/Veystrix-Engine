@@ -27,9 +27,10 @@ Status: NOT GRANTED. Design only — no runtime code patched.
 from __future__ import annotations
 
 GATES = {
-    "digest": "token_sha256 equal across all baseline and K=2 arms",
+    # OWNER HARD RULE (2026-11-17): ANY quality drop => drop this method entirely.
+    "digest": "token_sha256 equal across all baseline and K=2 arms — on ANY mismatch, abandon K=2, do not tune",
     "bytes": "physical bytes/token >= 12% lower in K=2 arms",
-    "guard": "no 3 GiB floor crossing, no compressor growth stop",
+    "guard": "no floor crossing, no compressor growth stop",
 }
 
 # Where this would hook (read-only references, already audited):

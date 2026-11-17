@@ -166,6 +166,14 @@ class SafeTensorStore:
         # harness against a 4.4% band. Chunk 8 alone was 8% worse, because
         # three reads per layer cannot keep the NVMe queue busy.
         self._pread_chunk = int(os.environ.get("FLASHNEXT_PREAD_CHUNK", "2"))
+        # Method #2 (opt-in, off by default): sort expert rows by file offset and
+        # merge adjacent runs into one pread into a scratch buffer, then scatter
+        # into out[slot]. Within one tensor, row r lives at start + r*row_bytes,
+        # so consecutive expert ids are physically contiguous. The default path
+        # issues one pread per row. Bit-exact: same bytes land in the same slots.
+        self._sorted_merged_pread = os.environ.get("FLASHNEXT_SORTED_MERGED_PREAD", "0") == "1"
+        # Max byte gap to bridge inside one merged run (0 = contiguous only).
+        self._pread_gap_bytes = max(0, int(os.environ.get("FLASHNEXT_PREAD_GAP_BYTES", "0")))
         # Kernel read-ahead on the shard descriptors. Off measured 1.3% faster,
         # flat across miss rates, inside the band; the default stays on.
         self._rdahead = os.environ.get("FLASHNEXT_RDAHEAD", "1") != "0"
@@ -477,6 +485,14 @@ class SafeTensorStore:
         ref = self.refs[name]
         dtype, _ = _DTYPES[ref.dtype]
         fd = self._fd(ref.shard)
+        if (
+            self._sorted_merged_pread
+            and read_mode == "pread"
+            and len(rows) > 1
+            and not _PHYSICAL_MISS_TRACE
+        ):
+            self._pread_into_merged(name, rows, out, ref, dtype, fd)
+            return
         for slot, row in enumerate(rows):
             offset = ref.start + row * ref.row_bytes
             if read_mode == "preadv":
@@ -498,6 +514,60 @@ class SafeTensorStore:
                     out[slot] = np.frombuffer(data, dtype=dtype).reshape(ref.shape[1:])
             if read != ref.row_bytes:
                 raise OSError(f"short pread for {name} row {row}")
+        if self._track_residency:
+            self._mark_read(name, rows)
+        if self._lock_budget > 0 and ".switch_mlp." in name:
+            self._enqueue_lock(name, rows)
+
+    def _pread_into_merged(
+        self, name: str, rows, out: np.ndarray, ref: "TensorRef", dtype, fd: int
+    ) -> None:
+        """Sorted, gap-merged pread: one syscall per contiguous row span.
+
+        Rows are scattered to ``out`` in the original order, so the bytes are
+        identical to the one-read-per-row path. ``rows`` may contain duplicates;
+        each slot still receives the same row's bytes.
+        """
+        row_bytes = ref.row_bytes
+        row_items = row_bytes // dtype.itemsize
+        if row_items * dtype.itemsize != row_bytes:
+            # Not a whole number of dtype items — fall back to the exact path.
+            self._pread_rows(name, rows, out, ref, dtype, fd)
+            return
+        order = sorted(range(len(rows)), key=lambda s: ref.start + rows[s] * row_bytes)
+        groups = []
+        for slot in order:
+            offset = ref.start + rows[slot] * row_bytes
+            if groups and offset <= groups[-1][2] + self._pread_gap_bytes:
+                groups[-1][1].append(slot)
+                groups[-1][2] = max(groups[-1][2], offset + row_bytes)
+            else:
+                groups.append([offset, [slot], offset + row_bytes])
+        for start, slots, end in groups:
+            span = end - start
+            data = _profiled_pread(fd, span, start)
+            if len(data) != span:
+                raise OSError(f"short merged pread for {name} rows {[rows[s] for s in slots]}")
+            for slot in slots:
+                rel = ref.start + rows[slot] * row_bytes - start
+                out[slot] = np.frombuffer(
+                    data, dtype=dtype, count=row_items, offset=rel
+                ).reshape(ref.shape[1:])
+        if self._track_residency:
+            self._mark_read(name, rows)
+        if self._lock_budget > 0 and ".switch_mlp." in name:
+            self._enqueue_lock(name, rows)
+
+    def _pread_rows(
+        self, name: str, rows, out: np.ndarray, ref: "TensorRef", dtype, fd: int
+    ) -> None:
+        """The original one-pread-per-row path (used for non-item-aligned rows)."""
+        for slot, row in enumerate(rows):
+            offset = ref.start + row * ref.row_bytes
+            data = _profiled_pread(fd, ref.row_bytes, offset)
+            if len(data) != ref.row_bytes:
+                raise OSError(f"short pread for {name} row {row}")
+            out[slot] = np.frombuffer(data, dtype=dtype).reshape(ref.shape[1:])
         if self._track_residency:
             self._mark_read(name, rows)
         if self._lock_budget > 0 and ".switch_mlp." in name:

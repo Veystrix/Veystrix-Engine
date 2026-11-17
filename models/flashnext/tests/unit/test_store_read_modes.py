@@ -256,3 +256,72 @@ class ResidencyTrackerTests(unittest.TestCase):
         for _ in range(10):
             store.rows_np(self.name, [7], "pread")
         self.assertTrue(store.believed_resident(self.name, 1))
+
+
+class MergedPreadTests(unittest.TestCase):
+    """The opt-in sorted/gap-merged pread returns exactly the default bytes."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.expected = write_checkpoint(self._dir.name)
+        self.name = "block.experts.weight"
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def build(self, gap="0"):
+        with unittest.mock.patch.dict(
+            os.environ,
+            {"FLASHNEXT_SORTED_MERGED_PREAD": "1", "FLASHNEXT_PREAD_GAP_BYTES": gap},
+        ):
+            return SafeTensorStore(self._dir.name)
+
+    def test_merged_matches_default_on_unsorted_duplicate_rows(self):
+        wanted = [11, 0, 6, 0, 2, 11, 7]
+        merged = self.build()
+        default = SafeTensorStore(self._dir.name)
+        try:
+            np.testing.assert_array_equal(
+                merged.rows_np(self.name, wanted, "pread"), self.expected[wanted]
+            )
+            np.testing.assert_array_equal(
+                merged.rows_np(self.name, wanted, "pread"),
+                default.rows_np(self.name, wanted, "pread"),
+            )
+        finally:
+            merged.close()
+            default.close()
+
+    def test_contiguous_rows_merge_into_fewer_reads(self):
+        store = self.build()
+        try:
+            wanted = [3, 4, 5, 6, 7]
+            begin_read_profile()
+            actual = store.rows_np(self.name, wanted, "pread")
+            profile = finish_read_profile()
+            np.testing.assert_array_equal(actual, self.expected[wanted])
+            self.assertLess(profile["pread_calls"], len(wanted))
+            self.assertEqual(profile["pread_bytes"], actual.nbytes)
+        finally:
+            store.close()
+
+    def test_gap_merge_still_returns_exact_bytes(self):
+        store = self.build(gap=str(2 * COLUMNS * np.dtype(np.uint32).itemsize))
+        try:
+            wanted = [1, 3, 5]          # one row skipped between each
+            np.testing.assert_array_equal(
+                store.rows_np(self.name, wanted, "pread"), self.expected[wanted]
+            )
+        finally:
+            store.close()
+
+    def test_read_mode_other_than_pread_uses_default_path(self):
+        store = self.build()
+        try:
+            wanted = [9, 2, 4]
+            for mode in ("preadv", "shared_mmap", "mmap"):
+                np.testing.assert_array_equal(
+                    store.rows_np(self.name, wanted, mode), self.expected[wanted]
+                )
+        finally:
+            store.close()

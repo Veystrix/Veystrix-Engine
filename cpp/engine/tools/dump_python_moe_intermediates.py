@@ -110,7 +110,11 @@ def install(target_layer_idx: int):
             out = _ORIG["gr"](self, hyper_input)
             hc, H = self.hc_count, self.hidden_size
             normed = self.hc_norm(hyper_input)
-            lo = nn.silu(self.input_mix_weight_down(normed) / self.hc_count)
+            down = self.input_mix_weight_down(normed)
+            lowpre = down / self.hc_count          # pre-SiLU, the nn.silu input
+            lo = nn.silu(lowpre)
+            st["cap"][f"gr{idx}_down"] = down
+            st["cap"][f"gr{idx}_lowpre"] = lowpre
             mix = mx.sigmoid(self.input_mix_weight_up(lo))
             mixg = mix.reshape(*mix.shape[:-1], hc, H)
             normg = normed.reshape(*normed.shape[:-1], hc, H)
@@ -141,7 +145,8 @@ def install(target_layer_idx: int):
     def gdn_call(self, inputs, mask=None, cache=None):
         st = _STATE[0]
         out = _ORIG["gdn"](self, inputs, mask=mask, cache=cache)
-        if (self is st["target_layer"].linear_attn
+        target_la = getattr(st["target_layer"], "linear_attn", None)
+        if (self is target_la
                 and int(inputs.shape[1]) > 1 and "gdn_out" not in st["cap"]):
             st["cap"]["gdn_out"] = out
         return out
@@ -359,8 +364,9 @@ def run_real(args):
     # ---- Hyper-connection path (upstream of the MoE) -----------------------
     layer = layers[args.layer]
     for nm in ("layer_input", "layer_output", "gdn_out",
-               "gr0_input", "gr0_normed", "gr0_low", "gr0_mix", "gr0_prod",
-               "gr0_mixed", "gr0_inj",
+               "gr0_input", "gr0_normed", "gr0_down", "gr0_lowpre", "gr0_low",
+               "gr0_mix", "gr0_prod", "gr0_mixed", "gr0_inj",
+               "gr1_down", "gr1_lowpre",
                "gr1_input", "gr1_normed", "gr1_low", "gr1_mix", "gr1_prod",
                "gr1_mixed", "gr1_inj"):
         if nm in cap:

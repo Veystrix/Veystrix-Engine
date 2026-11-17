@@ -101,7 +101,7 @@ mx::array final_mixed_no_combine(const mx::array& hidden,
   // Python's `x / self.hc_count` with an int keeps bf16).
   mx::array hc_arr = mx::array(hc);
   mx::array low = linear(normed, down_w) / hc_arr;
-  mx::array mix = mx::sigmoid(linear(low * mx::sigmoid(low), up_w));
+  mx::array mix = mx::sigmoid(linear(hc_silu(low), up_w));
   return mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
 }
 
@@ -215,6 +215,11 @@ mx::array run_prefill_batched(
           mx::slice(branch, mx::Shape{0, S - 1, 0}, mx::Shape{1, S, H}),
           mx::Shape{1, H});
       debug->branch.push_back(blast);
+      debug->m2d.push_back(m2d);
+      debug->gate_logits.push_back(gate_logits);
+      debug->moe2d.push_back(moe2d);
+      debug->mlp_inj.push_back(mr.injection_weights);
+      debug->gdn_in.push_back(ar.mixed_input);
     }
   }
 

@@ -830,7 +830,7 @@ mx::array run_step(
   mx::array hc_arr = mx::array(hc);  // int32 array: keeps bf16
   mx::array low = linear(normed, head.down_w) / hc_arr;
   mx::array mix = mx::sigmoid(
-      linear(low * mx::sigmoid(low), head.up_w));
+      linear(hc_silu(low), head.up_w));
   mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   debug_capture::get().add("final_mixed", mixed);
   if (const char* mf = std::getenv("REALGEN_DUMP_MIXED")) {
@@ -1378,6 +1378,42 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         mx::eval(hf);
         char pth[512]; std::snprintf(pth, sizeof(pth), "%s.L%02zu.f32", hd, l);
         FILE* fp=fopen(pth,"wb"); if(fp){fwrite(hf.data<float>(),sizeof(float),hf.size(),fp);fclose(fp);}
+        if (l < bpdbg.branch.size()) {
+          mx::array bf = mx::reshape(mx::astype(bpdbg.branch[l], mx::float32), mx::Shape{-1});
+          mx::eval(bf);
+          std::snprintf(pth, sizeof(pth), "%s.branch.L%02zu.f32", hd, l);
+          FILE* bfp=fopen(pth,"wb"); if(bfp){fwrite(bf.data<float>(),sizeof(float),bf.size(),bfp);fclose(bfp);}
+        }
+        if (l < bpdbg.m2d.size()) {
+          mx::array mf = mx::reshape(mx::astype(bpdbg.m2d[l], mx::float32), mx::Shape{-1});
+          mx::eval(mf);
+          std::snprintf(pth, sizeof(pth), "%s.m2d.L%02zu.f32", hd, l);
+          FILE* mfp=fopen(pth,"wb"); if(mfp){fwrite(mf.data<float>(),sizeof(float),mf.size(),mfp);fclose(mfp);}
+        }
+        if (l < bpdbg.gate_logits.size()) {
+          mx::array gf = mx::reshape(mx::astype(bpdbg.gate_logits[l], mx::float32), mx::Shape{-1});
+          mx::eval(gf);
+          std::snprintf(pth, sizeof(pth), "%s.gate.L%02zu.f32", hd, l);
+          FILE* gfp=fopen(pth,"wb"); if(gfp){fwrite(gf.data<float>(),sizeof(float),gf.size(),gfp);fclose(gfp);}
+        }
+        if (l < bpdbg.moe2d.size()) {
+          mx::array mf = mx::reshape(mx::astype(bpdbg.moe2d[l], mx::float32), mx::Shape{-1});
+          mx::eval(mf);
+          std::snprintf(pth, sizeof(pth), "%s.moe2d.L%02zu.f32", hd, l);
+          FILE* mfp=fopen(pth,"wb"); if(mfp){fwrite(mf.data<float>(),sizeof(float),mf.size(),mfp);fclose(mfp);}
+        }
+        if (l < bpdbg.mlp_inj.size()) {
+          mx::array mf = mx::reshape(mx::astype(bpdbg.mlp_inj[l], mx::float32), mx::Shape{-1});
+          mx::eval(mf);
+          std::snprintf(pth, sizeof(pth), "%s.mlpinj.L%02zu.f32", hd, l);
+          FILE* mfp=fopen(pth,"wb"); if(mfp){fwrite(mf.data<float>(),sizeof(float),mf.size(),mfp);fclose(mfp);}
+        }
+        if (l < bpdbg.gdn_in.size()) {
+          mx::array gf = mx::reshape(mx::astype(bpdbg.gdn_in[l], mx::float32), mx::Shape{-1});
+          mx::eval(gf);
+          std::snprintf(pth, sizeof(pth), "%s.gdnin.L%02zu.f32", hd, l);
+          FILE* gfp=fopen(pth,"wb"); if(gfp){fwrite(gf.data<float>(),sizeof(float),gf.size(),gfp);fclose(gfp);}
+        }
       }
     }
     // copy back mutable PLE caches

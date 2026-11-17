@@ -194,7 +194,9 @@ GDNLayerOutput gdn_prefill(const mx::array& x, const GDNWeights& w,
   mx::array conv_out = mx::conv1d(conv_input, w.conv1d_weight,
                                   /*stride=*/1, /*padding=*/0,
                                   /*dilation=*/1, /*groups=*/conv_dim);  // [B,S,C]
-  conv_out = conv_out * mx::sigmoid(conv_out);  // nn.silu
+  // Python uses nn.silu (a compiled/fused x*sigmoid(x) kernel). Use hc_silu so
+  // the same fused kernel is emitted with VEYSTRIX_CPP_COMPILED_SILU=1.
+  conv_out = hc_silu(conv_out);  // nn.silu
 
   // 5. Split into q, k, v and reshape to per-head views.
   mx::array q = mx::slice(conv_out, mx::Shape{0, 0, 0},

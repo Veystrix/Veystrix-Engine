@@ -3,6 +3,7 @@
 #include <mlx/mlx.h>
 
 #include <cmath>
+#include <cstdlib>
 
 namespace veystrix::engine {
 
@@ -63,9 +64,22 @@ mx::array q4_projection(const mx::array& x, const Q4Projection& p,
 }
 
 mx::array swiglu(const mx::array& gate, const mx::array& up) {
-  // Production: activation(gate, up) = up * (gate * sigmoid(gate)).
-  // The Python engine uses mlx-vlm's SwiGLU; verify exact op order via parity.
-  return up * (gate * mx::sigmoid(gate));
+  // Production: activation(gate, up) = nn.silu(gate) * up. Python's nn.silu is
+  // a compiled/fused kernel; use hc_silu so the same fused kernel is emitted
+  // with VEYSTRIX_CPP_COMPILED_SILU=1 (avoids 1-ULP rounding differences).
+  return up * hc_silu(gate);
+}
+
+mx::array hc_silu(const mx::array& x) {
+  static const bool use_compiled =
+      std::getenv("VEYSTRIX_CPP_COMPILED_SILU") != nullptr;
+  if (!use_compiled) return x * mx::sigmoid(x);
+  static auto fn = mx::compile(
+      [](const std::vector<mx::array>& in) -> std::vector<mx::array> {
+        return {in[0] * mx::sigmoid(in[0])};
+      },
+      /*shapeless=*/true);
+  return fn({x})[0];
 }
 
 mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores) {
@@ -180,7 +194,7 @@ GatedResidualOutput gated_residual(
   // essential for bit-exactness on the real bf16 checkpoint.
   mx::array hc_arr = mx::array(hc_count);  // int32 scalar array
   mx::array low = linear(normed, down_w) / hc_arr;
-  mx::array silu_low = low * mx::sigmoid(low);
+  mx::array silu_low = hc_silu(low);
   mx::array mix = mx::sigmoid(linear(silu_low, up_w));
   mx::array mixg = mx::reshape(mix, gs);
   mx::array normg = mx::reshape(normed, gs);
@@ -208,7 +222,7 @@ mx::array final_head(const mx::array& hidden,
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
   mx::array hc_arr = mx::array(hc_count);  // int32 array: keeps bf16
   mx::array low = linear(normed, down_w) / hc_arr;
-  mx::array mix = mx::sigmoid(linear(low * mx::sigmoid(low), up_w));
+  mx::array mix = mx::sigmoid(linear(hc_silu(low), up_w));
   mx::array mixed_input = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   // lm_head: nn.Linear(hidden, vocab, bias=False) -> matmul(x, W.T).
   return linear(mixed_input, lm_head_w);
@@ -220,7 +234,8 @@ mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,
   mx::array y = mx::fast::rms_norm(x, weight, eps);
   y = mx::astype(y, mx::float32);
   mx::array g = mx::astype(gate, mx::float32);
-  mx::array act = sigmoid_act ? mx::sigmoid(g) : g * mx::sigmoid(g);  // silu
+  // Python: `gate = nn.silu(gate)` (compiled/fused) in the non-sigmoid case.
+  mx::array act = sigmoid_act ? mx::sigmoid(g) : hc_silu(g);
   return mx::astype(y * act, dtype);
 }
 

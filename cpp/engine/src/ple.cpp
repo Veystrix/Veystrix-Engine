@@ -1,5 +1,7 @@
 #include "ple.hpp"
 
+#include "engine.hpp"  // hc_silu
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -297,7 +299,8 @@ mx::array short_conv(const mx::array& x, const PLEWeights& w, PLECache& cache) {
                 mx::Shape{B, total, C}));
   mx::array y = mx::conv1d(conv_input, w.conv_w, /*stride=*/1,
                            /*padding=*/0, w.conv_dilation, /*groups=*/C);
-  return mx::multiply(y, mx::sigmoid(y));  // nn.silu
+  // Python uses nn.silu (compiled/fused) after the PLE conv.
+  return hc_silu(y);  // nn.silu
 }
 
 }  // namespace

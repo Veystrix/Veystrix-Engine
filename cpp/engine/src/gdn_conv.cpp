@@ -1,5 +1,7 @@
 #include "gdn_conv.h"
 
+#include "engine.hpp"  // hc_silu
+
 #include <mlx/mlx.h>
 
 namespace mx = mlx::core;
@@ -38,7 +40,8 @@ mx::array gdn_causal_conv_decode_silu(const mx::array& conv_input,
   // nn.silu(x) == x * mx.sigmoid(x); applied to the conv output on the
   // production path before the q/k/v split.
   mx::array conv_out = gdn_causal_conv_decode(conv_input, weight);
-  return conv_out * mx::sigmoid(conv_out);
+  // Python uses nn.silu (compiled/fused); use hc_silu to emit the same kernel.
+  return hc_silu(conv_out);
 }
 
 }  // namespace veystrix::engine

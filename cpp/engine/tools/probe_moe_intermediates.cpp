@@ -34,6 +34,20 @@ namespace {
 
 std::string join(const std::string& d, const std::string& n) { return d + "/" + n; }
 
+// Python's nn.silu is `@partial(mx.compile, shapeless=True) x * mx.sigmoid(x)`
+// (mlx/nn/layers/activations.py:138). Compiling the SAME graph here makes MLX
+// emit the same fused JIT kernel instead of two precompiled metallib kernels.
+mx::array silu_compiled(const mx::array& x) {
+  static auto fn = mx::compile(
+      [](const std::vector<mx::array>& in) -> std::vector<mx::array> {
+        return {in[0] * mx::sigmoid(in[0])};
+      },
+      /*shapeless=*/true);
+  return fn({x})[0];
+}
+
+bool exists(const std::string& p) { return std::ifstream(p).good(); }
+
 size_t file_size(const std::string& p) {
   std::ifstream f(p, std::ios::binary | std::ios::ate);
   if (!f) throw std::runtime_error("cannot open " + p);
@@ -442,6 +456,27 @@ int main(int argc, char** argv) {
         load(dir, "gr0_normed", {1, T, 4 * H}, mx::bfloat16));
     cmp("attn silu(low) C++ vs Python", l0 * mx::sigmoid(l0),
         load(dir, "gr0_low", {1, T, 320}, mx::bfloat16));
+    // Split: is the 1-ULP gap in down/qmm, the /hc divide, or the SiLU fusion?
+    auto silu_split = [&](const char* tag, const mx::array& normed_cpp,
+                          const Linear& dn, const mx::array& low_cpp, int gi) {
+      std::string g = "gr" + std::to_string(gi) + "_";
+      if (!exists(join(dir, g + "lowpre.bin"))) {
+        std::printf("  [%s] gr*_lowpre.bin missing: re-dump with the updated "
+                    "dump_python_moe_intermediates.py\n", tag);
+        return;
+      }
+      auto py_down = load(dir, g + "down", {1, T, 320}, mx::bfloat16);
+      auto py_pre = load(dir, g + "lowpre", {1, T, 320}, mx::bfloat16);
+      auto py_low = load(dir, g + "low", {1, T, 320}, mx::bfloat16);
+      std::string t(tag);
+      cmp((t + " down qmm  C++ vs Python").c_str(), linear(normed_cpp, dn), py_down);
+      cmp((t + " low/hc    C++ vs Python").c_str(), low_cpp, py_pre);
+      cmp((t + " silu UNFUSED(py input)").c_str(),
+          py_pre * mx::sigmoid(py_pre), py_low);
+      cmp((t + " silu COMPILED(py input)").c_str(), silu_compiled(py_pre), py_low);
+      cmp((t + " silu COMPILED(C++ input)").c_str(), silu_compiled(low_cpp), py_low);
+    };
+    silu_split("attn", n0, a_down, l0, 0);
     cmp("attn mix C++ vs Python", m0,
         load(dir, "gr0_mix", {1, T, 4 * H}, mx::bfloat16));
     cmp("attn prod C++ vs Python", p0,
@@ -470,6 +505,7 @@ int main(int argc, char** argv) {
         load(dir, "gr1_normed", {1, T, 4 * H}, mx::bfloat16));
     cmp("mlp silu(low) C++ vs Python", l1 * mx::sigmoid(l1),
         load(dir, "gr1_low", {1, T, 320}, mx::bfloat16));
+    silu_split("mlp", n1, m_down, l1, 1);
     cmp("mlp mix C++ vs Python", m1,
         load(dir, "gr1_mix", {1, T, 4 * H}, mx::bfloat16));
     cmp("mlp prod C++ vs Python", p1,

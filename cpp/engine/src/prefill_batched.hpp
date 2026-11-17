@@ -127,6 +127,11 @@ struct BatchedHead {
 struct BatchedPrefillDebug {
   std::vector<mx::array> hidden_after_layer;  // [1, H] per layer
   std::vector<mx::array> branch;              // attention branch [1, H] per layer
+  std::vector<mx::array> m2d;                 // MLP gated-residual output [S,H] per layer
+  std::vector<mx::array> gate_logits;         // router logits [S,experts] per layer
+  std::vector<mx::array> moe2d;               // final MoE branch [S,H] per layer
+  std::vector<mx::array> mlp_inj;             // MLP injection weights [S,hc] per layer
+  std::vector<mx::array> gdn_in;              // attention gated-residual mixed_input [S,H] per layer
 };
 
 // Feed all S prompt tokens through every layer in ONE call and return the

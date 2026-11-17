@@ -111,6 +111,12 @@ mx::array q4_projection(const mx::array& x, const Q4Projection& p,
 // SwiGLU activation: out = up * (gate * sigmoid(gate)).
 mx::array swiglu(const mx::array& gate, const mx::array& up);
 
+// nn.silu mirror for the hyper-connection low-rank path. Python's nn.silu is
+// `@partial(mx.compile, shapeless=True) x * sigmoid(x)` (one fused JIT kernel).
+// With VEYSTRIX_CPP_COMPILED_SILU=1 this compiles the identical graph so MLX
+// emits the same kernel; unset (default) keeps the unfused two-kernel form.
+mx::array hc_silu(const mx::array& x);
+
 // Weighted combine of expert outputs: (out * scores[...,None]).sum(-2).
 mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores);
 

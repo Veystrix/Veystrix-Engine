@@ -197,7 +197,10 @@ void check_raw_bytes(const std::string& ckpt_dir, const std::string& key,
       (ssize_t)(row_elems * 2))
     throw std::runtime_error("short row read: " + key);
   ::close(fd);
-  mx::array cpp_row(bits.data(), mx::Shape{out_dim, ng}, mx::bfloat16);
+  // void* constructor reinterprets the uint16 bytes as bf16 (the iterator
+  // constructor would CONVERT the integers numerically instead).
+  mx::array cpp_row(static_cast<void*>(bits.data()), mx::Shape{out_dim, ng},
+                    mx::bfloat16, [](void*) {});
   char nm[160];
   std::snprintf(nm, sizeof(nm), "raw bf16 bytes exp=%d %s", expert, key.c_str());
   cmp(nm, cpp_row, py_row);

@@ -214,6 +214,11 @@ GDNLayerOutput gdn_prefill(const mx::array& x, const GDNWeights& w,
                                           gb.second, cache.recurrent_state,
                                           mask);
 
+  // Python's gated_delta_kernel returns y.astype(q.dtype) (q is bf16). The
+  // fused kernel here returns f32, so cast back to the input activation dtype
+  // before the gated norm, matching production and keeping the stack in bf16.
+  step.y = mx::astype(step.y, x.dtype());
+
   // 8. Gated RMSNorm with the z projection, then out_proj over all S tokens.
   mx::array normed = rms_norm_gated(step.y, w.norm_weight, z, cfg.eps, sigmoid);
   mx::array flat = mx::reshape(normed, mx::Shape{B, S, cfg.value_dim});

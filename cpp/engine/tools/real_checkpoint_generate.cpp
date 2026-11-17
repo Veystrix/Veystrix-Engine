@@ -827,8 +827,8 @@ mx::array run_step(
   yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, true) + cfg.eps);
   yg = yg * mx::astype(w2d, mx::float32);
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
-  mx::array low =
-      linear(normed, head.down_w) / static_cast<float>(hc);
+  mx::array hc_arr = mx::array(hc);  // int32 array: keeps bf16
+  mx::array low = linear(normed, head.down_w) / hc_arr;
   mx::array mix = mx::sigmoid(
       linear(low * mx::sigmoid(low), head.up_w));
   mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
@@ -1351,6 +1351,17 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       mx::array w = mx::take(embed.w, f, 0), s = mx::take(embed.s, f, 0),
                 b = mx::take(embed.b, f, 0);
       mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
+      static bool printed = false;
+      if (!printed) {
+        std::fprintf(stderr, "[embed] w=%ld s=%ld b=%ld dequant=%ld (bf16=%ld f32=%ld)\n",
+                     (long)static_cast<mx::Dtype::Val>(w.dtype()),
+                     (long)static_cast<mx::Dtype::Val>(s.dtype()),
+                     (long)static_cast<mx::Dtype::Val>(b.dtype()),
+                     (long)static_cast<mx::Dtype::Val>(row.dtype()),
+                     (long)static_cast<mx::Dtype::Val>(mx::bfloat16),
+                     (long)static_cast<mx::Dtype::Val>(mx::float32));
+        printed = true;
+      }
       return mx::reshape(row, mx::Shape{1, static_cast<int>(f.size()), H});
     };
     BatchedPrefillDebug bpdbg;

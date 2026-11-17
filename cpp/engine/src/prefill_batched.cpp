@@ -97,7 +97,10 @@ mx::array final_mixed_no_combine(const mx::array& hidden,
   yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, true) + eps);
   yg = yg * mx::astype(w2d, mx::float32);
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
-  mx::array low = linear(normed, down_w) / static_cast<float>(hc);
+  // Divide by an int32 ARRAY to keep bf16 (C++ array/float upcasts to f32;
+  // Python's `x / self.hc_count` with an int keeps bf16).
+  mx::array hc_arr = mx::array(hc);
+  mx::array low = linear(normed, down_w) / hc_arr;
   mx::array mix = mx::sigmoid(linear(low * mx::sigmoid(low), up_w));
   return mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
 }
@@ -192,6 +195,12 @@ mx::array run_prefill_batched(
     mx::array u = linear(m2d, L.shared_uw);
     mx::array s = linear(swiglu(g, u), L.shared_dw);
     moe2d = moe2d + sg * s;
+    std::fprintf(stderr, "[pb dtype L%02d] ar.mixed=%ld branch=%ld inj=%ld moe2d=%ld hidden=%ld\n", l,
+      (long)static_cast<mx::Dtype::Val>(ar.mixed_input.dtype()),
+      (long)static_cast<mx::Dtype::Val>(branch.dtype()),
+      (long)static_cast<mx::Dtype::Val>(ar.injection_weights.dtype()),
+      (long)static_cast<mx::Dtype::Val>(moe2d.dtype()),
+      (long)static_cast<mx::Dtype::Val>(hidden.dtype()));
 
     // 10. MLP inject: reshape [S,H] -> [1,S,H].
     mx::array moe = mx::reshape(moe2d, mx::Shape{1, S, H});
@@ -225,7 +234,16 @@ mx::array run_prefill_batched(
   } else {
     throw std::runtime_error("batched head: no lm_head weights");
   }
-  return mx::astype(linear(last, lm), mx::float32);
+  mx::array logits_bf = linear(last, lm);
+  static bool pr = false;
+  if (!pr) {
+    std::fprintf(stderr, "[pb head] mixed=%ld last=%ld logits=%ld\n",
+      (long)static_cast<mx::Dtype::Val>(mixed.dtype()),
+      (long)static_cast<mx::Dtype::Val>(last.dtype()),
+      (long)static_cast<mx::Dtype::Val>(logits_bf.dtype()));
+    pr = true;
+  }
+  return mx::astype(logits_bf, mx::float32);
 }
 
 }  // namespace veystrix::engine

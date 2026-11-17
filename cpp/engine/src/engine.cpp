@@ -171,14 +171,18 @@ GatedResidualOutput gated_residual(
                                 hyper_input.dtype());
   // Linear weights are stored [out, in]; compute x @ W.T (nn.Linear).
   // mix = sigmoid(up(silu(down(normed)/hc_count)))
-  mx::array low = linear(normed, down_w) / static_cast<float>(hc_count);
+  // Divide by an int32 ARRAY (not a float scalar): C++ array/float upcasts
+  // bf16 -> f32, while Python's `x / self.hc_count` (int) keeps bf16. This is
+  // essential for bit-exactness on the real bf16 checkpoint.
+  mx::array hc_arr = mx::array(hc_count);  // int32 scalar array
+  mx::array low = linear(normed, down_w) / hc_arr;
   mx::array silu_low = low * mx::sigmoid(low);
   mx::array mix = mx::sigmoid(linear(silu_low, up_w));
   mx::array mixg = mx::reshape(mix, gs);
   mx::array normg = mx::reshape(normed, gs);
   mx::array mixed_input = mx::mean(mixg * normg, -2);
-  mx::array inj = 2.0f * mx::sigmoid(
-      linear(normed, inject_w) / static_cast<float>(hc_count));
+  mx::array two = mx::array(2);  // int32 scalar: keeps bf16
+  mx::array inj = two * mx::sigmoid(linear(normed, inject_w) / hc_arr);
   return {mixed_input, inj};
 }
 
@@ -198,7 +202,8 @@ mx::array final_head(const mx::array& hidden,
   yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, /*keepdims=*/true) + eps);
   yg = yg * mx::astype(w2d, mx::float32);
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
-  mx::array low = linear(normed, down_w) / static_cast<float>(hc_count);
+  mx::array hc_arr = mx::array(hc_count);  // int32 array: keeps bf16
+  mx::array low = linear(normed, down_w) / hc_arr;
   mx::array mix = mx::sigmoid(linear(low * mx::sigmoid(low), up_w));
   mx::array mixed_input = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   // lm_head: nn.Linear(hidden, vocab, bias=False) -> matmul(x, W.T).

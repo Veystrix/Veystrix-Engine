@@ -74,6 +74,8 @@ GDNLayerOutput gdn_layer_forward(const mx::array& x, const GDNWeights& w,
     auto step = gated_delta_step_kernel(qk.first, qk.second, v, gb.first,
                                         gb.second, rec_state);
     rec_state = step.state;
+    // Python gated_delta_kernel returns y.astype(q.dtype) (bf16 on real ckpt).
+    step.y = mx::astype(step.y, xt.dtype());
 
     // 6. Qwen4ExpRMSNormGated(output_gate_type) with the z projection as gate.
     mx::array normed = rms_norm_gated(step.y, w.norm_weight, z, cfg.eps, sigmoid);

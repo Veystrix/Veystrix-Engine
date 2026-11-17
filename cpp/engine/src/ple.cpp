@@ -285,10 +285,11 @@ mx::array ple_ngram_embedding(const mx::array& input_ids,
 mx::array short_conv(const mx::array& x, const PLEWeights& w, PLECache& cache) {
   int B = x.shape(0);
   int C = x.shape(2);
+  // Python _short_conv: state = mx.zeros(..., dtype=x.dtype) (bf16 on real ckpt).
   mx::array state =
       cache.conv_state.has_value()
           ? *cache.conv_state
-          : mx::zeros(mx::Shape{B, w.short_conv_state_len, C}, mx::float32);
+          : mx::zeros(mx::Shape{B, w.short_conv_state_len, C}, x.dtype());
   mx::array conv_input = mx::concatenate({state, x}, 1);
   int total = conv_input.shape(1);
   cache.conv_state = mx::contiguous(
@@ -324,10 +325,13 @@ mx::array ple_forward(const mx::array& hidden_states,
 
   mx::array gate_sum =
       mx::sum(mx::multiply(keys, queries), -1, /*keepdims=*/true);
-  mx::array gate = mx::divide(gate_sum, f32_scalar((float)std::sqrt((double)H)));
-  gate = mx::multiply(
-      mx::sign(gate),
-      mx::sqrt(mx::maximum(mx::abs(gate), f32_scalar(1e-6f))));
+  // Python: `sum / math.sqrt(H)` and `max(abs(gate), 1e-6)` use Python floats,
+  // which MLX keeps in the array's dtype (bf16 on the real checkpoint). C++
+  // f32 scalars would upcast, so build scalars with gate_sum's dtype.
+  mx::array sqrt_h = mx::astype(mx::array((float)std::sqrt((double)H)), gate_sum.dtype());
+  mx::array eps6 = mx::astype(mx::array(1e-6f), gate_sum.dtype());
+  mx::array gate = mx::divide(gate_sum, sqrt_h);
+  gate = mx::multiply(mx::sign(gate), mx::sqrt(mx::maximum(mx::abs(gate), eps6)));
 
   mx::array gated =
       mx::reshape(mx::multiply(mx::sigmoid(gate), mx::expand_dims(values, 2)),

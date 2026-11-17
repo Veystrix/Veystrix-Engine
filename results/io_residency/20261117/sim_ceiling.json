@@ -1,0 +1,178 @@
+{
+  "trace": "results/io_residency/20261117/nemo_trace.jsonl",
+  "tokens": 96,
+  "moe_layers_per_token": 23,
+  "experts_per_layer": 128,
+  "k": 6,
+  "expert_bytes": 5612544,
+  "total_expert_gb": 16.523329536,
+  "unique_keys_in_trace": 2337,
+  "warmup_tokens": 8,
+  "rows": [
+    {
+      "policy": "opt",
+      "budget_mb": 2048.0,
+      "coverage": 0.12394596352617342,
+      "pool_hit": 0.6584321475625824,
+      "no_ssd_hit": 0.6584321475625824,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 264.55491490909094,
+      "pred_io_ms": 74.71192174783704,
+      "pred_tok_s": 7.518123088964853
+    },
+    {
+      "policy": "double-s3fifo",
+      "budget_mb": 2048.0,
+      "coverage": 0.12394596352617342,
+      "pool_hit": 0.392868906455863,
+      "no_ssd_hit": 0.5374670619235836,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 358.2461323636364,
+      "pred_io_ms": 101.17089307078125,
+      "pred_tok_s": 6.270736814373702
+    },
+    {
+      "policy": "s3fifo",
+      "budget_mb": 2048.0,
+      "coverage": 0.12394596352617342,
+      "pool_hit": 0.392868906455863,
+      "no_ssd_hit": 0.392868906455863,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 470.2418967272728,
+      "pred_io_ms": 132.79918009807196,
+      "pred_tok_s": 5.232884827066243
+    },
+    {
+      "policy": "opt",
+      "budget_mb": 4096.0,
+      "coverage": 0.24789192705234683,
+      "pool_hit": 0.7761034255599473,
+      "no_ssd_hit": 0.7761034255599473,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 173.41485381818183,
+      "pred_io_ms": 48.9734125439655,
+      "pred_tok_s": 9.32197434839835
+    },
+    {
+      "policy": "double-s3fifo",
+      "budget_mb": 4096.0,
+      "coverage": 0.24789192705234683,
+      "pool_hit": 0.5896739130434783,
+      "no_ssd_hit": 0.6305171277997365,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 286.17596509090913,
+      "pred_io_ms": 80.81783820697801,
+      "pred_tok_s": 7.188150799987352
+    },
+    {
+      "policy": "s3fifo",
+      "budget_mb": 4096.0,
+      "coverage": 0.24789192705234683,
+      "pool_hit": 0.5896739130434783,
+      "no_ssd_hit": 0.5896739130434783,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 317.81030400000003,
+      "pred_io_ms": 89.75156848347925,
+      "pred_tok_s": 6.754403281526788
+    },
+    {
+      "policy": "opt",
+      "budget_mb": 6144.0,
+      "coverage": 0.37183789057852024,
+      "pool_hit": 0.8274044795783926,
+      "no_ssd_hit": 0.8274044795783926,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 133.68059345454546,
+      "pred_io_ms": 37.75221503940849,
+      "pred_tok_s": 10.41100405222012
+    },
+    {
+      "policy": "double-s3fifo",
+      "budget_mb": 6144.0,
+      "coverage": 0.37183789057852024,
+      "pool_hit": 0.7010869565217391,
+      "no_ssd_hit": 0.7117094861660079,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 223.2899607272727,
+      "pred_io_ms": 63.0584469718364,
+      "pred_tok_s": 8.240052711222232
+    },
+    {
+      "policy": "s3fifo",
+      "budget_mb": 6144.0,
+      "coverage": 0.37183789057852024,
+      "pool_hit": 0.7010869565217391,
+      "no_ssd_hit": 0.7010869565217391,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 231.51744,
+      "pred_io_ms": 65.38193730584581,
+      "pred_tok_s": 8.085254983734275
+    },
+    {
+      "policy": "opt",
+      "budget_mb": 8192.0,
+      "coverage": 0.49578385410469367,
+      "pool_hit": 0.8542490118577075,
+      "no_ssd_hit": 0.8542490118577075,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 112.8886690909091,
+      "pred_io_ms": 31.88044876896614,
+      "pred_tok_s": 11.08887806227164
+    },
+    {
+      "policy": "double-s3fifo",
+      "budget_mb": 8192.0,
+      "coverage": 0.49578385410469367,
+      "pool_hit": 0.7676218708827405,
+      "no_ssd_hit": 0.7706686429512516,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 177.62426181818182,
+      "pred_io_ms": 50.16217504043542,
+      "pred_tok_s": 9.219804043457485
+    },
+    {
+      "policy": "s3fifo",
+      "budget_mb": 8192.0,
+      "coverage": 0.49578385410469367,
+      "pool_hit": 0.7676218708827405,
+      "no_ssd_hit": 0.7676218708827405,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 179.98408145454547,
+      "pred_io_ms": 50.82860250057765,
+      "pred_tok_s": 9.163500467209838
+    },
+    {
+      "policy": "opt",
+      "budget_mb": 10240.0,
+      "coverage": 0.6197298176308671,
+      "pool_hit": 0.8542490118577075,
+      "no_ssd_hit": 0.8542490118577075,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 112.8886690909091,
+      "pred_io_ms": 31.88044876896614,
+      "pred_tok_s": 11.08887806227164
+    },
+    {
+      "policy": "double-s3fifo",
+      "budget_mb": 10240.0,
+      "coverage": 0.6197298176308671,
+      "pool_hit": 0.825592885375494,
+      "no_ssd_hit": 0.825592885375494,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 135.08372945454545,
+      "pred_io_ms": 38.14846920489846,
+      "pred_tok_s": 10.368230913811244
+    },
+    {
+      "policy": "s3fifo",
+      "budget_mb": 10240.0,
+      "coverage": 0.6197298176308671,
+      "pool_hit": 0.825592885375494,
+      "no_ssd_hit": 0.825592885375494,
+      "logical_mb_per_token": 774.5310719999999,
+      "ssd_mb_per_token": 135.08372945454545,
+      "pred_io_ms": 38.14846920489846,
+      "pred_tok_s": 10.368230913811244
+    }
+  ]
+}

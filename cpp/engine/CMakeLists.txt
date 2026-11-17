@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/parity_gaps.cpp src/rope_fused.cpp src/prefill.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/prefill.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -94,6 +94,24 @@ target_link_libraries(test_moe_stream PRIVATE veystrix_engine)
 set_target_properties(test_moe_stream PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Slot-bookkeeping fix: pure-CPU planner tests + synthetic 2-shard MoE test.
+add_executable(test_slot_plan tests/test_slot_plan.cpp)
+target_include_directories(test_slot_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_slot_plan PRIVATE veystrix_engine)
+set_target_properties(test_slot_plan PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+add_executable(test_crossshard_moe tests/test_crossshard_moe.cpp)
+target_include_directories(test_crossshard_moe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_crossshard_moe PRIVATE veystrix_engine)
+set_target_properties(test_crossshard_moe PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(NOT Python3_Interpreter_FOUND)
+  set(Python3_EXECUTABLE python3)
+endif()
+
 # Full multi-layer decoder loop bit-exact parity (real mlx_vlm modules).
 add_executable(test_decoder tests/test_decoder.cpp)
 target_include_directories(test_decoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -155,6 +173,12 @@ set_target_properties(test_native_layer PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 enable_testing()
+add_test(NAME slot_plan COMMAND test_slot_plan)
+add_test(NAME crossshard_moe
+  COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_crossshard.py
+    --binary $<TARGET_FILE:test_crossshard_moe>
+    --generator ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_crossshard_checkpoint.py)
 add_test(NAME engine_smoke COMMAND test_engine_smoke)
 add_test(NAME engine_parity COMMAND test_engine_parity
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")

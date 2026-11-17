@@ -150,6 +150,7 @@ mx::array run_prefill_batched(
     GatedResidualOutput ar =
         gated_residual(hidden, L.attn_norm_w, L.attn_down_w, L.attn_up_w,
                        L.attn_inject_w, hc, H, cfg.eps);
+    mx::eval(ar.mixed_input);
 
     // 4. attention branch over ALL S tokens.
     mx::array branch = [&]() -> mx::array {
@@ -169,6 +170,7 @@ mx::array run_prefill_batched(
                                           caches[l].full, position_ids)
           .output;
     }();
+    mx::eval(branch);
 
     // 5. hyper-connection inject.
     hidden = inject_batched(hidden, branch, ar.injection_weights);
@@ -177,6 +179,7 @@ mx::array run_prefill_batched(
     GatedResidualOutput mr =
         gated_residual(hidden, L.mlp_norm_w, L.mlp_down_w, L.mlp_up_w,
                        L.mlp_inject_w, hc, H, cfg.eps);
+    mx::eval(mr.mixed_input);
 
     // 7. router over [S,H].
     mx::array m2d = mx::reshape(mr.mixed_input, mx::Shape{S, H});
@@ -187,6 +190,7 @@ mx::array run_prefill_batched(
     if (!L.moe_forward)
       throw std::runtime_error("batched layer: missing MoE forward callback");
     mx::array moe2d = L.moe_forward(m2d, routes.indices, routes.scores);
+    mx::eval(moe2d);  // materialize before the persistent slot buffer is reused
 
     // 9. non-zero dense shared expert: sg * s, added to the routed output.
     mx::array sgl = linear(m2d, L.shared_glw);
@@ -205,6 +209,7 @@ mx::array run_prefill_batched(
     // 10. MLP inject: reshape [S,H] -> [1,S,H].
     mx::array moe = mx::reshape(moe2d, mx::Shape{1, S, H});
     hidden = inject_batched(hidden, moe, mr.injection_weights);
+    mx::eval(hidden);
 
     if (debug) {
       mx::array last = mx::reshape(

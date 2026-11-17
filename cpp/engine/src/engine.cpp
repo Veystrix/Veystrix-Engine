@@ -71,15 +71,25 @@ mx::array swiglu(const mx::array& gate, const mx::array& up) {
 }
 
 mx::array hc_silu(const mx::array& x) {
-  static const bool use_compiled =
-      std::getenv("VEYSTRIX_CPP_COMPILED_SILU") != nullptr;
-  if (!use_compiled) return x * mx::sigmoid(x);
+  // Python's nn.silu is `@partial(mx.compile, shapeless=True) x*sigmoid(x)` —
+  // one fused JIT kernel. Compile the identical graph by default so the C++
+  // engine is bit-exact to the Python reference out of the box (real-checkpoint
+  // gate (b)). Opt out with VEYSTRIX_CPP_UNFUSED_SILU only for legacy synthetic
+  // golden vectors captured before the compiled-silu convention.
+  static const bool use_unfused =
+      std::getenv("VEYSTRIX_CPP_UNFUSED_SILU") != nullptr;
+  if (use_unfused) return x * mx::sigmoid(x);
   static auto fn = mx::compile(
       [](const std::vector<mx::array>& in) -> std::vector<mx::array> {
         return {in[0] * mx::sigmoid(in[0])};
       },
       /*shapeless=*/true);
-  return fn({x})[0];
+  mx::array out = fn({x})[0];
+  // Force the fused silu kernel to complete before returning so the shared
+  // shapeless compiled graph is never invoked concurrently by MLX's lazy
+  // scheduler across the many layers (a nondeterminism source on gate (a)).
+  mx::eval(out);
+  return out;
 }
 
 mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores) {

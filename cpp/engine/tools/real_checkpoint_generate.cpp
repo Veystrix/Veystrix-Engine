@@ -1369,9 +1369,28 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       return mx::reshape(row, mx::Shape{1, static_cast<int>(f.size()), H});
     };
     BatchedPrefillDebug bpdbg;
+    // Always collect per-layer hidden states and force them through an f32
+    // materialization barrier. MLX's lazy scheduler otherwise reorders the
+    // compiled-silu graphs across the deep 48-layer chain nondeterministically
+    // (gate (a)); evaluating each layer's hidden in order serializes the graph
+    // and makes the prefill bit-exact. This is always on (not just for dumps).
     logits = run_prefill_batched(ids_arr, embed_all, bl, bh, dcfg, fa, caches,
-                                 group_size, bits,
-                                 std::getenv("REALGEN_DUMP_BATCH_LAYERS") ? &bpdbg : nullptr);
+                                 group_size, bits, &bpdbg);
+    for (size_t l = 0; l < bpdbg.hidden_after_layer.size(); ++l) {
+      mx::eval(mx::astype(bpdbg.hidden_after_layer[l], mx::float32));
+      if (l < bpdbg.branch.size())
+        mx::eval(mx::astype(bpdbg.branch[l], mx::float32));
+      if (l < bpdbg.m2d.size())
+        mx::eval(mx::astype(bpdbg.m2d[l], mx::float32));
+      if (l < bpdbg.gate_logits.size())
+        mx::eval(mx::astype(bpdbg.gate_logits[l], mx::float32));
+      if (l < bpdbg.moe2d.size())
+        mx::eval(mx::astype(bpdbg.moe2d[l], mx::float32));
+      if (l < bpdbg.mlp_inj.size())
+        mx::eval(mx::astype(bpdbg.mlp_inj[l], mx::float32));
+      if (l < bpdbg.gdn_in.size())
+        mx::eval(mx::astype(bpdbg.gdn_in[l], mx::float32));
+    }
     if (const char* hd = std::getenv("REALGEN_DUMP_BATCH_LAYERS")) {
       for (size_t l = 0; l < bpdbg.hidden_after_layer.size(); ++l) {
         mx::array hf = mx::reshape(mx::astype(bpdbg.hidden_after_layer[l], mx::float32), mx::Shape{-1});

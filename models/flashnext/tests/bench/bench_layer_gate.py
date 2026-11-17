@@ -349,7 +349,9 @@ def make_prompt(checkpoint, source_tokens=600, skip_tokens=0):
     excerpt = tokenizer.decode(ids[skip_tokens:skip_tokens + source_tokens])   # skip_tokens > 0: a different user turn, same system prompt
     messages = [{"role": "system", "content": system}, {"role": "user", "content":
         "Review this repository excerpt for concrete correctness risks. Explain the relevant execution path and evidence in detail.\n\n" + excerpt}]
-    return {"model": "flashnext", "messages": messages, "max_tokens": 32, "stream": False}
+    from veystrix.model_registry import installation_id
+    return {"model": installation_id("flashnext", checkpoint), "messages": messages,
+            "max_tokens": 32, "stream": False}
 
 
 def http_json(url, payload=None, timeout=5):

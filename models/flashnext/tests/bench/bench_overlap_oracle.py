@@ -428,45 +428,68 @@ def run_e0(args, language, tokenizer, store):
 
     base = sweep()  # no background reader
 
-    shard = _largest_shard(store)
-    fd = os.open(os.path.join(store.dir, shard), os.O_RDONLY)
-    try:
+    # The M4 Air is fanless: let it cool between the two loaded sweeps so the
+    # guard's thermal stop does not truncate the measurement.
+    if args.cooldown:
+        time.sleep(args.cooldown)
+
+    # Realistic cold reader: F_NOCACHE, small reusable buffers (no per-read
+    # allocation), scanning a region larger than the SSD's DRAM cache. A prior
+    # version cycled a 2 GB region with 64 MB Python bytes allocations and hit
+    # 24.79 GB/s -- that is a memcpy storm, not SSD I/O. Physical bytes come
+    # from disk_bytes_read (proc_pid_rusage), not from bytes requested.
+    shards = sorted({ref.shard for ref in store.refs.values()})
+    fds = []
+    for shard in shards:
+        fd = os.open(os.path.join(store.dir, shard), os.O_RDONLY)
         fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
-        size = os.fstat(fd).st_size
-        region = min(2 << 30, max(1, size))
-        chunk = 64 << 20
-        stop = threading.Event()
-        counter = [0]
-        lock = threading.Lock()
+        fds.append(fd)
+    sizes = [os.fstat(fd).st_size for fd in fds]
+    total_bytes = sum(sizes)
+    chunk = args.read_chunk_mib << 20
+    stop = threading.Event()
+    counter = [0]
+    lock = threading.Lock()
 
-        def reader():
-            off = 0
-            while not stop.is_set():
-                data = os.pread(fd, chunk, off)
-                if not data:
-                    off = 0
-                    continue
-                with lock:
-                    counter[0] += len(data)
-                off = (off + len(data)) % region
+    def reader(tid):
+        # Each worker scans its own stride over the whole checkpoint so the
+        # working set is far larger than any SSD DRAM cache.
+        buf = bytearray(chunk)
+        view = memoryview(buf)
+        fd_idx = tid % len(fds)
+        off = (tid * chunk) % max(1, sizes[fd_idx])
+        while not stop.is_set():
+            try:
+                n = os.preadv(fds[fd_idx], [view], off)
+            except OSError:
+                break  # fd closed during guard teardown
+            if not n:
+                fd_idx = (fd_idx + 1) % len(fds)
+                off = 0
+                continue
+            with lock:
+                counter[0] += n
+            off = (off + n) % max(1, sizes[fd_idx])
 
-        threads = [threading.Thread(target=reader, daemon=True)
-                   for _ in range(args.io_threads)]
-        for t in threads:
-            t.start()
-        time.sleep(0.2)  # let the queue fill before timing
-        read_start = counter[0]
-        t0 = time.perf_counter()
-        contention = sweep()
-        read_dt = time.perf_counter() - t0
-        read_bytes = counter[0] - read_start
-        stop.set()
-        for t in threads:
-            t.join(timeout=2)
-    finally:
+    threads = [threading.Thread(target=reader, args=(i,), daemon=True)
+               for i in range(args.io_threads)]
+    for t in threads:
+        t.start()
+    time.sleep(0.2)  # let the queue fill before timing
+    counter[0] = 0   # ignore the warm-up reads
+    physical_start = disk_bytes_read()
+    t0 = time.perf_counter()
+    contention = sweep()
+    read_dt = time.perf_counter() - t0
+    physical_read = max(0, disk_bytes_read() - physical_start)
+    stop.set()
+    for t in threads:
+        t.join(timeout=2)
+    for fd in fds:
         os.close(fd)
 
-    bandwidth = read_bytes / read_dt / 1e9 if read_dt else 0.0
+    # Use PHYSICAL bytes: this is the real SSD bandwidth under contention.
+    bandwidth = physical_read / read_dt / 1e9 if read_dt else 0.0
     inflation = ((contention["elapsed_s"] - base["elapsed_s"])
                  / base["elapsed_s"] * 100 if base["elapsed_s"] else 0.0)
     g = gate(base, contention)
@@ -478,7 +501,11 @@ def run_e0(args, language, tokenizer, store):
         "baseline_ms_per_token": base["elapsed_s"] / args.tokens * 1000,
         "contention_ms_per_token": contention["elapsed_s"] / args.tokens * 1000,
         "step_inflation_pct": round(inflation, 2),
-        "read_bandwidth_gbs": round(bandwidth, 2),
+        "read_bandwidth_gbs_physical": round(bandwidth, 2),
+        "physical_read_mb_during_sweep": round(physical_read / 1e6, 1),
+        "requested_read_mb_during_sweep": round(counter[0] / 1e6, 1),
+        "checkpoint_total_gb": round(total_bytes / 1e9, 1),
+        "read_chunk_mib": args.read_chunk_mib,
         "model_physical_mb_per_token": base["physical_bytes"] / args.tokens / 1e6,
         "baseline_tok_s": base["tok_s"], "contention_tok_s": contention["tok_s"],
         "critical_path_main_io_ms_per_token": (
@@ -522,6 +549,10 @@ def run_e1(args, language, tokenizer, store):
                            state=state, stats=stats, chaos=chaos)
     state["collect"] = False
     recorded = {idx: (layer, experts) for idx, layer, experts in route_log}
+
+    # The M4 Air is fanless: cool between the two loaded decode passes.
+    if args.cooldown:
+        time.sleep(args.cooldown)
 
     # pass 2: replay as prefetch hints; real router still decides.
     with ThreadPoolExecutor(max_workers=args.io_threads,
@@ -586,6 +617,10 @@ def main() -> None:
     parser.add_argument("--ahead-width", type=int, default=10,
                         help="E1: experts to prefetch per future call")
     parser.add_argument("--io-threads", type=int, default=8)
+    parser.add_argument("--read-chunk-mib", type=int, default=4,
+                        help="E0 reader chunk size (small, reusable buffer)")
+    parser.add_argument("--cooldown", type=int, default=20,
+                        help="seconds to cool between the two E0 sweeps (fanless Air)")
     parser.add_argument("--chaos", action="store_true",
                         help="inject random 0-5 ms delays into I/O threads")
     parser.add_argument("--json", default=None)

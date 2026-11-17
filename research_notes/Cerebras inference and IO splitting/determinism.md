@@ -241,11 +241,43 @@ path (host-buffer-backed slot arrays + `gather_qmm` + `mx::eval`), NOT the GDN
 kernel, NOT weight loading, NOT lazy GDN state. Layer 8's full-attention
 neighbour (layer 7) is a secondary suspect for layer 8's own later divergence.
 
-**Minimal fix (NOT applied, needs verification):** for the cross-shard layers,
-avoid the persistent no-op-deleter host buffers — copy the gathered expert rows
-into fresh owned `mx::array`s per step in `CrossShardMoE::forward`, or route
-those layers through a fully-resident dequantized expert path. Verify with one
-more guarded reduced-config run before touching anything shared.
+### Verification of the fresh-buffer fix — FAILED (hypothesis disproven)
+
+Behind new opt-in `REALGEN_CROSS_SHARD_COPY=1`, `CrossShardMoE::forward` now
+builds each of the 9 expert arrays with the MLX **copying constructor**
+(verified separately: `array(uint32_t*, shape, uint32)` and
+`array(bfloat16_t*, shape, bfloat16)` both deep-copy raw bits into an MLX-owned
+buffer; mutating the source afterwards does not change the array). Two guarded
+10-layer runs with both flags (plus REALGEN_DEBUG_HASHES):
+
+```
+run A: returncode=0 stopped=None seconds=6 floor=4.22GiB swapout_mib=0
+       step0 out=20337  sha=2cbb993e2c8d...
+run B: returncode=0 stopped=None seconds=6 floor=4.09GiB swapout_mib=0
+       step0 out=111494 sha=31cbc2835b83...
+```
+
+**Divergence is completely unchanged:** 42 per-layer DBG arrays — first
+divergence still `L06_branch_gdn`, layers 0–5 still bit-identical; 160 GDN state
+hashes — first divergence still **step 1, layer 9, conv+rec**, step 0 all
+identical. Therefore reusing the persistent `buf_[i]` across steps is NOT the
+cause (Python's fresh-buffer behaviour is a real implementation difference but
+not the source of the nondeterminism).
+
+Additional synthetic probe `sdpa2`: `mx::fast::scaled_dot_product_attention`
+with the generator's exact settings (`force_fused=false`, `mask_mode="causal"`,
+L=1,2,3,4,8,16, bf16 and f32) is deterministic 5/5 in every case — full-attention
+SDPA is also ruled out.
+
+**Status:** no fix found. Everything individually is deterministic, every
+candidate composition-level fix tried so far (fused GDN kernel, lazy state,
+cross-shard buffer reuse) leaves the exact same divergence pattern. The next
+required diagnostic is to hash MoE intermediates (route indices/scores,
+`m2d`, `ar.mixed_input`, `sf.output`, `inject` weights) at layers 5 and 8 in two
+processes; the only remaining untested surface is the MoE route/gather/combine
+with those layers' real expert values, or a value-dependent behaviour in
+`gated_residual`'s large reductions. No unverified fix was applied to shared
+code.
 
 ## Files touched
 

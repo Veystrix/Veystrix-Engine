@@ -347,6 +347,30 @@ void probe_gdnsub(){
   }
 }
 
+// ------- (l) SDPA with the generator's exact settings / short KV cache ----- //
+void probe_sdpa2(){
+  const int B=1,HQ=24,HKV=2,D=256;
+  std::printf("\n=== SDPA generator settings: force_fused=false, mask=causal, short L ===\n");
+  auto qh=rand_floats((size_t)B*HQ*1*D,301,1.0f);
+  float scale=1.0f/std::sqrt((float)D);
+  for(int L:{1,2,3,4,8,16}){
+    auto kh=rand_floats((size_t)B*HKV*L*D,302+L,1.0f);
+    auto vh=rand_floats((size_t)B*HKV*L*D,303+L,1.0f);
+    for(mx::Dtype dt:{mx::bfloat16,mx::float32}){
+      char tag[48];std::snprintf(tag,sizeof(tag),"sdpa-L%d-%s",L,dt==mx::bfloat16?"bf16":"f32");
+      std::vector<float> ref;
+      for(int r=0;r<5;++r){
+        mx::array q(qh.data(),mx::Shape{B,HQ,1,D},dt);
+        mx::array k(kh.data(),mx::Shape{B,HKV,L,D},dt);
+        mx::array v(vh.data(),mx::Shape{B,HKV,L,D},dt);
+        mx::array out=mx::fast::scaled_dot_product_attention(q,k,v,scale,"causal",std::nullopt,std::nullopt,false);
+        std::vector<float> cur=to_host(out);if(r==0)ref=cur;
+        report(tag,r,hash_vec(cur),cur,ref);
+      }
+    }
+  }
+}
+
 // ------- (k) GDN projection matmul shapes (M=1 GEMV, various N) ------------- //
 void probe_matmul(){
   std::printf("\n=== mx::matmul GEMV shapes used by GDN projections ===\n");
@@ -590,5 +614,6 @@ int main(int argc,char** argv){
   if(mode=="all"||mode=="gdnsub") probe_gdnsub();
   if(mode=="all"||mode=="reduce") probe_reduce();
   if(mode=="all"||mode=="matmul") probe_matmul();
+  if(mode=="all"||mode=="sdpa2") probe_sdpa2();
   return 0;
 }

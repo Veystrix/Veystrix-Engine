@@ -141,8 +141,12 @@ std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
                                                const mx::array& b,
                                                const mx::array& dt_bias) {
   // compute_g = exp(-exp(A_log) * softplus(a + dt_bias)); beta = sigmoid(b).
+  // Python uses bf16 nn.softplus(a+dt_bias). A f32 zero in logaddexp would
+  // promote bf16 -> f32 (verified: differs by up to 8e-3); use a same-dtype
+  // zero so softplus stays in the input dtype. Dtype-generic (f32 path unchanged).
   mx::array A = mx::exp(mx::astype(A_log, mx::float32));
-  mx::array sp = mx::logaddexp(a + dt_bias, mx::array(0.0f));
+  mx::array ad = a + dt_bias;
+  mx::array sp = mx::logaddexp(ad, mx::astype(mx::array(0.0f), ad.dtype()));
   mx::array g = mx::exp(-A * sp);
   return {g, mx::sigmoid(b)};
 }
@@ -221,12 +225,21 @@ mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,
 }
 
 std::pair<mx::array, mx::array> gdn_normalize_qk(const mx::array& q, const mx::array& k) {
-  float scale = 1.0f / std::sqrt(static_cast<float>(q.shape().back()));
-  mx::array qn = mx::astype(q, mx::float32);
-  qn = qn * mx::rsqrt(mx::sum(mx::square(qn), -1, /*keepdims=*/true) + 1e-6f);
-  mx::array kn = mx::astype(k, mx::float32);
-  kn = kn * mx::rsqrt(mx::sum(mx::square(kn), -1, /*keepdims=*/true) + 1e-6f);
-  return {qn * scale, kn};
+  // Python's _normalize_qk keeps the input dtype (bf16 on the real checkpoint):
+  //   scale = q.shape[-1] ** -0.5
+  //   q = q * rsqrt(sum(square(q), -1, keepdims=True) + 1e-6)
+  //   k = k * rsqrt(sum(square(k), -1, keepdims=True) + 1e-6)
+  //   return q * scale, k
+  // Casting to f32 or using f32 scalars promotes and diverges (verified up to
+  // 5e-3). Use same-dtype scalars so the whole chain stays in the input dtype.
+  // Dtype-generic: f32 synthetic inputs are unchanged.
+  int Dk = q.shape().back();
+  double scale = std::pow(static_cast<double>(Dk), -0.5);
+  mx::array eps = mx::astype(mx::array(1e-6f), q.dtype());
+  mx::array scale_arr = mx::astype(mx::array(static_cast<float>(scale)), q.dtype());
+  mx::array qn = q * mx::rsqrt(mx::sum(mx::square(q), -1, /*keepdims=*/true) + eps);
+  mx::array kn = k * mx::rsqrt(mx::sum(mx::square(k), -1, /*keepdims=*/true) + eps);
+  return {qn * scale_arr, kn};
 }
 
 mx::array gdn_gate_sigmoid(const mx::array& y, const mx::array& gate) {

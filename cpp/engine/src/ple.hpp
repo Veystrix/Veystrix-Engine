@@ -11,6 +11,14 @@
 // is required for bit-exactness (dequantizing before gather gives a different
 // reduction order).
 //
+// Two backends for that gather (PLEWeights picks the non-empty one):
+//   * emb_shards   -- full mx::arrays, for small/synthetic models.
+//   * emb_streamed -- PLERowTensorRef fd+offset descriptors; pread ONLY the
+//     needed rows and dequantize those, mirroring
+//     models/flashnext/ngram.py StreamingShardedEmbedding._direct and
+//     models/flashnext/store.py:rows_np. This avoids materializing the ~24 GiB
+//     shard table into Metal memory.
+//
 // The key/value projections are veystrix::engine::Linear, which can be either
 // dense or packed Q4 (Linear::quantized).  Both paths are bit-exact via the
 // existing test_linear_quantized coverage.
@@ -36,6 +44,29 @@ struct PLEEmbShard {
       : weight(std::move(w)), scales(std::move(s)), biases(std::move(b)) {}
 };
 
+// Storage dtype of a streamed safetensors row (BF16 travels as raw uint16
+// bits, exactly like models/flashnext/store.py:_DTYPES).
+enum class PLEElemType { U32, F32, F16, BF16 };
+
+// A positioned-read descriptor for one tensor inside a safetensors shard.
+// This mirrors models/flashnext/store.py:TensorRef: the fd is BORROWED (the
+// caller owns it and must keep it open for the life of the PLEWeights); only
+// the rows actually requested are pread from `data_offset + row*row_bytes`.
+struct PLERowTensorRef {
+  int fd = -1;                // borrowed, shared fd of the shard file
+  int64_t data_offset = 0;    // absolute file offset of element [0,0]
+  int64_t row_bytes = 0;      // bytes in one row
+  int64_t elements_per_row = 0;  // packed words (weight) or groups (scales/bias)
+  PLEElemType elem = PLEElemType::U32;
+};
+
+// One shard's three packed tensor refs.  Set PLEWeights.emb_streamed to the
+// 128 production refs to use the tiny-memory path; leave it empty to use the
+// in-memory `emb_shards` path (kept for the synthetic ctest).
+struct PLEStreamedShard {
+  PLERowTensorRef weight, scales, biases;
+};
+
 // All weights/config needed by one PLE layer.  layer_multipliers / head_offsets
 // / head_vocab_sizes are the arrays STORED in the real checkpoint (the C++
 // engine should pass them straight through).  Compute-path helpers below are
@@ -48,7 +79,8 @@ struct PLEWeights {
   mx::array layer_multipliers;   // int64 [ngram_size]
   mx::array head_offsets;        // int64 [ngram_heads]
   mx::array head_vocab_sizes;    // int64 [ngram_heads]
-  std::vector<PLEEmbShard> emb_shards;
+  std::vector<PLEEmbShard> emb_shards;          // in-memory backend (test)
+  std::vector<PLEStreamedShard> emb_streamed;   // positioned-read backend (prod)
   std::vector<int64_t> shard_offsets;  // length n_shards + 1, cumulative rows
 
   int emb_group_size = 32;
@@ -85,6 +117,13 @@ struct PLEWeights {
         hc_count(hc), hidden_size(hs), ple_embed_dim(ped),
         eos_token_id(eos), eps(eps_),
         conv_kernel(ck), conv_dilation(cd), short_conv_state_len(sl) {}
+
+  // Select the tiny-memory positioned-read backend.  The fd in each ref is
+  // borrowed; keep the shard files open for as long as this object is used.
+  void set_streamed_shards(std::vector<PLEStreamedShard> shards) {
+    emb_shards.clear();
+    emb_streamed = std::move(shards);
+  }
 };
 
 // Mutable per-layer cache.  `context` is [B, ngram_size-1] int64 (the trailing

@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <stdexcept>
+#include <unistd.h>
 
 namespace veystrix::engine {
 
@@ -101,6 +104,107 @@ mx::array sharded_embedding(const mx::array& ngram_ids, const PLEWeights& w,
   return mx::reshape(*result, emb_shape);
 }
 
+// ---- Positioned-read (streamed) embedding backend ------------------------
+// Mirrors models/flashnext/ngram.py:
+//   StreamingShardedEmbedding._groups / _direct_rows and
+//   StreamingQuantizedEmbedding._rows (which calls store.rows -> rows_np).
+// Only the rows actually requested are pread; only shards owning at least one
+// requested row are touched.  The packed rows are gathered BEFORE dequantize,
+// preserving the bit-exact ordering used by the in-memory backend.
+mx::array read_streamed_rows(const PLERowTensorRef& ref,
+                             const std::vector<int64_t>& rows) {
+  size_t n = rows.size();
+  size_t bytes = n * (size_t)ref.row_bytes;
+  void* buf = std::malloc(bytes ? bytes : 1);
+  if (buf == nullptr) throw std::runtime_error("PLE streamed: malloc failed");
+  uint8_t* p = static_cast<uint8_t*>(buf);
+  for (size_t i = 0; i < n; ++i) {
+    off_t off = (off_t)(ref.data_offset + rows[i] * ref.row_bytes);
+    ssize_t got = ::pread(ref.fd, p + i * ref.row_bytes,
+                          (size_t)ref.row_bytes, off);
+    if (got != ref.row_bytes) {
+      std::free(buf);
+      throw std::runtime_error("PLE streamed: short pread");
+    }
+  }
+  mx::Shape shape{(int)n, (int)ref.elements_per_row};
+  auto free_buf = [](void* q) { std::free(q); };
+  switch (ref.elem) {
+    case PLEElemType::U32:
+      return mx::array(buf, shape, mx::uint32, free_buf);
+    case PLEElemType::F32:
+      return mx::array(buf, shape, mx::float32, free_buf);
+    case PLEElemType::F16:
+      return mx::array(buf, shape, mx::float16, free_buf);
+    case PLEElemType::BF16:
+      return mx::array(buf, shape, mx::bfloat16, free_buf);
+  }
+  std::free(buf);
+  throw std::runtime_error("PLE streamed: unknown element type");
+}
+
+mx::array sharded_embedding_streamed(const mx::array& ngram_ids,
+                                     const PLEWeights& w, int head_dim) {
+  mx::array flat = mx::reshape(ngram_ids, mx::Shape{-1});
+  mx::eval(flat);
+  size_t n = flat.size();
+  if (n == 0) return mx::zeros(mx::Shape{0, head_dim}, mx::float32);
+  const int64_t* src = flat.data<int64_t>();
+  std::vector<int64_t> global_rows(src, src + n);
+
+  int nshards = (int)w.emb_streamed.size();
+  int64_t total = w.shard_offsets.back();
+  struct Group {
+    std::vector<int> positions;
+    std::vector<int64_t> rows;
+  };
+  std::vector<Group> groups(nshards);
+  for (size_t pos = 0; pos < n; ++pos) {
+    int64_t row = global_rows[pos];
+    int si;
+    int64_t local;
+    if (row < 0 || row >= total) {
+      si = 0;
+      local = row;
+    } else {
+      si = (int)(std::upper_bound(w.shard_offsets.begin(),
+                                  w.shard_offsets.end(), row)
+                 - w.shard_offsets.begin()) -
+           1;
+      local = row - w.shard_offsets[si];
+    }
+    int64_t shard_size = w.shard_offsets[si + 1] - w.shard_offsets[si];
+    local = std::min(std::max(local, (int64_t)0), shard_size - 1);
+    groups[si].positions.push_back((int)pos);
+    groups[si].rows.push_back(local);
+  }
+
+  std::vector<mx::array> blocks;
+  std::vector<int> packed_positions;
+  for (int si = 0; si < nshards; ++si) {
+    if (groups[si].rows.empty()) continue;
+    const auto& g = groups[si];
+    const auto& ref = w.emb_streamed[si];
+    mx::array wg = read_streamed_rows(ref.weight, g.rows);
+    mx::array sg = read_streamed_rows(ref.scales, g.rows);
+    mx::array bg = read_streamed_rows(ref.biases, g.rows);
+    blocks.push_back(mx::dequantize(wg, sg, bg, w.emb_group_size,
+                                    w.emb_bits, w.emb_mode));
+    packed_positions.insert(packed_positions.end(), g.positions.begin(),
+                            g.positions.end());
+  }
+  mx::array packed = blocks.size() == 1 ? blocks[0]
+                                        : mx::concatenate(blocks, 0);
+  std::vector<uint32_t> inverse(n, 0);
+  for (size_t k = 0; k < packed_positions.size(); ++k)
+    inverse[packed_positions[k]] = (uint32_t)k;
+  mx::array idx(inverse.data(), mx::Shape{(int)n}, mx::uint32);
+  mx::array values = mx::take(packed, idx, /*axis=*/0);
+  mx::Shape emb_shape = ngram_ids.shape();
+  emb_shape.push_back(head_dim);
+  return mx::reshape(values, emb_shape);
+}
+
 // Qwen4ExpNGramEmbedding.__call__; writes the updated trailing context back to
 // cache.context.
 mx::array ple_ngram_embedding(const mx::array& input_ids,
@@ -160,11 +264,19 @@ mx::array ple_ngram_embedding(const mx::array& input_ids,
                 mx::Shape{B, L, ngram_heads});
 
   // ngram_embedding.dims = ple_embed_dim / ngram_heads.  Prefer the explicit
-  // config value; otherwise recover it from stored scales[rows, dims/group].
-  int dims = w.ple_embed_dim > 0
-                 ? w.ple_embed_dim / ngram_heads
-                 : (int)(w.emb_shards[0].scales.shape(1)) * w.emb_group_size;
-  mx::array embeddings = sharded_embedding(ngram_ids, w, dims);
+  // config value (required by the streamed backend); otherwise recover it from
+  // stored scales[rows, dims/group] on the in-memory backend.
+  int dims = 0;
+  if (w.ple_embed_dim > 0)
+    dims = w.ple_embed_dim / ngram_heads;
+  else if (!w.emb_shards.empty())
+    dims = (int)(w.emb_shards[0].scales.shape(1)) * w.emb_group_size;
+  if (dims <= 0)
+    throw std::runtime_error(
+        "PLE: cannot determine head dim; set PLEWeights.ple_embed_dim");
+  mx::array embeddings = w.emb_streamed.empty()
+                             ? sharded_embedding(ngram_ids, w, dims)
+                             : sharded_embedding_streamed(ngram_ids, w, dims);
   return mx::reshape(embeddings, mx::Shape{B, S, dims * ngram_heads});
 }
 

@@ -1,0 +1,1 @@
+ngram shard scales/biases are BF16 raw uint16 bits

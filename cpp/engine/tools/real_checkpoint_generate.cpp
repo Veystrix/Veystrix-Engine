@@ -819,10 +819,136 @@ mx::array embed_token(const DenseLoader::QTriplet& embed, int token,
   return mx::reshape(row, mx::Shape{1, 1, hidden});
 }
 
+// ---- minimal safetensors header reader for streamed PLE row descriptors ----
+struct StTensorRef {
+  int fd = -1;
+  int64_t data_offset = 0;      // absolute offset of element [0,0]
+  int64_t row_bytes = 0;
+  int64_t elements_per_row = 0; // prod(shape[1:])
+  PLEElemType elem = PLEElemType::U32;
+};
+// fds are borrowed by PLEWeights for the whole run; keep them open here.
+static std::vector<int> g_ple_fds;
+
+// Parse one tensor's data_offsets[0] and shape from a flat safetensors header.
+static bool st_meta(const std::string& header, const std::string& name,
+                    int64_t& offset0, std::vector<int64_t>& shape,
+                    std::string& dtype) {
+  std::string pat = "\"" + name + "\"";
+  size_t p = header.find(pat);
+  if (p == std::string::npos) return false;
+  size_t obj = header.find('{', p), close = header.find('}', obj);
+  if (obj == std::string::npos || close == std::string::npos) return false;
+  std::string b = header.substr(obj, close - obj + 1);
+  // shape
+  size_t sp = b.find("\"shape\""), sb = b.find('[', sp), se = b.find(']', sb);
+  shape.clear();
+  if (sp != std::string::npos && sb != std::string::npos) {
+    std::string arr = b.substr(sb + 1, se - sb - 1);
+    size_t q = 0;
+    while ((q = arr.find_first_of("0123456789-", q)) != std::string::npos) {
+      size_t e = q;
+      if (arr[e] == '-') ++e;
+      while (e < arr.size() && arr[e] >= '0' && arr[e] <= '9') ++e;
+      shape.push_back(std::strtoll(arr.substr(q, e - q).c_str(), nullptr, 10));
+      q = e;
+    }
+  }
+  // data_offsets[0]
+  size_t dp = b.find("\"data_offsets\""), db = b.find('[', dp), de = b.find(',', db);
+  offset0 = -1;
+  if (dp != std::string::npos && db != std::string::npos && de != std::string::npos)
+    offset0 = std::strtoll(b.substr(db + 1, de - db - 1).c_str(), nullptr, 10);
+  // dtype
+  size_t yp = b.find("\"dtype\""), yq = b.find('"', yp + 8);
+  if (yp != std::string::npos && yq != std::string::npos) {
+    size_t ye = b.find('"', yq + 1);
+    dtype = b.substr(yq + 1, ye - yq - 1);
+  }
+  return offset0 >= 0 && shape.size() >= 2;
+}
+
+static StTensorRef st_ref(const std::string& dir, const Config& cfg,
+                          const std::string& key) {
+  auto it = cfg.find("shard." + key);
+  if (it == cfg.end()) throw std::runtime_error("missing shard map for PLE tensor: " + key);
+  std::string path = dir + "/" + it->second;
+  // Reuse an already-open fd for this path if present.
+  int fd = -1;
+  // (open a fresh one per call; count is small — 128 shards x 3 = 384, but
+  //  we cache by path below)
+  static std::map<std::string, int> fd_cache;
+  auto fc = fd_cache.find(path);
+  if (fc != fd_cache.end()) fd = fc->second;
+  else {
+    fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) throw std::runtime_error("cannot open PLE shard: " + path);
+    g_ple_fds.push_back(fd);
+    fd_cache[path] = fd;
+  }
+  std::string header;
+  // Read header from this fd (data_start needed); do NOT push a second fd.
+  unsigned char lenbuf[8];
+  if (::pread(fd, lenbuf, 8, 0) != 8)
+    throw std::runtime_error("short PLE shard header length: " + path);
+  uint64_t nn = 0;
+  for (int i = 0; i < 8; ++i) nn |= static_cast<uint64_t>(lenbuf[i]) << (8 * i);
+  header.resize(nn);
+  ::pread(fd, header.data(), nn, 8);
+  int64_t data_start = 8 + static_cast<int64_t>(nn);
+
+  StTensorRef r;
+  r.fd = fd;
+  std::vector<int64_t> shape;
+  std::string dtype;
+  int64_t off = -1;
+  if (!st_meta(header, key, off, shape, dtype))
+    throw std::runtime_error("cannot parse PLE tensor: " + key);
+  r.data_offset = data_start + off;
+  int64_t per = 1;
+  for (size_t d = 1; d < shape.size(); ++d) per *= shape[d];
+  r.elements_per_row = per;
+  int itemsize = (dtype == "U32") ? 4 : (dtype == "BF16" || dtype == "F16") ? 2 : 4;
+  r.row_bytes = per * itemsize;
+  r.elem = (dtype == "U32") ? PLEElemType::U32
+           : (dtype == "F32") ? PLEElemType::F32
+           : (dtype == "F16") ? PLEElemType::F16
+           : PLEElemType::BF16;
+  return r;
+}
+
+// Row count (shape[0]) of a tensor from its shard header.
+static int64_t st_rows(const std::string& dir, const Config& cfg,
+                       const std::string& key) {
+  auto it = cfg.find("shard." + key);
+  if (it == cfg.end()) return 0;
+  int fd = ::open((dir + "/" + it->second).c_str(), O_RDONLY);
+  if (fd < 0) return 0;
+  unsigned char lenbuf[8];
+  if (::pread(fd, lenbuf, 8, 0) != 8) { ::close(fd); return 0; }
+  uint64_t nn = 0;
+  for (int i = 0; i < 8; ++i) nn |= static_cast<uint64_t>(lenbuf[i]) << (8 * i);
+  std::string header(nn, '\0');
+  ::pread(fd, header.data(), nn, 8);
+  ::close(fd);
+  // Find the shape array after the tensor key.
+  std::string pat = "\"" + key + "\"";
+  size_t p = header.find(pat);
+  if (p == std::string::npos) return 0;
+  size_t sp = header.find("\"shape\"", p);
+  size_t sb = sp == std::string::npos ? std::string::npos : header.find('[', sp);
+  size_t se = sb == std::string::npos ? std::string::npos : header.find(']', sb);
+  if (sb == std::string::npos || se == std::string::npos) return 0;
+  std::string arr = header.substr(sb + 1, se - sb - 1);
+  size_t q = arr.find_first_of("0123456789");
+  return q == std::string::npos ? 0 : std::strtoll(arr.c_str() + q, nullptr, 10);
+}
+
 // Build the production PLE layer (layer index 1) from the flat config's shard
 // map. All PLE tensors are present there (gen_real_config.py emits them).
-static PLEWeights load_ple(DenseLoader& dl, const Config& cfg, int group_size,
-                           int bits, float eps) {
+static PLEWeights load_ple(DenseLoader& dl, const Config& cfg,
+                           const std::string& ckpt_dir,
+                           int group_size, int bits, float eps) {
   const std::string pb = "language_model.model.layers." +
                          std::to_string(get_int(cfg, "ple_layer_ids", 2) - 1) +
                          ".ple.";
@@ -846,30 +972,41 @@ static PLEWeights load_ple(DenseLoader& dl, const Config& cfg, int group_size,
   mx::array ho = dl.raw(pb + "ple_embedding.ngram_heads_offsets");
   mx::array hvs = dl.raw(pb + "ple_embedding.ngram_heads_vocab_sizes");
 
-  std::vector<PLEEmbShard> shards;
+  // Streamed n-gram embedding: read only the ~16 needed rows per lookup from
+  // disk (mirrors production StreamingShardedEmbedding). Never materialize the
+  // full 24 GiB table. Three different absolute offsets per shard tensor.
+  std::vector<PLEStreamedShard> streamed;
   std::vector<int64_t> offsets;
   offsets.push_back(0);
-  int64_t total = 0;
-  shards.reserve(nparts);
+  streamed.reserve(nparts);
   for (int s = 0; s < nparts; ++s) {
     std::string base = pb + "ple_embedding.ngram_embedding.shard_" +
                        std::to_string(s);
-    mx::array ew = dl.raw(base + ".weight");
-    mx::array es = dl.raw(base + ".scales");
-    mx::array eb = dl.raw(base + ".biases");
-    total += ew.shape(0);
-    offsets.push_back(total);
-    shards.emplace_back(std::move(ew), std::move(es), std::move(eb));
+    StTensorRef wref = st_ref(ckpt_dir, cfg, base + ".weight");
+    StTensorRef sref = st_ref(ckpt_dir, cfg, base + ".scales");
+    StTensorRef bref = st_ref(ckpt_dir, cfg, base + ".biases");
+    PLEStreamedShard d;
+    d.weight = {wref.fd, wref.data_offset, wref.row_bytes, wref.elements_per_row, wref.elem};
+    d.scales = {sref.fd, sref.data_offset, sref.row_bytes, sref.elements_per_row, sref.elem};
+    d.biases = {bref.fd, bref.data_offset, bref.row_bytes, bref.elements_per_row, bref.elem};
+    streamed.push_back(d);
   }
-  std::fprintf(stderr, "[load] PLE: %zu embedding shards, %lld rows\n",
-               shards.size(), (long long)total);
+  // shard_offsets: all shards have equal row counts in this checkpoint.
+  // Read the row count from the first shard header via its element count.
+  int64_t rows0 = streamed.empty() ? 0 : st_rows(ckpt_dir, cfg,
+                       pb + "ple_embedding.ngram_embedding.shard_0.weight");
+  for (int s = 0; s < nparts; ++s) offsets.push_back((s + 1) * rows0);
+  std::fprintf(stderr, "[load] PLE: %zu streamed embedding shards, %lld rows/shard\n",
+               streamed.size(), (long long)rows0);
   int sl = (ck - 1) * cd;
-  return PLEWeights(std::move(key_proj), std::move(value_proj),
-                    std::move(nk), std::move(nq), std::move(nc),
-                    std::move(cw), std::move(lm), std::move(ho), std::move(hvs),
-                    std::move(shards), std::move(offsets),
-                    group_size, bits, ns, hpn, hc, hs, ped, eos, eps,
-                    ck, cd, sl);
+  PLEWeights w(std::move(key_proj), std::move(value_proj),
+               std::move(nk), std::move(nq), std::move(nc),
+               std::move(cw), std::move(lm), std::move(ho), std::move(hvs),
+               /*shards=*/{}, std::move(offsets),
+               group_size, bits, ns, hpn, hc, hs, ped, eos, eps,
+               ck, cd, sl);
+  w.set_streamed_shards(std::move(streamed));
+  return w;
 }
 
 std::vector<StepRecord> run_generation(const std::string& ckpt,
@@ -958,7 +1095,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   const bool use_ple = std::getenv("VEYSTRIX_CPP_NO_PLE") == nullptr &&
                        get_int(cfg, "ple_layer_ids", 0) != 0;
   std::optional<PLEWeights> ple_weights;
-  if (use_ple) ple_weights = load_ple(dl, cfg, group_size, bits, eps);
+  if (use_ple) ple_weights = load_ple(dl, cfg, ckpt, group_size, bits, eps);
 
   for (int l = 0; l < n_layers; ++l) {
     const std::string b = "language_model.model.layers." + std::to_string(l) + ".";

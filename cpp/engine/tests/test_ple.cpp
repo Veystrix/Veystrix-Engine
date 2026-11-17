@@ -6,10 +6,15 @@
 
 #include <mlx/mlx.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -66,6 +71,50 @@ static std::string json_get(const std::string& s, const std::string& key) {
 static int json_int(const std::string& s, const std::string& key, int fallback = 0) {
   std::string v = json_get(s, key);
   return v.empty() ? fallback : std::stoi(v);
+}
+
+// Write a fixture shard tensor as raw little-endian rows and return a
+// positioned-read descriptor pointing at it (the same shape as a safetensors
+// tensor ref: absolute data offset + per-row byte stride).
+static PLERowTensorRef write_rows_file(const std::string& path,
+                                       const mx::array& a) {
+  mx::eval(a);
+  PLERowTensorRef r;
+  r.data_offset = 0;
+  r.elements_per_row = a.shape(1);
+  size_t count = a.size();
+  FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr) throw std::runtime_error("cannot create " + path);
+  if (a.dtype() == mx::uint32) {
+    r.elem = PLEElemType::U32;
+    r.row_bytes = a.shape(1) * 4;
+    std::fwrite(a.data<uint32_t>(), 4, count, f);
+  } else if (a.dtype() == mx::float32) {
+    r.elem = PLEElemType::F32;
+    r.row_bytes = a.shape(1) * 4;
+    std::fwrite(a.data<float>(), 4, count, f);
+  } else if (a.dtype() == mx::bfloat16) {
+    r.elem = PLEElemType::BF16;
+    r.row_bytes = a.shape(1) * 2;
+    std::fwrite(a.data<mx::bfloat16_t>(), 2, count, f);
+  } else if (a.dtype() == mx::float16) {
+    r.elem = PLEElemType::F16;
+    r.row_bytes = a.shape(1) * 2;
+    std::fwrite(a.data<mx::float16_t>(), 2, count, f);
+  } else {
+    std::fclose(f);
+    throw std::runtime_error("unsupported dtype in streamed fixture");
+  }
+  std::fclose(f);
+  r.fd = ::open(path.c_str(), O_RDONLY);
+  if (r.fd < 0) throw std::runtime_error("cannot open " + path);
+  return r;
+}
+
+static std::string ple_tmp_root() {
+  namespace fs = std::filesystem;
+  return (fs::temp_directory_path() /
+          ("ple_stream_" + std::to_string(::getpid()))).string();
 }
 
 static void report_diff(const char* label, const mx::array& a, const mx::array& b) {
@@ -166,16 +215,42 @@ int main(int argc, char** argv) {
     mx::array expected = load("expected");
     mx::array exp_cc = load("expected_cache_conv"), exp_ctx = load("expected_cache_context");
     bool has_mask = std::ifstream(cd + "/mask.npy").good();
+    bool bf16_shards = std::ifstream(cd + "/shard_bf16.flag").good();
     std::optional<mx::array> mask;
     if (has_mask) mask = load("mask");
 
+    // Build BOTH backends from the same fixture shard arrays.  The streamed
+    // backend writes each shard's rows to a raw temp file so the C++ reader
+    // exercises the real pread path (no full-shard mx::array materialization).
+    namespace fs = std::filesystem;
+    static const std::string tmp_root = ple_tmp_root();
+    fs::create_directories(tmp_root);
+
     std::vector<PLEEmbShard> shards;
+    std::vector<PLEStreamedShard> streamed;
+    std::vector<int> open_fds;
     shards.reserve(nshards);
+    streamed.reserve(nshards);
     for (int i = 0; i < nshards; ++i) {
       std::string pw = "shard_" + std::to_string(i) + "_w";
       std::string ps = "shard_" + std::to_string(i) + "_s";
       std::string pb_ = "shard_" + std::to_string(i) + "_b";
-      shards.emplace_back(load(pw.c_str()), load(ps.c_str()), load(pb_.c_str()));
+      mx::array sw = load(pw.c_str()), ss = load(ps.c_str()),
+                sb = load(pb_.c_str());
+      if (bf16_shards) {
+        // Fixture stores BF16 rows as raw uint16 bits.
+        ss = mx::view(ss, mx::bfloat16);
+        sb = mx::view(sb, mx::bfloat16);
+      }
+      PLEStreamedShard st;
+      st.weight = write_rows_file(tmp_root + "/s" + std::to_string(i) + "_w.bin", sw);
+      st.scales = write_rows_file(tmp_root + "/s" + std::to_string(i) + "_s.bin", ss);
+      st.biases = write_rows_file(tmp_root + "/s" + std::to_string(i) + "_b.bin", sb);
+      open_fds.push_back(st.weight.fd);
+      open_fds.push_back(st.scales.fd);
+      open_fds.push_back(st.biases.fd);
+      streamed.push_back(std::move(st));
+      shards.emplace_back(std::move(sw), std::move(ss), std::move(sb));
     }
 
     std::vector<int64_t> offsets(shard_offsets.size());
@@ -221,7 +296,28 @@ int main(int argc, char** argv) {
       std::printf("  %s: cache_context OK\n", c.c_str());
     std::printf("  %s: %s\n", c.c_str(),
                 bit_equal_f32(out, expected) ? "OK" : "MISMATCH");
+
+    // ---- streamed backend: same output from positioned row reads -----------
+    w.set_streamed_shards(std::move(streamed));
+    PLECache cache2(ctx0, cc0);  // (context, conv_state)
+    mx::array out2 = ple_forward(hidden, ids, w, cache2,
+                                 has_mask ? &*mask : nullptr);
+    mx::eval(out2, *cache2.conv_state, *cache2.context);
+    if (!bit_equal_f32(out2, expected))
+      report_diff("streamed ple output", out2, expected);
+    CHECK(bit_equal_f32(out2, expected),
+          ("streamed ple output: " + c).c_str());
+    CHECK(bit_equal_f32(*cache2.conv_state, exp_cc),
+          ("streamed cache_conv: " + c).c_str());
+    CHECK(bit_equal_i64(*cache2.context, exp_ctx),
+          ("streamed cache_context: " + c).c_str());
+    std::printf("  %s streamed: %s\n", c.c_str(),
+                bit_equal_f32(out2, expected) ? "OK" : "MISMATCH");
+    for (int fd : open_fds) ::close(fd);
   }
+
+  std::error_code ec;
+  std::filesystem::remove_all(ple_tmp_root(), ec);
 
   if (failures) {
     std::fprintf(stderr, "test_ple FAILED (%d)\n", failures);

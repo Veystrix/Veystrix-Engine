@@ -44,6 +44,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
         {
@@ -568,6 +569,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
         {
@@ -1094,6 +1096,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
         {
@@ -1601,6 +1604,531 @@
             true,
             true,
             false
+          ]
+        }
+      ]
+    },
+    {
+      "id": "decode_s1_bf16",
+      "npy_dir": "decode_s1_bf16",
+      "B": 2,
+      "S": 1,
+      "mask": false,
+      "hidden_size": 64,
+      "hc_count": 2,
+      "hidden_dim": 128,
+      "ple_embed_dim": 256,
+      "ngram_size": 3,
+      "heads_per_ngram": 2,
+      "ngram_heads": 4,
+      "head_dim": 64,
+      "vocab_size": 248320,
+      "eos_token_id": 5,
+      "seed": 1234,
+      "ple_layer_index": 0,
+      "ngram_vocab_size_base": 200,
+      "make_ngram_vocab_size_divisible_by": 128,
+      "split_ngram_parts": 4,
+      "num_shards": 4,
+      "ple_conv_kernel_size": 3,
+      "conv_dilation": 3,
+      "short_conv_state_len": 6,
+      "context_len": 2,
+      "eps": 1e-06,
+      "quant_group_size": 32,
+      "quant_bits": 4,
+      "quant_mode": "affine",
+      "shard_scale_dtype": "bf16",
+      "reproducible": true,
+      "arrays": [
+        {
+          "name": "key_w",
+          "shape": [
+            128,
+            32
+          ],
+          "dtype": "uint32",
+          "sha256": "a35e27b81a8a21a84fe239c71c57e0fb2d53a118303b98131819e528ac76c616",
+          "first": [
+            1198799257,
+            2282576239,
+            2001050236,
+            1465439882
+          ]
+        },
+        {
+          "name": "key_s",
+          "shape": [
+            128,
+            8
+          ],
+          "dtype": "float32",
+          "sha256": "f8aa11f9fe94a93132a2a6d029df391fea635c77d27dfc16d1df471f2d09548a",
+          "first": [
+            0.013416321016848087,
+            0.010292761027812958,
+            -0.01553680095821619,
+            0.011544503271579742
+          ]
+        },
+        {
+          "name": "key_b",
+          "shape": [
+            128,
+            8
+          ],
+          "dtype": "float32",
+          "sha256": "e52316b4ed59c9e9d88681a6ad064b78ade7c7bb020b7607be32f05b01937d0d",
+          "first": [
+            -0.1073305681347847,
+            -0.10292761027812958,
+            0.12429440766572952,
+            -0.09235602617263794
+          ]
+        },
+        {
+          "name": "val_w",
+          "shape": [
+            64,
+            32
+          ],
+          "dtype": "uint32",
+          "sha256": "eb7feb897380b37c728b8ad84f9ed14f27777310d995dfead401604c3cea1644",
+          "first": [
+            2366069375,
+            2243467944,
+            1724286027,
+            2580006455
+          ]
+        },
+        {
+          "name": "val_s",
+          "shape": [
+            64,
+            8
+          ],
+          "dtype": "float32",
+          "sha256": "6436bdc6d340a086a5c792d4b51cdb75bbef1c3a6faf7cc6818972dd963cc085",
+          "first": [
+            -0.016897069290280342,
+            0.011199329048395157,
+            -0.013817806728184223,
+            -0.01746269501745701
+          ]
+        },
+        {
+          "name": "val_b",
+          "shape": [
+            64,
+            8
+          ],
+          "dtype": "float32",
+          "sha256": "e6b47a1c2679437053b192ecc911820a70e57056eb35340e20457f8bd6965850",
+          "first": [
+            0.13517655432224274,
+            -0.08959463238716125,
+            0.11054245382547379,
+            0.13970156013965607
+          ]
+        },
+        {
+          "name": "norm_key",
+          "shape": [
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "e153fd4031c1d2432ddf00df812eec6a53ca54d20a6a9d01d11b00d5d3ceac30",
+          "first": [
+            0.14175398647785187,
+            -0.06194149702787399,
+            -0.023339252918958664,
+            -0.03530154749751091
+          ]
+        },
+        {
+          "name": "norm_query",
+          "shape": [
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "a5291fe7ed5bfa7588e605ba33e3aad8cb39689409baf0a712d0e9175e8fc852",
+          "first": [
+            -0.10208606719970703,
+            -0.013301102444529533,
+            0.07756946980953217,
+            -0.02286529913544655
+          ]
+        },
+        {
+          "name": "norm_conv",
+          "shape": [
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "4599d8c5a7ae7da1237f3cf492ffbdade164cc02b3353fd1880f82f5fb17c614",
+          "first": [
+            -0.12958760559558868,
+            0.11990389227867126,
+            -0.012543209828436375,
+            0.0017186285695061088
+          ]
+        },
+        {
+          "name": "conv_w",
+          "shape": [
+            128,
+            3,
+            1
+          ],
+          "dtype": "float32",
+          "sha256": "d65ebb965a2ce12c4397bf8bbd39d83267996d5eb649463b6e2ec5612567af3f",
+          "first": [
+            -0.052820805460214615,
+            0.033975716680288315,
+            0.04145211726427078,
+            0.015781503170728683
+          ]
+        },
+        {
+          "name": "layer_multipliers",
+          "shape": [
+            3
+          ],
+          "dtype": "int64",
+          "sha256": "37349930c3c77bf4927b2afb6b50f30c404f42f00f5790bda96e7d9589c26477",
+          "first": [
+            23703573157769,
+            20109073645365,
+            8052911324071
+          ]
+        },
+        {
+          "name": "head_offsets",
+          "shape": [
+            4
+          ],
+          "dtype": "int64",
+          "sha256": "ccf7c284f66cf1f64e90fedd850b97f9265757adae52ba9907f6593ee814ea97",
+          "first": [
+            0,
+            211,
+            434,
+            661
+          ]
+        },
+        {
+          "name": "head_vocab_sizes",
+          "shape": [
+            4
+          ],
+          "dtype": "int64",
+          "sha256": "5d40625bf4ca3df664b05fe98308dcb4c17f21253351d198152ba0a876630952",
+          "first": [
+            211,
+            223,
+            227,
+            229
+          ]
+        },
+        {
+          "name": "shard_offsets",
+          "shape": [
+            5
+          ],
+          "dtype": "int64",
+          "sha256": "aa226a64b3246638e1ff481a1f9b13c71bea4abc68c22a339540234b8218620e",
+          "first": [
+            0,
+            224,
+            448,
+            672
+          ]
+        },
+        {
+          "name": "shard_0_w",
+          "shape": [
+            224,
+            8
+          ],
+          "dtype": "uint32",
+          "sha256": "a6e7f9721a24f71eab5b3255e69df3a3ec72afe13510d125aefda4d90eb75239",
+          "first": [
+            3198707909,
+            3137690474,
+            4241923048,
+            2352602076
+          ]
+        },
+        {
+          "name": "shard_0_s",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "ce04c4ce36ee2feb5e345c2b23bc8dda68e5f255d81f59b97e70821b55973264",
+          "first": [
+            15611,
+            15556,
+            15584,
+            15573
+          ]
+        },
+        {
+          "name": "shard_0_b",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "acb5820ff66fa35676581aa27656bbf3a649400c8753a1cd2f51e04d9f2c74c3",
+          "first": [
+            48797,
+            48732,
+            48736,
+            48725
+          ]
+        },
+        {
+          "name": "shard_1_w",
+          "shape": [
+            224,
+            8
+          ],
+          "dtype": "uint32",
+          "sha256": "2b44b84c9f925fed7ad5f923ef06d65fea9d24d1396fc8430a30d44f3f7a2c6b",
+          "first": [
+            2595006888,
+            2409269150,
+            1215733894,
+            2780622505
+          ]
+        },
+        {
+          "name": "shard_1_s",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "840c507ceeef4c508b55afcb642cfdf711a8fe2fc9bf04c7940461dde13e11b9",
+          "first": [
+            15628,
+            15560,
+            15594,
+            48359
+          ]
+        },
+        {
+          "name": "shard_1_b",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "92d29553f89a13a28f4be4a26a5ae89be615cb55b0910d691bfe06d1f1ca850b",
+          "first": [
+            48798,
+            48737,
+            48746,
+            15975
+          ]
+        },
+        {
+          "name": "shard_2_w",
+          "shape": [
+            224,
+            8
+          ],
+          "dtype": "uint32",
+          "sha256": "0a5da6761294c680094699ecf03b892acf2f806fd4a1665fcf97b5b6b0cdc83e",
+          "first": [
+            3974072235,
+            3935747323,
+            2590460800,
+            2309533613
+          ]
+        },
+        {
+          "name": "shard_2_s",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "d73b43a007691dc1652cf15212ab1df5b096e4d7df3262f4245f96b075b3c1c9",
+          "first": [
+            48330,
+            48328,
+            48346,
+            15554
+          ]
+        },
+        {
+          "name": "shard_2_b",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "c450db1bae5610de3185eb28f02d258df97568daa1c114a6b4499395bccb3430",
+          "first": [
+            15996,
+            15944,
+            16008,
+            48754
+          ]
+        },
+        {
+          "name": "shard_3_w",
+          "shape": [
+            224,
+            8
+          ],
+          "dtype": "uint32",
+          "sha256": "800b44a55b8ef908a8c801d8052ffd44df69010abd1648dac8b32037af3cfc41",
+          "first": [
+            1770691669,
+            3449572821,
+            1896851274,
+            3349782103
+          ]
+        },
+        {
+          "name": "shard_3_s",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "f5219db7b27bb81fc647978658fd45d251c63ffc7af789e92f0610b1bf3ecf0d",
+          "first": [
+            15573,
+            48414,
+            15622,
+            48341
+          ]
+        },
+        {
+          "name": "shard_3_b",
+          "shape": [
+            224,
+            2
+          ],
+          "dtype": "uint16",
+          "sha256": "e26473a6ce228d4806925f3ccdc16abcb51719533a5dc5cef308b03bb8d49489",
+          "first": [
+            48725,
+            16050,
+            48774,
+            15957
+          ]
+        },
+        {
+          "name": "hidden_states",
+          "shape": [
+            2,
+            1,
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "39a7e74402298b3861ecd9af3284e6771ee2f577c8fabbcbbced78767e540c52",
+          "first": [
+            -0.4854735732078552,
+            0.6275233030319214,
+            0.2643779218196869,
+            -1.0326058864593506
+          ]
+        },
+        {
+          "name": "input_ids",
+          "shape": [
+            2,
+            1
+          ],
+          "dtype": "int64",
+          "sha256": "98fd2d9a3b22a4404298631e810a4400e56b715b01824993bfa0c4c3851a18e9",
+          "first": [
+            26,
+            58
+          ]
+        },
+        {
+          "name": "cache_conv",
+          "shape": [
+            2,
+            6,
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "fd9243e1ba57263ed469c3bdbd7ade6ec5254e7ed924a9f5737fa44749933cc0",
+          "first": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "cache_context",
+          "shape": [
+            2,
+            2
+          ],
+          "dtype": "int64",
+          "sha256": "195313754e63a74261ef0a2af323445863bd0fc3baafd4d0a3d1a69ff7a00509",
+          "first": [
+            5,
+            5,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "expected",
+          "shape": [
+            2,
+            1,
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "56c94ef3da058e294fcb0380085cb1a53a95b0dcd45ab053d19a38d565374928",
+          "first": [
+            0.013604344800114632,
+            -0.04786226898431778,
+            -0.009306272491812706,
+            -0.03972905874252319
+          ]
+        },
+        {
+          "name": "expected_cache_conv",
+          "shape": [
+            2,
+            6,
+            128
+          ],
+          "dtype": "float32",
+          "sha256": "e1d24d4596d943a93cf9d4e728fe5ef77c470bc42cde0c4b30dca4a13b3f541f",
+          "first": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "expected_cache_context",
+          "shape": [
+            2,
+            2
+          ],
+          "dtype": "int64",
+          "sha256": "8cdf0f1c5a16e880e711233dc56c21cec0403049fec22e4ebd5643cc616fc5fd",
+          "first": [
+            5,
+            26,
+            5,
+            58
           ]
         }
       ]

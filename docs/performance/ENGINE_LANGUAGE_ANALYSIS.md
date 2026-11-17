@@ -92,3 +92,47 @@ the time for bit-exactness gating, not just translation.
   app and HTTP server unchanged, and treat bit-exactness as the primary gate. The pager scaffold we
   built (`cpp/decode/`) is the first tested module.
 - **Cheapest real win available now:** enable the measured #2 TTFT improvement (flag off, bit-identical).
+
+## 6. How much Python can become C++? (2026-11-17 follow-up)
+
+Two different questions hide in "how much":
+
+**a) Capability — what CAN be ported:** essentially all of the model math. MLX's core is
+C++20; the Python API is a thin nanobind wrapper over it. Apple states MLX has "fully featured
+C++, C, and Swift APIs which closely mirror the Python API," and our venv ships the full C++
+API surface (`mlx/include/mlx/`: array, ops, transforms, compile, memory, distributed, io,
+quantized ops, CMake config). We built and ran `mlx_probe` + the pager against it. So every
+tensor op our engine uses (`mx.gather_qmm`, `quantized_matmul`, `argpartition`, GDN scan, SDPA)
+has a C++ equivalent.
+
+**b) Practicality — what SHOULD be ported (fraction of our Python):** the ~8,900-line hot path
+from §3 (decode/prefill loops, expert cache, router, store, QSA, GDN) — i.e. roughly
+**8,900 / ~76,000 first-party Python lines ≈ 12% of the code, but ~100% of the performance**.
+The other ~88% (CLI, HTTP server, mode/profile system, preferences, quality gates, the 17k+
+lines of tests/bench, diagnostics) can and should stay Python: it sits above the HTTP boundary or
+below it as glue, and translating it adds no speed. The streaming model definitions themselves
+come from `mlx-vlm` in the venv (`language.py` for qwen4_exp) and would have to be re-expressed
+in C++ (the reference C++ runner did exactly this for decode).
+
+So: ~12% of Python lines are the realistic port target; that 12% is where all the time goes.
+
+## 7. Is there future support for C++ AI? YES — first-class and growing
+
+- Apple's official MLX page (opensource.apple.com/projects/mlx) lists **Python, Swift, C, and C++**
+  as supported languages, "can run on any Apple platform."
+- WWDC25 ("Get started with MLX") and WWDC26 ("Explore distributed inference and training with
+  MLX") both present C++ as a first-class API; WWDC26's distributed inference/training story is
+  explicitly "Python, Swift, and C++ APIs" with RDMA over Thunderbolt 5.
+- Apple ships `mlx-c` (C API, MIT) — the bridge the Swift API itself is built on — and
+  `mlx-swift`. The C++ API is actively maintained: MLX 0.32.4 (Oct 2026) "Export C++20 requirement
+  to CMake consumers," and our pinned 0.32.2 already has full headers + CMake config.
+- The repo already proves native code ships in the DMG (`native_read.bundled.dylib` in
+  `dist/Veystrix.app/.../engine/lib/`), so C++ dylibs need no new packaging mechanism.
+- Long-term trend: MLX is Apple's strategic on-device AI framework; C++ is its embedding layer
+  for apps that want to go beyond Python. The reference bit-exact C++ runner for our exact model
+  exists and is maintained research code.
+
+**Conclusion:** choosing C++ is well-supported and future-proof for Apple Silicon. The risk is
+not ecosystem support — it is the one-time engineering cost (§4) and the fact that C++ alone
+does not remove the 16 GB I/O wall. A C++ port makes most sense as the stated future-model
+investment, not as a 16 GB speed fix.

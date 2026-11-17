@@ -280,6 +280,9 @@ int main(int argc, char** argv) {
         /*short_conv_state_len=*/json_int(meta, "short_conv_state_len", 9),
         /*mode=*/"affine");
 
+    // The synthetic oracle uses the unpatched language.py RMSNorm (1.0+w).
+    w.norm_one_centered = false;
+
     PLECache cache(ctx0, cc0);  // (context, conv_state)
     mx::array out = ple_forward(hidden, ids, w, cache,
                                 has_mask ? &*mask : nullptr);

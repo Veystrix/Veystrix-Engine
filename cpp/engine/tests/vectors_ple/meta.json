@@ -44,6 +44,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "norm_one_centered": false,
       "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
@@ -569,6 +570,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "norm_one_centered": false,
       "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
@@ -1096,6 +1098,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "norm_one_centered": false,
       "shard_scale_dtype": "f32",
       "reproducible": true,
       "arrays": [
@@ -1638,6 +1641,7 @@
       "quant_group_size": 32,
       "quant_bits": 4,
       "quant_mode": "affine",
+      "norm_one_centered": false,
       "shard_scale_dtype": "bf16",
       "reproducible": true,
       "arrays": [

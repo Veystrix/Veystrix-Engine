@@ -96,6 +96,11 @@ struct PLEWeights {
   int ple_embed_dim = 0;
   int eos_token_id = 248044;
   float eps = 1e-6f;
+  // Production (models/flashnext/patch_rmsnorm.py, configured one-centered for
+  // this checkpoint) uses gain = weight.f32, i.e. NO "+1.0".  The raw
+  // mlx_vlm language.py uses gain = 1.0 + weight.f32.  Set this false only when
+  // reproducing the unpatched Python module (the synthetic oracle).
+  bool norm_one_centered = true;
   int conv_kernel = 4;
   int conv_dilation = 3;  // == ngram_size
   int short_conv_state_len = 9;  // (kernel-1)*dilation

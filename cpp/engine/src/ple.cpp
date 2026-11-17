@@ -18,7 +18,7 @@ mx::array f32_scalar(float v) { return mx::array(v, mx::float32); }
 // Qwen4ExpRMSNorm with group_size: y = x.f32.reshape(...,-1,gs);
 // y *= rsqrt(mean(y^2,-1,keepdims)+eps); y *= (1 + weight.f32).
 mx::array ple_rms_norm(const mx::array& x, const mx::array& weight,
-                       int group_size, float eps) {
+                       int group_size, float eps, bool one_centered) {
   auto dtype = x.dtype();
   mx::array y = mx::astype(x, mx::float32);
   mx::Shape shape = y.shape();
@@ -30,8 +30,9 @@ mx::array ple_rms_norm(const mx::array& x, const mx::array& weight,
   mx::array w = mx::reshape(weight, mx::Shape{-1, group_size});
   mx::array mean = mx::mean(mx::square(y), -1, /*keepdims=*/true);
   y = mx::multiply(y, mx::rsqrt(mx::add(mean, f32_scalar(eps))));
-  y = mx::multiply(y,
-                   mx::add(f32_scalar(1.0f), mx::astype(w, mx::float32)));
+  mx::array gain = mx::astype(w, mx::float32);
+  if (!one_centered) gain = mx::add(f32_scalar(1.0f), gain);
+  y = mx::multiply(y, gain);
   return mx::astype(mx::reshape(y, shape), dtype);
 }
 
@@ -308,10 +309,11 @@ mx::array ple_forward(const mx::array& hidden_states,
   mx::array embeddings = ple_ngram_embedding(input_ids, w, cache);
 
   mx::array key_lin = linear(embeddings, w.key_proj);
-  mx::array keys = ple_rms_norm(key_lin, w.norm_key, w.hidden_size, w.eps);
+  mx::array keys = ple_rms_norm(key_lin, w.norm_key, w.hidden_size, w.eps,
+                                w.norm_one_centered);
   mx::array values = linear(embeddings, w.value_proj);
   mx::array queries = ple_rms_norm(hidden_states, w.norm_query, w.hidden_size,
-                                   w.eps);
+                                   w.eps, w.norm_one_centered);
 
   int B = hidden_states.shape(0);
   int S = hidden_states.shape(1);
@@ -330,7 +332,8 @@ mx::array ple_forward(const mx::array& hidden_states,
   mx::array gated =
       mx::reshape(mx::multiply(mx::sigmoid(gate), mx::expand_dims(values, 2)),
                   mx::Shape{B, S, hc * H});
-  mx::array normed = ple_rms_norm(gated, w.norm_conv, H, w.eps);
+  mx::array normed = ple_rms_norm(gated, w.norm_conv, H, w.eps,
+                                  w.norm_one_centered);
 
   if (mask != nullptr && mask->ndim() == 2) {
     mx::array m3 = mx::expand_dims(*mask, -1);

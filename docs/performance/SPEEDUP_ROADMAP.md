@@ -31,7 +31,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 | 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | **DONE 2026-11-17:** host 6.1%, I/O wait 52.3% | guarded, clean | DONE |
 | 1 | #8 | High Power / AC mode | Free config | both | **not applicable:** already on AC, `lowpowermode 0`, and MacBook Air M4 has no High Power Mode | none needed | N/A — already optimal |
 | 2 | #7 | MLX command-buffer limits | Free config | decode | **A/B measured:** Qwen decode unresolved + TTFT +0.86 s regression; Nemotron decode **−0.5 tok/s resolved regression** | digest identical | REJECTED on our 16 GB M4 |
-| 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
+| 3 | #9 | MLX memory-residency API | Free config | both | **rejected:** old wired A/B 2.83–2.88 (w3.5) vs 2.9 (w0) noise; new w=2 hit memory guard (swap +1.7 GB) | digest | REJECTED |
 | 4 | #10 | `async_eval` one-step-ahead | Free config | decode | **already rejected:** `DO_NOT_IMPLEMENT.md:56` 311 vs 314 tok/s; `FLASHNEXT_OVERLAP` already on | digest | REJECTED (prior) |
 | 5 | #5 | Correctly sized pinned expert cache | Cache | decode | **A/B measured:** Nemotron 2→4 GB is a resolved REGRESSION (−1.61 tok/s, +0.86 s TTFT) | digest identical | 2 GB retained; 4 GB rejected |
 | 6 | #2 | Explicit sorted, gap-merged `pread` | Read path | decode+prefill | **A/B measured:** TTFT −0.69 s (resolved), decode unresolved | digest identical | PARTIAL — flag off |
@@ -87,6 +87,13 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 (`hw.model Mac16,12`): already on AC, `pmset lowpowermode 0`, and this model has no High Power
 Mode (that is MacBook Pro M1 Pro/Max+/Mac Studio only). The source's 1.4–2.17× compares
 Low-Power-on vs off; our state is already the "off/fast" side. No A/B possible or needed.
+
+**Step 3 — Method #9 REJECTED 2026-11-17.** `FLASHNEXT_WIRED_GB` already wires via
+`set_wired_limit`. Old A/B (`results/flashnext/20260923-041256-wired-load/`) showed no gain
+(wired 3.5 GB: 2.83/2.88/2.84 vs wired 0: 2.83/2.90; quiet 3.10 vs 3.04 — noise). New guarded
+attempt with wired=2 GB was **STOPPED by the guard** (available fell to 1.42 GiB, swap grew
+1.66 GB, compressor peaked 6.8 GB) — a wired floor is counterproductive on this already
+memory-pressured 16 GB Mac, consistent with the rejected wired sysctl. Flag stays off.
 
 **Step 2 A/B — Method #7 MEASURED & REJECTED 2026-11-17.** Both guarded, 3 rounds, digest identical.
 - Qwen (`results/flashnext/20261117-145953-performance-v2-flag-flashnext-mlx-auto-buffer-caps-manual/`):

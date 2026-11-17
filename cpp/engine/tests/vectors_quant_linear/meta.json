@@ -90,7 +90,8 @@
           ]
         }
       ],
-      "file": "qlinear_in2560_out2560_bias0_m1.npz"
+      "file": "qlinear_in2560_out2560_bias0_m1.npz",
+      "npy_dir": "qlinear_in2560_out2560_bias0_m1"
     },
     {
       "in": 2560,
@@ -178,7 +179,8 @@
           ]
         }
       ],
-      "file": "qlinear_in2560_out2560_bias0_m16.npz"
+      "file": "qlinear_in2560_out2560_bias0_m16.npz",
+      "npy_dir": "qlinear_in2560_out2560_bias0_m16"
     },
     {
       "in": 2560,
@@ -280,7 +282,8 @@
           ]
         }
       ],
-      "file": "qlinear_in2560_out2560_bias1_m1.npz"
+      "file": "qlinear_in2560_out2560_bias1_m1.npz",
+      "npy_dir": "qlinear_in2560_out2560_bias1_m1"
     },
     {
       "in": 2560,
@@ -382,7 +385,8 @@
           ]
         }
       ],
-      "file": "qlinear_in2560_out2560_bias1_m16.npz"
+      "file": "qlinear_in2560_out2560_bias1_m16.npz",
+      "npy_dir": "qlinear_in2560_out2560_bias1_m16"
     },
     {
       "in": 256,
@@ -470,7 +474,8 @@
           ]
         }
       ],
-      "file": "qlinear_in256_out128_bias0_m1.npz"
+      "file": "qlinear_in256_out128_bias0_m1.npz",
+      "npy_dir": "qlinear_in256_out128_bias0_m1"
     },
     {
       "in": 256,
@@ -558,7 +563,8 @@
           ]
         }
       ],
-      "file": "qlinear_in256_out128_bias0_m16.npz"
+      "file": "qlinear_in256_out128_bias0_m16.npz",
+      "npy_dir": "qlinear_in256_out128_bias0_m16"
     },
     {
       "in": 256,
@@ -660,7 +666,8 @@
           ]
         }
       ],
-      "file": "qlinear_in256_out128_bias1_m1.npz"
+      "file": "qlinear_in256_out128_bias1_m1.npz",
+      "npy_dir": "qlinear_in256_out128_bias1_m1"
     },
     {
       "in": 256,
@@ -762,7 +769,8 @@
           ]
         }
       ],
-      "file": "qlinear_in256_out128_bias1_m16.npz"
+      "file": "qlinear_in256_out128_bias1_m16.npz",
+      "npy_dir": "qlinear_in256_out128_bias1_m16"
     }
   ]
 }

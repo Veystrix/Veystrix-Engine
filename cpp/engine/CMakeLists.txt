@@ -112,6 +112,13 @@ if(NOT Python3_Interpreter_FOUND)
   set(Python3_EXECUTABLE python3)
 endif()
 
+# Packed linear projection bit-exact parity (Python nn.QuantizedLinear).
+add_executable(test_linear_quantized tests/test_linear_quantized.cpp)
+target_include_directories(test_linear_quantized PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_linear_quantized PRIVATE veystrix_engine)
+set_target_properties(test_linear_quantized PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Full multi-layer decoder loop bit-exact parity (real mlx_vlm modules).
 add_executable(test_decoder tests/test_decoder.cpp)
 target_include_directories(test_decoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -173,6 +180,13 @@ set_target_properties(test_native_layer PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 enable_testing()
+add_executable(test_dense_manifest tests/test_dense_manifest.cpp)
+target_include_directories(test_dense_manifest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME dense_manifest COMMAND test_dense_manifest)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_quant_linear/meta.json")
+  add_test(NAME linear_quantized COMMAND test_linear_quantized
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_quant_linear")
+endif()
 add_test(NAME slot_plan COMMAND test_slot_plan)
 add_test(NAME crossshard_moe
   COMMAND ${Python3_EXECUTABLE}

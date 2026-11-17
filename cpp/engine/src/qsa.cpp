@@ -20,7 +20,7 @@ mx::array qsa_rms_norm(const mx::array& x, const mx::array& weight, float eps) {
 
 QSAIndexerOutput qsa_indexer_pre_rope(
     const mx::array& x,
-    const mx::array& proj_weight,
+    const Linear& proj_weight,
     const mx::array& q_weight,
     const mx::array& k_weight,
     const QSAConfig& cfg) {
@@ -33,7 +33,7 @@ QSAIndexerOutput qsa_indexer_pre_rope(
 
   // nn.Linear(x @ W.T), bias=False:
   //   qk = self.index_qk_proj(x).reshape(B, S, Hq + Hk, D)
-  mx::array qk = mx::matmul(x, mx::transpose(proj_weight));
+  mx::array qk = linear(x, proj_weight);
   qk = mx::reshape(qk, {B, S, Hq + Hk, D});
 
   // query = qk[:, :, :Hq]                         [B, S, Hq, D]

@@ -51,14 +51,13 @@ mx::array moe_block_with_shared(const mx::array& x, const mx::array& route,
   //   shared      = self.shared_expert(x)                    dense GLU MLP
   //   shared_gate = sigmoid(self.shared_expert_gate(x))      [tokens, 1]
   //   return y + shared_gate * shared
-  mx::array gate_logits =
-      mx::matmul(x, mx::transpose(shared.gate_logits_w));      // [t, 1]
+  mx::array gate_logits = linear(x, shared.gate_logits_w);      // [t, 1]
   mx::array shared_gate = mx::sigmoid(gate_logits);
 
-  mx::array g = mx::matmul(x, mx::transpose(shared.gate_w));   // [t, inter]
-  mx::array u = mx::matmul(x, mx::transpose(shared.up_w));     // [t, inter]
+  mx::array g = linear(x, shared.gate_w);   // [t, inter]
+  mx::array u = linear(x, shared.up_w);     // [t, inter]
   mx::array act = swiglu(g, u);                                // explicit silu
-  mx::array s = mx::matmul(act, mx::transpose(shared.down_w)); // [t, H]
+  mx::array s = linear(act, shared.down_w); // [t, H]
 
   return y + shared_gate * s;
 }
@@ -96,9 +95,9 @@ FullAttentionOutput full_attention_forward(
   mx::array mask = *mask_opt;  // [B, 1, S, key_len]
 
   // ---- dense q/k/v projections (Qwen3_5Attention._prepare_projected_qkv) -
-  mx::array qproj = mx::matmul(x, mx::transpose(w.q_w));  // [B,S,Hq*D*2]
-  mx::array kproj = mx::matmul(x, mx::transpose(w.k_w));  // [B,S,Hkv*D]
-  mx::array vproj = mx::matmul(x, mx::transpose(w.v_w));
+  mx::array qproj = linear(x, w.q_w);  // [B,S,Hq*D*2]
+  mx::array kproj = linear(x, w.k_w);  // [B,S,Hkv*D]
+  mx::array vproj = linear(x, w.v_w);
 
   mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, Hq, 2 * D});
   std::vector<mx::array> halves = mx::split(q4, 2, -1);
@@ -149,7 +148,7 @@ FullAttentionOutput full_attention_forward(
 
   // output.transpose(0,2,1,3).reshape(B,L,-1); then o_proj(out * sigmoid(gate))
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, Hq * D});
-  out = mx::matmul(out * mx::sigmoid(gate), mx::transpose(w.o_w));
+  out = linear(out * mx::sigmoid(gate), w.o_w);
 
   cache.offset += S;  // KVCache.update_and_fetch advances offset by L
   return {out, mask};
@@ -214,7 +213,7 @@ mx::array run_decoder_step_full(
 
     // ---- MoE with non-zero shared expert ---------------------------------
     mx::array m2d = mx::reshape(mr.mixed_input, mx::Shape{1, cfg.hidden_size});
-    mx::array gate_logits = mx::matmul(m2d, mx::transpose(L.base.gate_w));
+    mx::array gate_logits = linear(m2d, L.base.gate_w);
     RouterOutput routes =
         router(gate_logits, L.base.top_k, L.base.renorm_blend);
     ExpertWeights ew(L.base.expert_gate, L.base.expert_up,

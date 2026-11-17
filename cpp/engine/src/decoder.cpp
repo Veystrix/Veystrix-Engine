@@ -68,7 +68,7 @@ mx::array run_decoder_step(
     //   gate = nn.Linear(dim, n_experts)  ->  softmax(precise)  ->
     //   argpartition(top_k)  ->  scores / sum
     mx::array m2d = mx::reshape(mr.mixed_input, mx::Shape{1, cfg.hidden_size});
-    mx::array gate_logits = mx::matmul(m2d, mx::transpose(w.gate_w));
+    mx::array gate_logits = linear(m2d, w.gate_w);
     RouterOutput routes = router(gate_logits, w.top_k, w.renorm_blend);
     ExpertWeights ew(w.expert_gate, w.expert_up, w.expert_down,
                      w.group_size, w.bits);

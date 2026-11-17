@@ -45,11 +45,13 @@
 #include "decoder_full.hpp"
 #include "moe_stream.hpp"
 #include "cross_shard_moe.hpp"
+#include "dense_manifest.hpp"
 #include "io_pager.hpp"
 #include "gdn_layer.hpp"
 #include "gdn_conv.h"
 
 #include <mlx/mlx.h>
+#include <mlx/memory.h>
 
 #include <algorithm>
 #include <array>
@@ -215,6 +217,15 @@ bool dbg_should_hash() {
   return debug_capture::get().moe_hash && debug_capture::get().current_step <= 2;
 }
 
+// Always-on memory telemetry (no numeric effect): active/cache/peak GiB.
+static void mem_telemetry(const char* where) {
+  const double GIB = 1024.0 * 1024.0 * 1024.0;
+  std::fprintf(stderr,
+               "[mem %s] active=%.2f GiB cache=%.2f GiB peak=%.2f GiB\n",
+               where, mx::get_active_memory() / GIB, mx::get_cache_memory() / GIB,
+               mx::get_peak_memory() / GIB);
+}
+
 // --------------------------------------------------------------------------- //
 // Flat config parsing (produced by gen_real_config.py).                        //
 // --------------------------------------------------------------------------- //
@@ -272,6 +283,7 @@ std::vector<int> split_ints(const std::string& s) {
 // --------------------------------------------------------------------------- //
 // Dense weight loader: only NON-expert tensors, grouped by shard.               //
 // --------------------------------------------------------------------------- //
+
 class DenseLoader {
  public:
   DenseLoader(const std::string& dir, const Config& cfg, int group_size, int bits)
@@ -298,22 +310,104 @@ class DenseLoader {
     return tit->second;
   }
 
-  // Dequantize an affine-Q4 dense tensor (weight/scales/biases), or return the
-  // raw tensor when no `.scales` companion exists (norm gains, A_log, ...).
-  mx::array dense(const std::string& name) {
-    // `name` may already end in ".weight" (norm gains, gate, A_log, ...) or be
-    // the base of an affine-Q4 triplet. Probes always use the triplet BASE.
+  // Raw (non-quantized) dense tensor: norm gains, A_log, conv weight, etc.
+  // These have no `.scales` companion. Throws if `name` IS a quantized triplet,
+  // because eager dequantization is exactly the memory/parity bug we removed.
+  mx::array dense(const std::string& name, bool allow_dequantize = false) {
     const std::string base =
         name.size() > 7 && name.compare(name.size() - 7, 7, ".weight") == 0
             ? name.substr(0, name.size() - 7)
             : name;
-    if (shard_of_.count(base + ".scales") == 0) return raw(name);
+    bool quantized = shard_of_.count(base + ".scales") != 0;
+    if (!quantized) return raw(name);
+    if (!allow_dequantize)
+      throw std::runtime_error(
+          "dense() called on a quantized tensor (use linear()): " + name);
     mx::array w = raw(base + ".weight");
     mx::array s = as_bf16(raw(base + ".scales"));
     mx::array b = as_bf16(raw(base + ".biases"));
     mx::array out = mx::dequantize(w, s, b, group_size_, bits_, "affine");
     mx::eval(out);
     return out;
+  }
+
+  // A dense projection, kept PACKED when the checkpoint has a `.scales`
+  // companion (Python's nn.QuantizedLinear path) so no bf16 copy is
+  // materialized and the arithmetic matches production. `logical_in` is the
+  // module's logical input dim (nn.Linear.weight.shape[-1]); group_size and
+  // bits are derived exactly like loader.py's class_predicate:
+  //   bits = packed_in*32 // logical_in ; group_size = logical_in // n_groups
+  // and fail closed if they do not divide evenly. When a manifest was loaded,
+  // its recorded (kind, group_size, bits, has_bias) is cross-checked.
+  Linear linear(const std::string& base, int logical_in) {
+    if (shard_of_.count(base + ".scales") == 0) {
+      // Plain Linear / raw tensor: keep the original dense path.
+      if (!manifest_.empty()) {
+        auto it = manifest_.find(base);
+        if (it != manifest_.end() &&
+            (it->second.kind == "quantized_linear" ||
+             it->second.kind == "quantized_embedding"))
+          throw std::runtime_error("manifest says quantized but checkpoint has no scales: " + base);
+      }
+      return Linear(raw(base));
+    }
+    mx::array w = raw(base + ".weight");
+    mx::array s = as_bf16(raw(base + ".scales"));
+    mx::array b = as_bf16(raw(base + ".biases"));
+    int packed_in = static_cast<int>(w.shape(w.shape().size() - 1));
+    int n_groups = static_cast<int>(s.shape(s.shape().size() - 1));
+    if (packed_in <= 0 || n_groups <= 0)
+      throw std::runtime_error("linear(): invalid shapes for " + base);
+
+    // Resolve (bits, group_size). The manifest, when loaded, is authoritative
+    // (it is generated from the exact Python model); otherwise derive from the
+    // global config bits, exactly the inverse of loader.py's class_predicate.
+    int bits = 0, gs = 0;
+    const dmanifest::MInfo* mp = nullptr;
+    if (!manifest_.empty()) {
+      auto it = manifest_.find(base);
+      if (it == manifest_.end())
+        throw std::runtime_error("manifest missing quantized tensor: " + base);
+      mp = &it->second;
+      if (mp->kind != "quantized_linear" && mp->kind != "quantized_embedding")
+        throw std::runtime_error("manifest says non-quantized but checkpoint has scales: " + base);
+      bits = mp->bits;
+      gs = mp->group_size;
+    } else if (logical_in > 0) {
+      if (packed_in * 32 % logical_in != 0)
+        throw std::runtime_error("linear(): bits do not divide evenly for " + base);
+      bits = packed_in * 32 / logical_in;
+      if (logical_in % n_groups != 0)
+        throw std::runtime_error("linear(): group size does not divide evenly for " + base);
+      gs = logical_in / n_groups;
+    } else {
+      bits = bits_;
+      if (packed_in * 32 % bits != 0)
+        throw std::runtime_error("linear(): global bits do not divide packed_in for " + base);
+      int logical = packed_in * 32 / bits;
+      if (logical % n_groups != 0)
+        throw std::runtime_error("linear(): group size does not divide evenly for " + base);
+      gs = logical / n_groups;
+    }
+    if (bits < 1 || bits > 8 || gs < 1)
+      throw std::runtime_error("linear(): implausible gs/bits for " + base);
+    // Shape consistency check (always): packed_in*32/bits must equal gs*n_groups.
+    if (packed_in * 32 != gs * n_groups * bits)
+      throw std::runtime_error("linear(): gs/bits inconsistent with shapes for " + base);
+    return Linear::quantized(std::move(w), std::move(s), std::move(b), gs, bits);
+  }
+
+  // Load a dense manifest produced by tools/dump_dense_manifest.py. Empty path
+  // disables the cross-check (used by synthetic fixtures without a manifest).
+  void load_manifest(const std::string& path) {
+    if (path.empty()) return;
+    std::ifstream probe(path);
+    if (!probe) throw std::runtime_error("cannot open dense manifest: " + path);
+    manifest_ = dmanifest::load_file(path);
+    if (manifest_.empty())
+      throw std::runtime_error("dense manifest parsed to zero entries: " + path);
+    std::fprintf(stderr, "[load] dense manifest: %zu entries (%s)\n",
+                 manifest_.size(), path.c_str());
   }
 
   // Quantized triplet kept in packed form (embed table + lm_head): dequantize
@@ -338,6 +432,7 @@ class DenseLoader {
   int group_size_, bits_;
   std::map<std::string, std::string> shard_of_;
   std::map<std::string, std::unordered_map<std::string, mx::array>> shards_;
+  std::map<std::string, dmanifest::MInfo> manifest_;
 };
 
 
@@ -345,10 +440,12 @@ class DenseLoader {
 // Per-layer real weights.                                                      //
 // --------------------------------------------------------------------------- //
 struct RealLayer {
-  mx::array attn_norm_w, attn_down_w, attn_up_w, attn_inject_w;
-  mx::array mlp_norm_w, mlp_down_w, mlp_up_w, mlp_inject_w;
-  mx::array gate_w;
-  mx::array shared_gw, shared_uw, shared_dw, shared_glw;
+  mx::array attn_norm_w;
+  Linear attn_down_w, attn_up_w, attn_inject_w;
+  mx::array mlp_norm_w;
+  Linear mlp_down_w, mlp_up_w, mlp_inject_w;
+  Linear gate_w;
+  Linear shared_gw, shared_uw, shared_dw, shared_glw;
   std::optional<GDNWeights> gdn;
   std::optional<FullAttentionWeights> full;
   std::unique_ptr<StreamingMoE> stream;       // single-shard layers
@@ -356,10 +453,10 @@ struct RealLayer {
   int top_k = 0;
   AttnKind kind = AttnKind::Linear;
 
-  RealLayer(mx::array an, mx::array ad, mx::array au, mx::array ai,
-            mx::array mn, mx::array md, mx::array mu, mx::array mi,
-            mx::array gw, mx::array sg, mx::array su, mx::array sd,
-            mx::array sgl, std::optional<GDNWeights> g,
+  RealLayer(mx::array an, Linear ad, Linear au, Linear ai,
+            mx::array mn, Linear md, Linear mu, Linear mi,
+            Linear gw, Linear sg, Linear su, Linear sd,
+            Linear sgl, std::optional<GDNWeights> g,
             std::optional<FullAttentionWeights> f,
             std::unique_ptr<StreamingMoE> st, std::unique_ptr<CrossShardMoE> cr,
             int tk, AttnKind k)
@@ -374,7 +471,8 @@ struct RealLayer {
 };
 
 struct RealHead {
-  mx::array norm_w, down_w, up_w;
+  mx::array norm_w;
+  Linear down_w, up_w;
   DenseLoader::QTriplet lm;
 };
 
@@ -391,9 +489,9 @@ FullAttentionOutput full_attention_dense(
   const int S = static_cast<int>(x.shape(1));
   const int Hq = cfg.n_heads, Hkv = cfg.kv_heads, D = cfg.head_dim;
 
-  mx::array qproj = mx::matmul(x, mx::transpose(w.q_w));
-  mx::array kproj = mx::matmul(x, mx::transpose(w.k_w));
-  mx::array vproj = mx::matmul(x, mx::transpose(w.v_w));
+  mx::array qproj = linear(x, w.q_w);
+  mx::array kproj = linear(x, w.k_w);
+  mx::array vproj = linear(x, w.v_w);
 
   mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, Hq, 2 * D});
   std::vector<mx::array> halves = mx::split(q4, 2, -1);
@@ -425,7 +523,7 @@ FullAttentionOutput full_attention_dense(
       q, *cache.keys, *cache.values, scale, /*mask_mode=*/"causal",
       /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, Hq * D});
-  out = mx::matmul(out * mx::sigmoid(gate), mx::transpose(w.o_w));
+  out = linear(out * mx::sigmoid(gate), w.o_w);
 
   cache.offset += S;
   // Placeholder mask: this branch is the dense (indexer=None) fallback, so no
@@ -484,10 +582,10 @@ GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
 
   for (int t = 0; t < S; ++t) {
     mx::array xt = mx::slice(x, mx::Shape{0, t, 0}, mx::Shape{B, t + 1, H});
-    mx::array mixed_qkv = mx::matmul(xt, mx::transpose(w.in_proj_qkv));
-    mx::array z = mx::matmul(xt, mx::transpose(w.in_proj_z));
-    mx::array b = mx::matmul(xt, mx::transpose(w.in_proj_b));
-    mx::array a = mx::matmul(xt, mx::transpose(w.in_proj_a));
+    mx::array mixed_qkv = linear(xt, w.in_proj_qkv);
+    mx::array z = linear(xt, w.in_proj_z);
+    mx::array b = linear(xt, w.in_proj_b);
+    mx::array a = linear(xt, w.in_proj_a);
     z = mx::reshape(z, mx::Shape{B, 1, Hv, Dv});
 
     mx::array conv_input = mx::concatenate({conv_state, mixed_qkv}, 1);
@@ -526,7 +624,7 @@ GDNLayerOutput gdn_layer_forward_local(const mx::array& x, const GDNWeights& w,
 
     mx::array normed = rms_norm_gated(step.y, w.norm_weight, z, cfg.eps, sigmoid);
     mx::array flat = mx::reshape(normed, mx::Shape{B, 1, cfg.value_dim});
-    steps.push_back(mx::matmul(flat, mx::transpose(w.out_proj)));
+    steps.push_back(linear(flat, w.out_proj));
   }
   mx::array out = (S == 1) ? steps[0] : mx::concatenate(steps, 1);
   return {out, conv_state, rec_state};
@@ -594,18 +692,18 @@ mx::array run_step(
         cfg.hc_count, cfg.hidden_size, cfg.eps);
 
     mx::array m2d = mx::reshape(mr.mixed_input, mx::Shape{1, cfg.hidden_size});
-    mx::array gate_logits = mx::matmul(m2d, mx::transpose(L.gate_w));
+    mx::array gate_logits = linear(m2d, L.gate_w);
     RouterOutput routes = router(gate_logits, L.top_k, 0.0f);
     StreamForwardResult sf =
         L.stream ? L.stream->forward(m2d, routes.indices, routes.scores)
                  : L.cross->forward(m2d, routes.indices, routes.scores);
 
     // Non-zero dense shared expert (Qwen3_5MoeSparseMoeBlock combine).
-    mx::array sgl = mx::matmul(m2d, mx::transpose(L.shared_glw));
+    mx::array sgl = linear(m2d, L.shared_glw);
     mx::array sg = mx::sigmoid(sgl);
-    mx::array g = mx::matmul(m2d, mx::transpose(L.shared_gw));
-    mx::array u = mx::matmul(m2d, mx::transpose(L.shared_uw));
-    mx::array s = mx::matmul(swiglu(g, u), mx::transpose(L.shared_dw));
+    mx::array g = linear(m2d, L.shared_gw);
+    mx::array u = linear(m2d, L.shared_uw);
+    mx::array s = linear(swiglu(g, u), L.shared_dw);
     mx::array moe2d = sf.output + sg * s;
     mx::array moe = mx::reshape(moe2d, mx::Shape{1, 1, cfg.hidden_size});
     {
@@ -655,9 +753,9 @@ mx::array run_step(
   yg = yg * mx::astype(w2d, mx::float32);
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
   mx::array low =
-      mx::matmul(normed, mx::transpose(head.down_w)) / static_cast<float>(hc);
+      linear(normed, head.down_w) / static_cast<float>(hc);
   mx::array mix = mx::sigmoid(
-      mx::matmul(low * mx::sigmoid(low), mx::transpose(head.up_w)));
+      linear(low * mx::sigmoid(low), head.up_w));
   mx::array mixed = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   debug_capture::get().add("final_mixed", mixed);
 
@@ -703,7 +801,16 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   const int top_k = get_int(cfg, "top_k");
   const int group_size = get_int(cfg, "group_size", 32);
   const int bits = get_int(cfg, "bits", 4);
-  const int num_slots = get_int(cfg, "num_slots", 16);
+  int num_slots = get_int(cfg, "num_slots", 16);
+  // Optional: shrink the expert slot pool to top_k (saves ~0.8 GiB anonymous).
+  // Bit-exact as long as PR #2's plan_slots bookkeeping holds. Default stays 16.
+  {
+    const char* e = std::getenv("VEYSTRIX_CPP_EXPERT_SLOTS");
+    if (e) {
+      int v = std::atoi(e);
+      if (v >= top_k && v <= num_slots) num_slots = v;
+    }
+  }
   const float eps = get_float(cfg, "eps", 1e-6f);
   const std::vector<int> prompt = split_ints(get_str(cfg, "prompt_ids"));
   const std::vector<std::string> layer_types =
@@ -745,6 +852,11 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   }
 
   DenseLoader dl(ckpt, cfg, group_size, bits);
+  {
+    const char* em = std::getenv("VEYSTRIX_CPP_DENSE_MANIFEST");
+    std::string mp = em ? std::string(em) : get_str(cfg, "dense_manifest", "");
+    if (!mp.empty()) dl.load_manifest(mp);
+  }
   const std::string prefix_fmt = get_str(
       cfg, "expert_prefix",
       "language_model.model.layers.{L}.mlp.switch_mlp");
@@ -765,35 +877,43 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     const std::string b = "language_model.model.layers." + std::to_string(l) + ".";
     const bool linear = layer_types[l] == "linear_attention";
 
+    const int hc_hidden = hc_count * H;
+    // Norm gains / conv / bias / A_log have no `.scales` companion -> raw.
     mx::array anw = dl.dense(b + "attn_hyper_connection.hc_norm.weight");
-    mx::array adw = dl.dense(b + "attn_hyper_connection.input_mix_weight_down");
-    mx::array auw = dl.dense(b + "attn_hyper_connection.input_mix_weight_up");
-    mx::array aiw = dl.dense(b + "attn_hyper_connection.block_inject_weight");
     mx::array mnw = dl.dense(b + "mlp_hyper_connection.hc_norm.weight");
-    mx::array mdw = dl.dense(b + "mlp_hyper_connection.input_mix_weight_down");
-    mx::array muw = dl.dense(b + "mlp_hyper_connection.input_mix_weight_up");
-    mx::array miw = dl.dense(b + "mlp_hyper_connection.block_inject_weight");
-    mx::array gate = dl.dense(b + "mlp.gate.weight");
-    mx::array sgw = dl.dense(b + "mlp.shared_expert.gate_proj");
-    mx::array suw = dl.dense(b + "mlp.shared_expert.up_proj");
-    mx::array sdw = dl.dense(b + "mlp.shared_expert.down_proj");
-    mx::array sglw = dl.dense(b + "mlp.shared_expert_gate.weight");
+    // Dense projections -> keep packed (Python nn.QuantizedLinear path).
+    // logical_in is the module's input dim; 0 means "derive from global bits",
+    // with the manifest (when loaded) authoritative.
+    Linear adw = dl.linear(b + "attn_hyper_connection.input_mix_weight_down", hc_hidden);
+    Linear auw = dl.linear(b + "attn_hyper_connection.input_mix_weight_up", hc_lowrank);
+    Linear aiw = dl.linear(b + "attn_hyper_connection.block_inject_weight", hc_hidden);
+    Linear mdw = dl.linear(b + "mlp_hyper_connection.input_mix_weight_down", hc_hidden);
+    Linear muw = dl.linear(b + "mlp_hyper_connection.input_mix_weight_up", hc_lowrank);
+    Linear miw = dl.linear(b + "mlp_hyper_connection.block_inject_weight", hc_hidden);
+    Linear gate = dl.linear(b + "mlp.gate.weight", 0);
+    Linear sgw = dl.linear(b + "mlp.shared_expert.gate_proj", H);
+    Linear suw = dl.linear(b + "mlp.shared_expert.up_proj", H);
+    Linear sdw = dl.linear(b + "mlp.shared_expert.down_proj", 0);  // in = inter (shape-derived)
+    Linear sglw = dl.linear(b + "mlp.shared_expert_gate.weight", H);
 
     std::optional<GDNWeights> gdn;
     std::optional<FullAttentionWeights> full;
     if (linear) {
       const std::string a = b + "linear_attn.";
-      gdn.emplace(dl.dense(a + "in_proj_qkv"), dl.dense(a + "in_proj_z"),
-                  dl.dense(a + "in_proj_b"), dl.dense(a + "in_proj_a"),
+      gdn.emplace(dl.linear(a + "in_proj_qkv", H), dl.linear(a + "in_proj_z", H),
+                  dl.linear(a + "in_proj_b", H), dl.linear(a + "in_proj_a", H),
                   dl.dense(a + "conv1d.weight"), dl.dense(a + "A_log"),
                   dl.dense(a + "dt_bias"), dl.dense(a + "norm.weight"),
-                  dl.dense(a + "out_proj"));
+                  dl.linear(a + "out_proj", dcfg.gdn.value_dim));
     } else {
       const std::string a = b + "self_attn.";
-      full.emplace(dl.dense(a + "q_proj"), dl.dense(a + "k_proj"),
-                   dl.dense(a + "v_proj"), dl.dense(a + "o_proj"),
+      const int qdim = fa.n_heads * fa.head_dim * 2;
+      const int kvdim = fa.kv_heads * fa.head_dim;
+      const int idxdim = (fa.n_idx_heads + fa.n_idx_kv) * fa.idx_head_dim;
+      full.emplace(dl.linear(a + "q_proj", H), dl.linear(a + "k_proj", H),
+                   dl.linear(a + "v_proj", H), dl.linear(a + "o_proj", qdim / 2),
                    dl.dense(a + "q_norm.weight"), dl.dense(a + "k_norm.weight"),
-                   dl.dense(a + "indexer.index_qk_proj"),
+                   dl.linear(a + "indexer.index_qk_proj", H),
                    dl.dense(a + "indexer.q_layernorm.weight"),
                    dl.dense(a + "indexer.k_layernorm.weight"));
     }
@@ -845,13 +965,29 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     caches.emplace_back(DecoderLayerCache(std::move(zero)));
   }
 
+  const int head_hc_hidden = hc_count * H;
   RealHead head{
       dl.dense("language_model.model.hyper_connection_mixer.hc_norm.weight"),
-      dl.dense("language_model.model.hyper_connection_mixer.input_mix_weight_down"),
-      dl.dense("language_model.model.hyper_connection_mixer.input_mix_weight_up"),
+      dl.linear("language_model.model.hyper_connection_mixer.input_mix_weight_down", head_hc_hidden),
+      dl.linear("language_model.model.hyper_connection_mixer.input_mix_weight_up", hc_lowrank),
       dl.quantized("language_model.lm_head")};
   DenseLoader::QTriplet embed = dl.quantized("language_model.model.embed_tokens");
   std::fprintf(stderr, "[load] all weights ready; starting generation\n");
+  mem_telemetry("post-load");
+  {
+    const char* emax = std::getenv("VEYSTRIX_CPP_MAX_ACTIVE_GIB");
+    double limit = emax ? std::atof(emax)
+                        : std::atof(get_str(cfg, "max_active_gib", "6.0").c_str());
+    if (limit > 0) {
+      double active_gib = mx::get_active_memory() / (1024.0 * 1024.0 * 1024.0);
+      if (active_gib > limit) {
+        throw std::runtime_error(
+            "[load] ABORT: post-load active " + std::to_string(active_gib) +
+            " GiB exceeds --max-active-gib " + std::to_string(limit) +
+            " GiB (bad build / packed path not active)");
+      }
+    }
+  }
 
   std::vector<StepRecord> records;
   records.reserve(num_tokens);
@@ -880,6 +1016,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
                       layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
     debug_capture::get().enabled = false;
+    mem_telemetry("prefill-step");
     if (dbg_requested) dump_gdn_states(caches, static_cast<int>(i), n_layers);
   }
   if (dbg_requested) {
@@ -911,6 +1048,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
       logits = run_step(embed_token(embed, token, group_size, bits, H), layers,
                         head, dcfg, fa, pos_ids, caches, group_size, bits);
+      mem_telemetry("decode-step");
     }
 
     mx::array next = sample_greedy(*logits);

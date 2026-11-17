@@ -34,10 +34,10 @@ GDNLayerOutput gdn_layer_forward(const mx::array& x, const GDNWeights& w,
     mx::array xt = mx::slice(x, mx::Shape{0, t, 0}, mx::Shape{B, t + 1, H});
 
     // 1. Linear projections (nn.Linear: y = x @ W.T).
-    mx::array mixed_qkv = mx::matmul(xt, mx::transpose(w.in_proj_qkv));  // [B,1,conv_dim]
-    mx::array z = mx::matmul(xt, mx::transpose(w.in_proj_z));            // [B,1,value_dim]
-    mx::array b = mx::matmul(xt, mx::transpose(w.in_proj_b));            // [B,1,Hv]
-    mx::array a = mx::matmul(xt, mx::transpose(w.in_proj_a));            // [B,1,Hv]
+    mx::array mixed_qkv = linear(xt, w.in_proj_qkv);  // [B,1,conv_dim]
+    mx::array z = linear(xt, w.in_proj_z);            // [B,1,value_dim]
+    mx::array b = linear(xt, w.in_proj_b);            // [B,1,Hv]
+    mx::array a = linear(xt, w.in_proj_a);            // [B,1,Hv]
     z = mx::reshape(z, mx::Shape{B, 1, Hv, Dv});
 
     // 2. Cached depthwise conv: conv_input = concat([conv_state, mixed_qkv]).
@@ -80,7 +80,7 @@ GDNLayerOutput gdn_layer_forward(const mx::array& x, const GDNWeights& w,
 
     // 7. out_proj on the flattened per-head output.
     mx::array flat = mx::reshape(normed, mx::Shape{B, 1, cfg.value_dim});
-    steps.push_back(mx::matmul(flat, mx::transpose(w.out_proj)));  // [B,1,H]
+    steps.push_back(linear(flat, w.out_proj));  // [B,1,H]
   }
 
   mx::array out = (S == 1) ? steps[0] : mx::concatenate(steps, 1);

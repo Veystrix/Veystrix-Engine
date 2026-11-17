@@ -47,6 +47,46 @@ struct ExpertWeights {
         group_size(gs), bits(b) {}
 };
 
+// A packed affine-Q4 weight triplet for one nn.Linear, kept in the checkpoint's
+// packed layout (no eager dequantization). Python's QuantizedLinear stores
+// weight [out, in*bits/32], scales/biases [out, in/group] and calls
+// mx.quantized_matmul(x, w, s, b, transpose=true, gs, bits, "affine"), then adds
+// the module bias if present. Keeping it packed both matches that arithmetic
+// and avoids materializing a bf16 copy of every dense weight.
+struct QPacked {
+  mx::array w, scales, biases;
+  int group_size;
+  int bits;
+  QPacked() = delete;
+  QPacked(mx::array w_, mx::array s_, mx::array b_, int gs, int bits_)
+      : w(std::move(w_)), scales(std::move(s_)), biases(std::move(b_)),
+        group_size(gs), bits(bits_) {}
+};
+
+// A single linear projection. Exactly one of `dense` / `q` is set:
+//   dense -> mx::matmul(x, mx::transpose(*dense))   (the original path)
+//   q     -> mx::quantized_matmul(...)               (Python's QuantizedLinear)
+// `bias`, when set, is added AFTER either path (Python adds nn.Linear.bias last).
+// The implicit constructor from mx::array makes a dense Linear, so existing
+// call sites and ctests that pass a plain mx::array are byte-identical.
+struct Linear {
+  std::optional<mx::array> dense;
+  std::optional<QPacked> q;
+  std::optional<mx::array> bias;
+  Linear() = default;
+  Linear(mx::array d) : dense(std::move(d)) {}  // implicit: preserves old path
+  static Linear quantized(mx::array w, mx::array s, mx::array b, int gs,
+                          int bits, std::optional<mx::array> bias = std::nullopt) {
+    Linear L;
+    L.q.emplace(std::move(w), std::move(s), std::move(b), gs, bits);
+    L.bias = std::move(bias);
+    return L;
+  }
+};
+
+// Apply one linear projection. See Linear above for the two paths.
+mx::array linear(const mx::array& x, const Linear& L);
+
 // Router: exact top-k of a softmax over logits, with the production renorm.
 // Returns (indices [tokens, width], scores [tokens, width]) matching
 // adaptive_topk._moe_call at threshold 1.0 (all k slots kept).
@@ -157,8 +197,8 @@ struct GatedResidualOutput {
 GatedResidualOutput gated_residual(
     const mx::array& hyper_input,
     const mx::array& norm_weight,   // hc_norm gain, shape [hc_hidden]
-    const mx::array& down_w, const mx::array& up_w,
-    const mx::array& inject_w,
+    const Linear& down_w, const Linear& up_w,
+    const Linear& inject_w,
     int hc_count, int hidden_size, float eps);
 
 // Final head (Qwen4ExpModel output): Qwen4ExpGatedResidual with
@@ -166,8 +206,8 @@ GatedResidualOutput gated_residual(
 //   logits = matmul(gated_residual_mix(hidden), lm_head_w.T)
 mx::array final_head(const mx::array& hidden,
                      const mx::array& norm_weight,
-                     const mx::array& down_w, const mx::array& up_w,
-                     const mx::array& lm_head_w,
+                     const Linear& down_w, const Linear& up_w,
+                     const Linear& lm_head_w,
                      int hc_count, int hidden_size, float eps);
 
 }  // namespace veystrix::engine

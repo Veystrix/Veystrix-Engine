@@ -46,12 +46,12 @@ namespace veystrix::engine {
 // Weights of the dense shared expert `Qwen3_5MoeMLP` plus its sigmoid gate
 // `nn.Linear(dim, 1, bias=False)`. All layouts match nn.Linear [out, in].
 struct SharedExpertWeights {
-  mx::array gate_w;        // [inter, H]   shared_expert.gate_proj.weight
-  mx::array up_w;          // [inter, H]   shared_expert.up_proj.weight
-  mx::array down_w;        // [H, inter]   shared_expert.down_proj.weight
-  mx::array gate_logits_w; // [1, H]       shared_expert_gate.weight
+  Linear gate_w;        // [inter, H]   shared_expert.gate_proj.weight
+  Linear up_w;          // [inter, H]   shared_expert.up_proj.weight
+  Linear down_w;        // [H, inter]   shared_expert.down_proj.weight
+  Linear gate_logits_w; // [1, H]       shared_expert_gate.weight
 
-  SharedExpertWeights(mx::array gw, mx::array uw, mx::array dw, mx::array glw)
+  SharedExpertWeights(Linear gw, Linear uw, Linear dw, Linear glw)
       : gate_w(std::move(gw)), up_w(std::move(uw)), down_w(std::move(dw)),
         gate_logits_w(std::move(glw)) {}
 };
@@ -75,19 +75,19 @@ mx::array moe_block_with_shared(const mx::array& x, const mx::array& route,
 // the two one-centered Qwen4ExpRMSNorm gains, and the QSA indexer weights.
 // Every layout matches nn.Linear [out, in] / nn.RMSNorm [dim].
 struct FullAttentionWeights {
-  mx::array q_w;           // [n_heads*head_dim*2, H]  (queries + gate halves)
-  mx::array k_w;           // [kv_heads*head_dim, H]
-  mx::array v_w;           // [kv_heads*head_dim, H]
-  mx::array o_w;           // [H, n_heads*head_dim]
+  Linear q_w;           // [n_heads*head_dim*2, H]  (queries + gate halves)
+  Linear k_w;           // [kv_heads*head_dim, H]
+  Linear v_w;           // [kv_heads*head_dim, H]
+  Linear o_w;           // [H, n_heads*head_dim]
   mx::array q_norm_w;      // [head_dim]  one-centered gain
   mx::array k_norm_w;      // [head_dim]  one-centered gain
   // QSA indexer (`Qwen4ExpQSAIndexer`)
-  mx::array index_qk_w;    // [(n_idx_heads+n_idx_kv)*idx_head_dim, H]
+  Linear index_qk_w;    // [(n_idx_heads+n_idx_kv)*idx_head_dim, H]
   mx::array index_q_norm_w;// [idx_head_dim]
   mx::array index_k_norm_w;// [idx_head_dim]
 
-  FullAttentionWeights(mx::array q, mx::array k, mx::array v, mx::array o,
-                       mx::array qn, mx::array kn, mx::array iqk,
+  FullAttentionWeights(Linear q, Linear k, Linear v, Linear o,
+                       mx::array qn, mx::array kn, Linear iqk,
                        mx::array iqn, mx::array ikn)
       : q_w(std::move(q)), k_w(std::move(k)), v_w(std::move(v)),
         o_w(std::move(o)), q_norm_w(std::move(qn)), k_norm_w(std::move(kn)),

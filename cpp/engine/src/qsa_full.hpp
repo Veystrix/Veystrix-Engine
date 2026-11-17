@@ -92,7 +92,7 @@ mx::array qsa_apply_rope(const mx::array& x, const mx::array& position_ids,
 // returns None). Otherwise returns the boolean QSA mask [B, 1, S, key_len].
 std::optional<mx::array> qsa_full_indexer(
     const mx::array& x,
-    const mx::array& proj_weight,
+    const Linear& proj_weight,
     const mx::array& q_weight,
     const mx::array& k_weight,
     const QSAFullConfig& cfg,

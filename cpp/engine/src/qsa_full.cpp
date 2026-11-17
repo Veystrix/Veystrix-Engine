@@ -145,7 +145,7 @@ mx::array qsa_apply_rope(const mx::array& x, const mx::array& position_ids,
 
 std::optional<mx::array> qsa_full_indexer(
     const mx::array& x,
-    const mx::array& proj_weight,
+    const Linear& proj_weight,
     const mx::array& q_weight,
     const mx::array& k_weight,
     const QSAFullConfig& cfg,
@@ -162,7 +162,7 @@ std::optional<mx::array> qsa_full_indexer(
 
   // --- projection + normalization (same op order as qsa_indexer_pre_rope) ---
   // qk = index_qk_proj(x).reshape(B, S, Hq + Hk, D)
-  mx::array qk = mx::matmul(x, mx::transpose(proj_weight));
+  mx::array qk = linear(x, proj_weight);
   qk = mx::reshape(qk, {B, S, Hq + Hk, D});
   mx::array query = mx::slice(qk, {0, 0, 0, 0}, {B, S, Hq, D}, {1, 1, 1, 1});
   mx::array raw_keys = mx::squeeze(

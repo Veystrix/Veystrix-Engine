@@ -142,6 +142,13 @@ def main() -> None:
                 path = out_dir / f"{case_id}.npz"
                 np.savez(path, **arrays)
                 description["file"] = path.name
+                # Also emit individual .npy files so the C++ ctest can mx::load
+                # them (C++ has no npz reader). Deterministic, same bytes.
+                case_dir = out_dir / case_id
+                case_dir.mkdir(exist_ok=True)
+                for a_name, a_arr in arrays.items():
+                    np.save(case_dir / f"{a_name}.npy", a_arr)
+                description["npy_dir"] = case_id
                 cases.append(description)
 
                 print(f"\n=== {case_id} -> {path} ===")

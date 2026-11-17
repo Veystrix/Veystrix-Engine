@@ -162,10 +162,10 @@ GDNLayerOutput gdn_prefill(const mx::array& x, const GDNWeights& w,
   // 1. Full-sequence linear projections (nn.Linear: y = x @ W.T). Production
   //    projects all S tokens in one matmul; doing S separate matmuls (as the
   //    decode wrapper does) is NOT bit-exact to that, so keep the full matmul.
-  mx::array mixed_qkv = mx::matmul(x, mx::transpose(w.in_proj_qkv));  // [B,S,C]
-  mx::array z = mx::matmul(x, mx::transpose(w.in_proj_z));            // [B,S,Hv*Dv]
-  mx::array b = mx::matmul(x, mx::transpose(w.in_proj_b));            // [B,S,Hv]
-  mx::array a = mx::matmul(x, mx::transpose(w.in_proj_a));            // [B,S,Hv]
+  mx::array mixed_qkv = linear(x, w.in_proj_qkv);  // [B,S,C]
+  mx::array z = linear(x, w.in_proj_z);            // [B,S,Hv*Dv]
+  mx::array b = linear(x, w.in_proj_b);            // [B,S,Hv]
+  mx::array a = linear(x, w.in_proj_a);            // [B,S,Hv]
   z = mx::reshape(z, mx::Shape{B, S, Hv, Dv});
 
   // 2. Mask handling: production masks mixed_qkv BEFORE the conv, and passes
@@ -217,7 +217,7 @@ GDNLayerOutput gdn_prefill(const mx::array& x, const GDNWeights& w,
   // 8. Gated RMSNorm with the z projection, then out_proj over all S tokens.
   mx::array normed = rms_norm_gated(step.y, w.norm_weight, z, cfg.eps, sigmoid);
   mx::array flat = mx::reshape(normed, mx::Shape{B, S, cfg.value_dim});
-  mx::array out = mx::matmul(flat, mx::transpose(w.out_proj));  // [B,S,H]
+  mx::array out = linear(flat, w.out_proj);  // [B,S,H]
 
   return {out, new_conv_state, step.state};
 }

@@ -19,6 +19,8 @@
 #pragma once
 #include <mlx/mlx.h>
 
+#include "engine.hpp"
+
 namespace mx = mlx::core;
 
 namespace veystrix::engine {
@@ -44,20 +46,20 @@ struct GDNConfig {
 // them: Linear weights are [out, in] (the forward computes x @ W.T), the
 // depthwise conv weight is the raw [conv_dim, K, 1] tensor.
 struct GDNWeights {
-  mx::array in_proj_qkv;  // [conv_dim, hidden_size]
-  mx::array in_proj_z;    // [value_dim, hidden_size]
-  mx::array in_proj_b;    // [Hv, hidden_size]
-  mx::array in_proj_a;    // [Hv, hidden_size]
+  Linear in_proj_qkv;  // [conv_dim, hidden_size]
+  Linear in_proj_z;    // [value_dim, hidden_size]
+  Linear in_proj_b;    // [Hv, hidden_size]
+  Linear in_proj_a;    // [Hv, hidden_size]
   mx::array conv1d_weight;// [conv_dim, K, 1] (raw nn.Conv1d.weight, half dtype)
   mx::array A_log;        // [Hv] float32
   mx::array dt_bias;      // [Hv] float32
   mx::array norm_weight;  // [head_v_dim] float32 (Qwen4ExpRMSNormGated gain)
-  mx::array out_proj;     // [hidden_size, value_dim]
+  Linear out_proj;     // [hidden_size, value_dim]
 
   GDNWeights() = delete;
-  GDNWeights(mx::array qkv, mx::array z, mx::array b, mx::array a,
+  GDNWeights(Linear qkv, Linear z, Linear b, Linear a,
              mx::array conv_w, mx::array alog, mx::array dtb,
-             mx::array nw, mx::array out)
+             mx::array nw, Linear out)
       : in_proj_qkv(std::move(qkv)), in_proj_z(std::move(z)),
         in_proj_b(std::move(b)), in_proj_a(std::move(a)),
         conv1d_weight(std::move(conv_w)), A_log(std::move(alog)),

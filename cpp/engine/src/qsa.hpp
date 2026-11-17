@@ -37,6 +37,8 @@
 
 #include <mlx/mlx.h>
 
+#include "engine.hpp"
+
 namespace mx = mlx::core;
 
 namespace veystrix::engine {
@@ -90,7 +92,7 @@ struct QSAIndexerOutput {
 };
 QSAIndexerOutput qsa_indexer_pre_rope(
     const mx::array& x,
-    const mx::array& proj_weight,
+    const Linear& proj_weight,
     const mx::array& q_weight,
     const mx::array& k_weight,
     const QSAConfig& cfg);

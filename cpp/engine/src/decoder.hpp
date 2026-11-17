@@ -45,21 +45,21 @@ namespace veystrix::engine {
 struct DecoderLayerWeights {
   // attn hyper-connection (Qwen4ExpGatedResidual, use_combine=True)
   mx::array attn_norm_w;     // [hc_hidden]        hc_norm gain (one-centered)
-  mx::array attn_down_w;     // [hc_lowrank, hc_hidden]
-  mx::array attn_up_w;       // [hc_hidden, hc_lowrank]
-  mx::array attn_inject_w;   // [hc_count, hc_hidden]
+  Linear attn_down_w;     // [hc_lowrank, hc_hidden]
+  Linear attn_up_w;       // [hc_hidden, hc_lowrank]
+  Linear attn_inject_w;   // [hc_count, hc_hidden]
 
   // linear-attention branch (Qwen4ExpGatedDeltaNet)
   GDNWeights gdn;
 
   // mlp hyper-connection (Qwen4ExpGatedResidual, use_combine=True)
   mx::array mlp_norm_w;
-  mx::array mlp_down_w;
-  mx::array mlp_up_w;
-  mx::array mlp_inject_w;
+  Linear mlp_down_w;
+  Linear mlp_up_w;
+  Linear mlp_inject_w;
 
   // MoE branch (Qwen3_5MoeSparseMoeBlock, routed experts + zeroed shared)
-  mx::array gate_w;          // [n_experts, hidden]  (nn.Linear, no bias)
+  Linear gate_w;          // [n_experts, hidden]  (nn.Linear, no bias)
   Q4Projection expert_gate;  // gate_proj  (Q4 affine)
   Q4Projection expert_up;    // up_proj    (Q4 affine)
   Q4Projection expert_down;  // down_proj  (Q4 affine)
@@ -69,10 +69,10 @@ struct DecoderLayerWeights {
   int bits = 4;
 
   DecoderLayerWeights(
-      mx::array anw, mx::array adw, mx::array auw, mx::array aiw,
+      mx::array anw, Linear adw, Linear auw, Linear aiw,
       GDNWeights gw,
-      mx::array mnw, mx::array mdw, mx::array muw, mx::array miw,
-      mx::array gate,
+      mx::array mnw, Linear mdw, Linear muw, Linear miw,
+      Linear gate,
       Q4Projection eg, Q4Projection eu, Q4Projection ed,
       int tk, float rb, int gs, int b)
       : attn_norm_w(std::move(anw)), attn_down_w(std::move(adw)),
@@ -89,11 +89,11 @@ struct DecoderLayerWeights {
 // Final mixer (Qwen4ExpGatedResidual, use_combine=False) + lm_head.
 struct DecoderHeadWeights {
   mx::array norm_w;      // [hc_hidden]
-  mx::array down_w;      // [hc_lowrank, hc_hidden]
-  mx::array up_w;        // [hc_hidden, hc_lowrank]
-  mx::array lm_head_w;   // [vocab, hidden]
+  Linear down_w;      // [hc_lowrank, hc_hidden]
+  Linear up_w;        // [hc_hidden, hc_lowrank]
+  Linear lm_head_w;   // [vocab, hidden]
 
-  DecoderHeadWeights(mx::array nw, mx::array dw, mx::array uw, mx::array lw)
+  DecoderHeadWeights(mx::array nw, Linear dw, Linear uw, Linear lw)
       : norm_w(std::move(nw)), down_w(std::move(dw)),
         up_w(std::move(uw)), lm_head_w(std::move(lw)) {}
 };

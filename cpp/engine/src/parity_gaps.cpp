@@ -35,11 +35,11 @@ mx::array shared_q4_glu(const mx::array& x, const ExpertWeights& w,
 
 // The DENSE shared expert, kept for the `shared_quantized == false` case.
 // Mirrors decoder_full.cpp::moe_block_with_shared's GLU exactly.
-mx::array shared_dense_glu(const mx::array& x, const mx::array& gate_w,
-                           const mx::array& up_w, const mx::array& down_w) {
-  mx::array g = mx::matmul(x, mx::transpose(gate_w));
-  mx::array u = mx::matmul(x, mx::transpose(up_w));
-  return mx::matmul(swiglu(g, u), mx::transpose(down_w));
+mx::array shared_dense_glu(const mx::array& x, const Linear& gate_w,
+                           const Linear& up_w, const Linear& down_w) {
+  mx::array g = linear(x, gate_w);
+  mx::array u = linear(x, up_w);
+  return linear(swiglu(g, u), down_w);
 }
 
 }  // namespace
@@ -48,7 +48,7 @@ mx::array moe_block_shared_quantized(
     const mx::array& x, const mx::array& route, const mx::array& scores,
     const ExpertWeights& routed_weights,
     const ExpertWeights& shared_q4_weights,
-    const mx::array& shared_gate_logits_w, const SharedQuantConfig& config) {
+    const Linear& shared_gate_logits_w, const SharedQuantConfig& config) {
   // Routed experts: the already bit-verified Q4 gather_qmm MoE block.
   mx::array routed = moe_block(x, route, scores, routed_weights);
 
@@ -65,8 +65,7 @@ mx::array moe_block_shared_quantized(
 
   // adaptive_topk._moe_call / Qwen3_5MoeSparseMoeBlock.__call__:
   //   return routed + sigmoid(shared_expert_gate(x)) * shared_expert(x)
-  mx::array gate_logits =
-      mx::matmul(x, mx::transpose(shared_gate_logits_w));  // [t, 1]
+  mx::array gate_logits = linear(x, shared_gate_logits_w);  // [t, 1]
   mx::array sg = mx::sigmoid(gate_logits);
   return routed + sg * s;
 }
@@ -107,9 +106,9 @@ mx::array full_attention_dense_fallback(const mx::array& x,
   const int D = cfg.head_dim;
 
   // Dense q/k/v projections (Qwen3_5Attention._prepare_projected_qkv).
-  mx::array qproj = mx::matmul(x, mx::transpose(w.q_w));  // [B,S,Hq*D*2]
-  mx::array kproj = mx::matmul(x, mx::transpose(w.k_w));  // [B,S,Hkv*D]
-  mx::array vproj = mx::matmul(x, mx::transpose(w.v_w));
+  mx::array qproj = linear(x, w.q_w);  // [B,S,Hq*D*2]
+  mx::array kproj = linear(x, w.k_w);  // [B,S,Hkv*D]
+  mx::array vproj = linear(x, w.v_w);
 
   mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, Hq, 2 * D});
   std::vector<mx::array> halves = mx::split(q4, 2, -1);
@@ -154,8 +153,7 @@ mx::array full_attention_dense_fallback(const mx::array& x,
 
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}),
                     mx::Shape{B, S, Hq * D});
-  mx::array result = mx::matmul(out * mx::sigmoid(gate),
-                                mx::transpose(w.o_w));
+  mx::array result = linear(out * mx::sigmoid(gate), w.o_w);
 
   cache.offset += S;  // KVCache.update_and_fetch advances offset by L
   return result;

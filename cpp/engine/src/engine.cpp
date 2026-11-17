@@ -6,6 +6,26 @@
 
 namespace veystrix::engine {
 
+mx::array linear(const mx::array& x, const Linear& L) {
+  mx::array out = [&]() -> mx::array {
+    if (L.q) {
+      const QPacked& q = *L.q;
+      // Python QuantizedLinear.__call__:
+      //   mx.quantized_matmul(x, w, scales, biases, transpose=True, gs, bits, mode)
+      std::optional<mx::array> biases =
+          q.biases.size() ? std::optional<mx::array>(q.biases) : std::nullopt;
+      return mx::quantized_matmul(x, q.w, q.scales, biases, /*transpose=*/true,
+                                  q.group_size, q.bits, "affine");
+    } else if (L.dense) {
+      // Original path, byte-for-byte identical to every existing ctest.
+      return mx::matmul(x, mx::transpose(*L.dense));
+    }
+    throw std::runtime_error("linear(): neither dense nor q is set");
+  }();
+  if (L.bias) out = out + *L.bias;
+  return out;
+}
+
 RouterOutput router(const mx::array& logits, int top_k, float /*renorm_blend*/) {
   // Mirrors adaptive_topk._moe_call at threshold 1.0 (all k slots kept):
   //   gates = softmax(logits, -1, precise=True)
@@ -130,8 +150,8 @@ std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
 GatedResidualOutput gated_residual(
     const mx::array& hyper_input,
     const mx::array& norm_weight,
-    const mx::array& down_w, const mx::array& up_w,
-    const mx::array& inject_w,
+    const Linear& down_w, const Linear& up_w,
+    const Linear& inject_w,
     int hc_count, int hidden_size, float eps) {
   // Qwen4ExpGatedResidual.__call__ (one-centered hc_norm via fast rms_norm).
   // norm_weight gain is [hc_count, hidden_size]; grouped norm == rms_norm over
@@ -151,21 +171,21 @@ GatedResidualOutput gated_residual(
                                 hyper_input.dtype());
   // Linear weights are stored [out, in]; compute x @ W.T (nn.Linear).
   // mix = sigmoid(up(silu(down(normed)/hc_count)))
-  mx::array low = mx::matmul(normed, mx::transpose(down_w)) / static_cast<float>(hc_count);
+  mx::array low = linear(normed, down_w) / static_cast<float>(hc_count);
   mx::array silu_low = low * mx::sigmoid(low);
-  mx::array mix = mx::sigmoid(mx::matmul(silu_low, mx::transpose(up_w)));
+  mx::array mix = mx::sigmoid(linear(silu_low, up_w));
   mx::array mixg = mx::reshape(mix, gs);
   mx::array normg = mx::reshape(normed, gs);
   mx::array mixed_input = mx::mean(mixg * normg, -2);
   mx::array inj = 2.0f * mx::sigmoid(
-      mx::matmul(normed, mx::transpose(inject_w)) / static_cast<float>(hc_count));
+      linear(normed, inject_w) / static_cast<float>(hc_count));
   return {mixed_input, inj};
 }
 
 mx::array final_head(const mx::array& hidden,
                      const mx::array& norm_weight,
-                     const mx::array& down_w, const mx::array& up_w,
-                     const mx::array& lm_head_w,
+                     const Linear& down_w, const Linear& up_w,
+                     const Linear& lm_head_w,
                      int hc_count, int hidden_size, float eps) {
   // gated_residual with use_combine=False -> mixed_input only. Reuse the same
   // math but skip the injection-weight projection (no block_inject_weight).
@@ -178,11 +198,11 @@ mx::array final_head(const mx::array& hidden,
   yg = yg * mx::rsqrt(mx::mean(mx::square(yg), -1, /*keepdims=*/true) + eps);
   yg = yg * mx::astype(w2d, mx::float32);
   mx::array normed = mx::astype(mx::reshape(yg, hidden.shape()), hidden.dtype());
-  mx::array low = mx::matmul(normed, mx::transpose(down_w)) / static_cast<float>(hc_count);
-  mx::array mix = mx::sigmoid(mx::matmul(low * mx::sigmoid(low), mx::transpose(up_w)));
+  mx::array low = linear(normed, down_w) / static_cast<float>(hc_count);
+  mx::array mix = mx::sigmoid(linear(low * mx::sigmoid(low), up_w));
   mx::array mixed_input = mx::mean(mx::reshape(mix, gs) * mx::reshape(normed, gs), -2);
   // lm_head: nn.Linear(hidden, vocab, bias=False) -> matmul(x, W.T).
-  return mx::matmul(mixed_input, mx::transpose(lm_head_w));
+  return linear(mixed_input, lm_head_w);
 }
 
 mx::array rms_norm_gated(const mx::array& x, const mx::array& weight,

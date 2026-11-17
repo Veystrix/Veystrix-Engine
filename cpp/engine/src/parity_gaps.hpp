@@ -60,7 +60,7 @@ mx::array moe_block_shared_quantized(
     const mx::array& scores,
     const ExpertWeights& routed_weights,
     const ExpertWeights& shared_q4_weights,
-    const mx::array& shared_gate_logits_w,
+    const Linear& shared_gate_logits_w,
     const SharedQuantConfig& config);
 
 // Dense full-attention path used when the QSA indexer returns None

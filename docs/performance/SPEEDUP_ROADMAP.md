@@ -120,8 +120,22 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 decode **6.8 → 5.19 tok/s (resolved, median −1.61 vs band 0.15)**; TTFT **5.70 → 6.60 s
 (resolved, +0.86 vs band 0.12)**; footprint +2.14 GB (resolved). Physical read bytes unresolved.
 **Bigger cache is a clear regression on this 16 GB M4** — memory pressure/compressor dominates
-(compressor peak 1991 → 5276 MB), matching the reference's 8 GB-cache thrash. Keep 2 GB.
-Do not retry larger pools on 16 GB; a smaller pool (1 vs 2 GB) is the only untested direction.
+(compressor peak 1991 → 5276 MB), matching the reference's 8 GB-cache thrash.
+
+**Follow-up 1 vs 2 GB — MEASURED 2026-11-17**, saved at
+`results/nemotron35/20261117-144538-performance-v2-pool-compare-manual/`. The trend continues:
+**1 GB is faster than 2 GB (6.94 vs 6.56 tok/s, resolved median −0.58 vs band 0.16)**, with
+**6.17 GB fewer physical reads** and 1.05 GB less footprint (both resolved); TTFT unchanged.
+1 GB won in all 3 rounds. So on this 16 GB M4 the pool sweet spot is at or below 1 GB —
+smaller pool = less memory pressure = faster. Do not increase the pool on 16 GB.
+
+**Production already does the right thing here:** `models/nemotron35/admission.py:141-145`
+records the same trend (no pool 7.1–7.4 tok/s / 195–202 MB per token; 2 GiB 6.4–7.2 / 245–260;
+3 GiB 5.3–5.5 / 290), and its auto-sizing returns **0** when routed experts cannot fit beside
+the dense core and OS reserve. The A/B above forced pools that production would not use, so
+**no code change is needed** — this is confirmation, not a new optimization. Method #3
+(expert coalescing / packing) is already measured and rejected in `DO_NOT_IMPLEMENT.md`
+(+9% in-process, no server gain, +70 GiB disk), so it is not retried.
 
 ### Step 5 — Method #5: Correctly sized pinned expert cache
 - **Premise:** a cache helps only when its pool is ≥⅓ of total expert bytes. At 11% coverage a model regressed −64%; at 71% coverage another gained +216%. On 16 GB, a few GB is the realistic ceiling; 8 GB thrashed (Nemotron, 4 GB = 4.39 tok/s).

@@ -53,6 +53,13 @@ target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Decisive: standalone C++ end-to-end token generation (no Python in loop).
+add_executable(native_generate tools/veystrix_native_generate.cpp)
+target_include_directories(native_generate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(native_generate PRIVATE veystrix_engine)
+set_target_properties(native_generate PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Mixed-layer decoder loop (GDN + full attn + shared expert) bit-exact parity.
 add_executable(test_decoder_full tests/test_decoder_full.cpp)
 target_include_directories(test_decoder_full PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -174,6 +181,16 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full/meta.json")
   add_test(NAME decoder_full COMMAND test_decoder_full
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder_full")
+endif()
+# End-to-end C++ generation vs Python (token ids + logit digests); runner script.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_native_generate/config.txt")
+  add_test(NAME native_generate
+    COMMAND ${CMAKE_COMMAND} -E env
+      VENV_PYTHON=${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/bin/python
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/bin/python
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_generate.py
+      --out ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_native_generate
+      --binary $<TARGET_FILE:native_generate> --steps 3)
 endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")

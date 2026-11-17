@@ -1,0 +1,30 @@
+{
+  "seed": 20261117,
+  "steps": 3,
+  "records": [
+    {
+      "step": 0,
+      "token_in": 7,
+      "token_out": 33,
+      "logit_sha256": "60bf66cccc9f2ff768884d743fef8e1dbb33c85824e3e4ca5a92f43291aec1e4"
+    },
+    {
+      "step": 1,
+      "token_in": 33,
+      "token_out": 33,
+      "logit_sha256": "12ba4366d7beaa7093104b238d0b0eafac51ad8490d2b80353f96548ae23a4f2"
+    },
+    {
+      "step": 2,
+      "token_in": 33,
+      "token_out": 29,
+      "logit_sha256": "a9929bd25e624adebb1bc0be7dae33aff8fe589ce8aee4c8300e93a52ca66a7c"
+    }
+  ],
+  "token_ids": [
+    7,
+    33,
+    33,
+    29
+  ]
+}

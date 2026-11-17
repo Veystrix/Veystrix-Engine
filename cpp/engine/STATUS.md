@@ -32,7 +32,19 @@ comparison (uint32 view), not tolerances.
 Evidence: `cd cpp/engine && rm -rf build && cmake -S . -B build && cmake --build
 build -j && ctest --test-dir build --output-on-failure` -> 5/5 passed.
 
-## Update 2026-11-17 (full loop + I/O): now 16/16 ctests pass
+## DECISIVE MILESTONE 2026-11-17: full token generated natively — 17/17 ctests
+
+`native_generate` — a STANDALONE C++ executable loads serialized weights + flat
+config from disk, initializes caches, and generates 3 tokens entirely in C++
+(run_decoder_step + sample_greedy, token fed back). Generated token ids AND
+per-step logit SHA-256 digests match Python's greedy decode of the real mlx_vlm
+model byte-for-byte (also verified on a 6-step, different-seed run). This is the
+proof the engine works end-to-end. Note: uses the all-linear GDN config (the
+mixed full-attention path in `decoder_full` is bit-exact at loop level but its
+QSA indexer needs a prepopulated cache, so "from-scratch zeroed cache"
+generation uses the all-linear path — documented in native_generate.md).
+
+## Update 2026-11-17 (full loop + I/O): 16/16 ctests pass
 
 - `moe_stream` — expert weights loaded from the REAL checkpoint via native
   pager (`io_pager`) + `expert_store`, persistent slot pool, refcount, remap in

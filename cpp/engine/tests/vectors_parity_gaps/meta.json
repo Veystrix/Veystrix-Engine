@@ -1,0 +1,319 @@
+{
+  "seed": 20261117,
+  "mlx_version": "0.32.2",
+  "group_size": 32,
+  "bits": 4,
+  "n_experts": 8,
+  "top_k": 2,
+  "n_heads": 2,
+  "kv_heads": 1,
+  "head_dim": 16,
+  "rope_dim": 16,
+  "rope_base": 10000.0,
+  "mrope_section": [
+    6,
+    6,
+    4
+  ],
+  "n_idx_heads": 2,
+  "n_idx_kv": 1,
+  "idx_head_dim": 16,
+  "compress_ratio": 2,
+  "token_budget": 4,
+  "past_len": 6,
+  "eps": 1e-06,
+  "g_x": {
+    "shape": [
+      1,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routes": {
+    "shape": [
+      1,
+      2
+    ],
+    "dtype": "int32"
+  },
+  "g_scores": {
+    "shape": [
+      1,
+      2
+    ],
+    "dtype": "float32"
+  },
+  "g_shared_gate_w": {
+    "shape": [
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "g_routed_gw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_routed_gs": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routed_gb": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routed_uw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_routed_us": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routed_ub": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routed_dw": {
+    "shape": [
+      8,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_routed_ds": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_routed_db": {
+    "shape": [
+      8,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_gw": {
+    "shape": [
+      1,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_shared_gs": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_gb": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_uw": {
+    "shape": [
+      1,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_shared_us": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_ub": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_dw": {
+    "shape": [
+      1,
+      32,
+      4
+    ],
+    "dtype": "uint32"
+  },
+  "g_shared_ds": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_shared_db": {
+    "shape": [
+      1,
+      32,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "g_expected": {
+    "shape": [
+      1,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_x": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "bfloat16"
+  },
+  "fa_pos": {
+    "shape": [
+      1,
+      1
+    ],
+    "dtype": "int32"
+  },
+  "fa_q_w": {
+    "shape": [
+      64,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_k_w": {
+    "shape": [
+      16,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_v_w": {
+    "shape": [
+      16,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_o_w": {
+    "shape": [
+      32,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_q_norm_w": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_k_norm_w": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_cache_keys": {
+    "shape": [
+      1,
+      1,
+      6,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_cache_values": {
+    "shape": [
+      1,
+      1,
+      6,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_index_keys": {
+    "shape": [
+      1,
+      3,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_index_pos": {
+    "shape": [
+      1,
+      3
+    ],
+    "dtype": "int32"
+  },
+  "fa_index_qk_w": {
+    "shape": [
+      48,
+      32
+    ],
+    "dtype": "float32"
+  },
+  "fa_index_q_norm_w": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_index_k_norm_w": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "fa_expected": {
+    "shape": [
+      1,
+      1,
+      32
+    ],
+    "dtype": "float32"
+  }
+}

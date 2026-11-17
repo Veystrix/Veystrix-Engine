@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "")
-project(veystrix_engine LANGUAGES CXX)
+project(veystrix_engine LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
@@ -12,9 +12,20 @@ set(MLX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.venv/lib/python3.12/site-packag
 find_package(MLX CONFIG REQUIRED PATHS "${MLX_ROOT}/share/cmake/MLX" NO_DEFAULT_PATH)
 message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp)
+# Native batched pread (compiled as C) + C++ pager, reused from cpp/decode.
+# Copy native_read.c into this build so CMake tracks it as a source of this target
+# (an absolute path outside the tree is silently dropped by the Makefile generator).
+set(NATIVE_READ_C ${CMAKE_CURRENT_BINARY_DIR}/native_read.c)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../../models/flashnext/native_read.c
+               ${NATIVE_READ_C} COPYONLY)
+set(PAGER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../decode)
+add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp)
+target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
+set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
+
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/moe_stream.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
-target_link_libraries(veystrix_engine PUBLIC mlx)
+target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
@@ -40,6 +51,13 @@ set_target_properties(test_relu2_parity PROPERTIES
 add_executable(test_gdn_delta tests/test_gdn_delta.cpp)
 target_link_libraries(test_gdn_delta PRIVATE veystrix_engine)
 set_target_properties(test_gdn_delta PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Streaming MoE with real-checkpoint I/O (expert_store + io_pager).
+add_executable(test_moe_stream tests/test_moe_stream.cpp)
+target_include_directories(test_moe_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${PAGER_DIR}/src)
+target_link_libraries(test_moe_stream PRIVATE veystrix_engine)
+set_target_properties(test_moe_stream PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Full multi-layer decoder loop bit-exact parity (real mlx_vlm modules).
@@ -140,6 +158,11 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder/meta.json")
   add_test(NAME decoder COMMAND test_decoder
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_decoder")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_moe_stream/meta.json")
+  add_test(NAME moe_stream COMMAND test_moe_stream
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_moe_stream"
+           "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP")
 endif()
 # Real-checkpoint parity (requires gen_real_vectors.py to have been run).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/real/meta.json")

@@ -1,0 +1,13 @@
+{
+  "E": 8,
+  "H": 2560,
+  "I": 640,
+  "G": 32,
+  "K": 4,
+  "T": 1,
+  "bits": 4,
+  "layer": 0,
+  "prefix": "language_model.model.layers.0.mlp.switch_mlp",
+  "checkpoint": "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+  "n_experts_in_layer": 512
+}

@@ -30,7 +30,7 @@ This is the execution ledger. We go **one method at a time**, in the order below
 |---|---|---|---|---|---|---|---|
 | 0 | — | Profile per-token sync / SSD / GPU split | Prereq | both | **DONE 2026-11-17:** host 6.1%, I/O wait 52.3% | guarded, clean | DONE |
 | 1 | #8 | High Power / AC mode | Free config | both | 1.4–2.17× | digest | PENDING |
-| 2 | #7 | MLX command-buffer limits | Free config | decode | +11.9–13.7% | digest (source bit-identical) | PENDING |
+| 2 | #7 | MLX command-buffer limits | Free config | decode | **A/B measured:** Qwen decode unresolved + TTFT +0.86 s regression; Nemotron decode **−0.5 tok/s resolved regression** | digest identical | REJECTED on our 16 GB M4 |
 | 3 | #9 | MLX memory-residency API | Free config | both | compressed mem −91% | digest | PENDING |
 | 4 | #10 | `async_eval` one-step-ahead | Free config | decode | +50% at 4-bit | digest | PENDING |
 | 5 | #5 | Correctly sized pinned expert cache | Cache | decode | **A/B measured:** Nemotron 2→4 GB is a resolved REGRESSION (−1.61 tok/s, +0.86 s TTFT) | digest identical | 2 GB retained; 4 GB rejected |
@@ -82,6 +82,15 @@ See `docs/performance/CPP_DECODE_CHECKLIST.md`.
 ---
 
 ## Phase 1 — Free, bit-exact config (Steps 1–4)
+
+**Step 2 A/B — Method #7 MEASURED & REJECTED 2026-11-17.** Both guarded, 3 rounds, digest identical.
+- Qwen (`results/flashnext/20261117-145953-performance-v2-flag-flashnext-mlx-auto-buffer-caps-manual/`):
+  decode 2.08 → 2.14 (unresolved, inside band); **TTFT 23.34 → 24.52 s resolved regression (+0.86 s)**.
+- Nemotron (`results/nemotron35/20261117-150713-performance-v2-flag-veystrix-mlx-auto-buffer-caps-manual/`):
+  **decode 6.4 → 5.88 tok/s resolved regression (−0.5 vs band 0.32)**; physical reads +3.7 GB resolved.
+- The source's +11.9–13.7% was on an M5 Max (different chip/driver); on our 16 GB M4 it does not
+  reproduce and hurts prefill. Flag stays **off**. Do not retry. (Rust research independently
+  confirmed command-buffer count matters on Apple Silicon, but the specific MLX caps hurt here.)
 
 ### Step 1 — Method #8: High Power / AC mode
 - **Premise:** macOS Low Power mode caps sustained GPU/SSD clocks; disabling it is free and changes no math.

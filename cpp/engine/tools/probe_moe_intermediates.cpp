@@ -93,6 +93,15 @@ std::map<std::string, std::string> read_config(const std::string& d) {
   return m;
 }
 
+void dump_f32(const std::string& dir, const std::string& name,
+              const mx::array& a) {
+  mx::array f = mx::contiguous(mx::astype(a, mx::float32));
+  mx::eval(f);
+  std::ofstream o(join(dir, name + ".cpp.bin"), std::ios::binary);
+  o.write(reinterpret_cast<const char*>(f.data<float>()),
+          static_cast<std::streamsize>(f.size() * sizeof(float)));
+}
+
 void cmp(const char* name, const mx::array& a, const mx::array& b) {
   mx::array fa = mx::contiguous(mx::astype(a, mx::float32));
   mx::array fb = mx::contiguous(mx::astype(b, mx::float32));
@@ -391,7 +400,17 @@ int main(int argc, char** argv) {
     auto py_gr1_input = load(dir, "gr1_input", {1, T, 4 * H}, mx::bfloat16);
     auto py_gr1_mixed = load(dir, "gr1_mixed", {1, T, H}, mx::bfloat16);
     auto py_gr1_inj = load(dir, "gr1_inj", {1, T, 4}, mx::bfloat16);
+    // Optionally use the f32-conv-cache GDN branch dumped by
+    // probe_gdn_cache_dtype.cpp — this is the exact branch the end-to-end tool
+    // produces, so the replay should reproduce its L0 hidden exactly.
     auto py_gdn_out = load(dir, "gdn_out", {1, T, H}, mx::bfloat16);
+    {
+      std::ifstream probe(join(dir, "gdn_out_f32cache.bin"), std::ios::binary);
+      if (probe.good()) {
+        py_gdn_out = load(dir, "gdn_out_f32cache", {1, T, H}, mx::bfloat16);
+        std::printf("[replay] using f32-cache GDN branch override\n");
+      }
+    }
     auto hidden = load(dir, "layer_input", {1, T, 4 * H}, mx::bfloat16);
 
     Linear a_down = qh("attn", "input_mix_weight_down", 320, 4 * H);
@@ -469,6 +488,7 @@ int main(int argc, char** argv) {
     mx::array final = inject(hid1, moe_total, mr.injection_weights);
     auto py_layer_out = load(dir, "layer_output", {1, T, 4 * H}, mx::bfloat16);
     cmp("FULL L0 hidden C++ vs Python", final, py_layer_out);
+    dump_f32(dir, "cpp_l0_hidden_all", final);
   }
 
   // ---- 6. scale/bias byte identity: raw safetensors vs Python store -------

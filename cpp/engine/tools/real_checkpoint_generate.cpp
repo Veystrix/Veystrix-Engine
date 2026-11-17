@@ -82,6 +82,7 @@ namespace debug_capture {
 struct Capture {
   bool enabled = false;
   bool use_local_gdn = false;
+  bool copy_cross_shard = false;
   std::vector<std::string> names;
   std::vector<mx::array> arrays;
   void add(const char* name, mx::array a) {
@@ -558,9 +559,23 @@ class CrossShardMoE {
       mx::Shape shape(t_[i].shape.begin(), t_[i].shape.end());
       shape[0] = num_slots_;
       mx::Dtype dtype = (i % 3 == 0) ? mx::uint32 : mx::bfloat16;
-      auto keep = buf_[i];
-      a.emplace_back(buf_[i].get(), std::move(shape), dtype,
-                     [keep](void*) {});
+      if (debug_capture::get().copy_cross_shard) {
+        // OPT-IN FIX: mirror Python's fresh np.empty buffer per step. The
+        // iterator constructors DEEP-COPY numel elements (uint32 -> 4 B each,
+        // bfloat16_t -> 2 B each, raw bits preserved) into an MLX-owned buffer,
+        // so overwriting buf_[i] on the next step cannot mutate a live array.
+        if (dtype == mx::uint32) {
+          a.emplace_back(reinterpret_cast<uint32_t*>(buf_[i].get()),
+                         std::move(shape), dtype);
+        } else {
+          a.emplace_back(reinterpret_cast<mx::bfloat16_t*>(buf_[i].get()),
+                         std::move(shape), dtype);
+        }
+      } else {
+        auto keep = buf_[i];
+        a.emplace_back(buf_[i].get(), std::move(shape), dtype,
+                       [keep](void*) {});
+      }
     }
     ExpertWeights ew(Q4Projection(a[0], a[1], a[2]),
                      Q4Projection(a[3], a[4], a[5]),
@@ -1080,6 +1095,10 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   // Opt-in fix: tool-local GDN path (ops delta step + state materialization)
   // for every prefill/decode step when the debug flag is set.
   debug_capture::get().use_local_gdn = dbg_requested;
+  // Opt-in fix: deep-copy cross-shard expert rows into fresh owned arrays each
+  // step (mirrors Python's fresh per-step buffer) instead of reusing buf_[i].
+  debug_capture::get().copy_cross_shard =
+      std::getenv("REALGEN_CROSS_SHARD_COPY") != nullptr;
   int pos = 0;
   std::optional<mx::array> logits;
   for (size_t i = 0; i < prompt.size(); ++i) {

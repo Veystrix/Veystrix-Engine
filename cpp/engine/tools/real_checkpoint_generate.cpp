@@ -339,7 +339,14 @@ class DenseLoader {
   //   bits = packed_in*32 // logical_in ; group_size = logical_in // n_groups
   // and fail closed if they do not divide evenly. When a manifest was loaded,
   // its recorded (kind, group_size, bits, has_bias) is cross-checked.
-  Linear linear(const std::string& base, int logical_in) {
+  Linear linear(const std::string& name, int logical_in) {
+    // Accept either the triplet base ("...mlp.gate") or a name ending in
+    // ".weight" ("...mlp.gate.weight"); normalize to the base, exactly as
+    // dense() does. Manifest keys use module paths without ".weight".
+    const std::string base =
+        name.size() > 7 && name.compare(name.size() - 7, 7, ".weight") == 0
+            ? name.substr(0, name.size() - 7)
+            : name;
     if (shard_of_.count(base + ".scales") == 0) {
       // Plain Linear / raw tensor: keep the original dense path.
       if (!manifest_.empty()) {
@@ -349,7 +356,11 @@ class DenseLoader {
              it->second.kind == "quantized_embedding"))
           throw std::runtime_error("manifest says quantized but checkpoint has no scales: " + base);
       }
-      return Linear(raw(base));
+      // No `.scales`: a plain nn.Linear (e.g. the router gate) or raw gain.
+      // The shard map is keyed by the full tensor name (with ".weight").
+      return Linear(raw(name.find(".weight") != std::string::npos
+                            ? name
+                            : base + ".weight"));
     }
     mx::array w = raw(base + ".weight");
     mx::array s = as_bf16(raw(base + ".scales"));
@@ -987,6 +998,13 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
             " GiB (bad build / packed path not active)");
       }
     }
+  }
+  // Load-only mode (gate 2): stop after weights are loaded + telemetry, before
+  // any decode. Lets the owner measure post-load active memory under the guard
+  // without the (now unnecessary) multi-minute generation.
+  if (std::getenv("VEYSTRIX_CPP_LOAD_ONLY")) {
+    std::fprintf(stderr, "[load] LOAD-ONLY: weights loaded, no decode run\n");
+    return {};
   }
 
   std::vector<StepRecord> records;

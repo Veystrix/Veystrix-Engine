@@ -125,6 +125,18 @@ Remaining feature gaps (Nemotron decode path, prefix cache, non-greedy sampling
 parity, continuous batching) are NOT yet ported — see inventory. Python remains
 serving engine until the full feature set is validated.
 
+## Nemotron parity RESOLVED 2026-11-18 [measured]
+
+Full 52-layer Nemotron decode on the real 24 GB checkpoint is bit-exact in
+bf16-KV mode: 4/4 tokens + 4/4 logit digests, 3/3 guarded runs, guard clean.
+Root causes (same class as Qwen): compiled-fusion vs eager ops and dtype
+promotion — relu2 `maximum(u, f32-zero)` promoted bf16→f32; `compute_dt`
+needed the compiled `nn.softplus` graph; router `group_expert_select` needed
+the compiled sigmoid→normalize graph. Localized via per-layer digest dumps
+(`dump_nemo_py_layers.py` vs C++ `NEMOTRON_DUMP_LAYERS=1`). Doc:
+`docs/engineering/nemotron_digest_localization.md`.
+Remaining: INT8 KV attention path (production default) is still TODO.
+
 ## Questions for Opus
 
 1. What is the most likely S-dependent op causing the systematic 1-2 ULP divergence at

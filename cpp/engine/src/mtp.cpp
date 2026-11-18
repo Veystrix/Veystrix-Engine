@@ -9,6 +9,9 @@
 namespace veystrix::engine {
 namespace {
 
+// MRoPE position ids [3, B, S] for a text-only draft step (defined below).
+mx::array draft_positions(int B, int S, int start);
+
 // Qwen4ExpRMSNorm with group_size=hidden_size (the hyper-connection norm).
 // Python: reshape [...,HC,H]; per-group RMS over last axis; gain = 1 + weight.
 mx::array hc_norm_one_centered(const mx::array& x, const mx::array& raw_weight,
@@ -69,6 +72,103 @@ mx::array inject_residual(const mx::array& hyper_input, const mx::array& branch,
 
 // One dense Qwen4ExpAttention step with a fresh cache (single token). The QSA
 // indexer (1 token, no complete blocks) returns None, so this is a plain dense
+// ---------------------------------------------------------------------------
+// QSA sparse draft attention. Reuses qsa_full_indexer() (scoring + block
+// selection) and the masked-SDPA pattern of decoder_full.cpp; no indexer math
+// is reimplemented here. The dense path below is left byte-identical and is
+// used whenever the indexer returns None (short contexts).
+// ---------------------------------------------------------------------------
+
+// Gate for attempting the sparse path. This only decides whether to CALL the
+// indexer -- the indexer itself returns None for short contexts, in which case
+// the dense path runs. `VEYSTRIX_MTP_FORCE_SPARSE=1` forces the attempt (test
+// hook); the third condition guarantees we never silently skip a regime where
+// Python's indexer would select blocks.
+bool mtp_sparse_active(const MTPConfig& cfg, bool has_indexer,
+                       bool has_indexer_state, int past_len, int S) {
+  if (!has_indexer || !has_indexer_state) return false;
+  static const bool force = []() {
+    const char* e = std::getenv("VEYSTRIX_MTP_FORCE_SPARSE");
+    return e != nullptr && std::string(e) == "1";
+  }();
+  if (force || past_len >= cfg.sparse_threshold) return true;
+  const int ratio = cfg.indexer_compress_ratio > 0 ? cfg.indexer_compress_ratio : 1;
+  const int topk = cfg.indexer_budget / ratio;
+  return ((past_len + S) / ratio) > topk;
+}
+
+// QSAFullConfig for the MTP layer's indexer. The indexer shares the attention's
+// rotary instance, whose partial-rotary dim is int(head_dim * partial_factor),
+// NOT the indexer head dim; head_dim here is the indexer head dim (D in
+// qsa_full.cpp, used for the projection reshape and score scaling).
+QSAFullConfig mtp_qsa_config(const MTPConfig& cfg) {
+  QSAFullConfig q;
+  q.base.n_heads = cfg.indexer_n_heads;
+  q.base.kv_heads = cfg.indexer_kv_heads;
+  q.base.head_dim = cfg.indexer_head_dim;
+  q.base.compress_ratio = cfg.indexer_compress_ratio;
+  q.base.token_budget = cfg.indexer_budget;
+  q.base.block_topk = cfg.indexer_budget / cfg.indexer_compress_ratio;
+  q.base.eps = cfg.eps;
+  q.rope.dim = static_cast<int>(cfg.head_dim * cfg.partial_rotary_factor);
+  q.rope.base = cfg.rope_base;
+  q.rope.mrope_section = cfg.mrope_section;
+  q.rope.style = "interleaved";
+  q.rope.attention_scaling = 1.0f;
+  q.rope.max_position_embeddings = cfg.max_position_embeddings;
+  return q;
+}
+
+// 2-D text positions [B, S] = past_len + j. Python's indexer calls
+// _default_position_ids (2-D) when position_ids=None, unlike the attention's
+// 3-axis MRoPE tiling; for text both yield identical rotary.
+mx::array mtp_indexer_positions(int B, int S, int past_len) {
+  std::vector<int32_t> pos(static_cast<size_t>(B) * S);
+  for (int b = 0; b < B; ++b)
+    for (int j = 0; j < S; ++j)
+      pos[static_cast<size_t>(b) * S + j] = static_cast<int32_t>(past_len + j);
+  return mx::array(pos.begin(), mx::Shape{B, S}, mx::int32);
+}
+
+// The real checkpoint applies patch_rmsnorm to EVERY Qwen4ExpRMSNorm, including
+// the indexer's q_layernorm/k_layernorm: their gain is the raw weight (no +1).
+// qsa_full_indexer()/qsa_rms_norm() instead compute gain = 1 + weight. Convert
+// the one-centered checkpoint gain to the zero-centered convention the shared
+// primitive expects: 1 + (f32(w) - 1) == f32(w) exactly for the indexer gain
+// range ([0.5, ~1.4] measured in patch_rmsnorm.py).
+mx::array one_centered_to_qsa_gain(const mx::array& w) {
+  return mx::astype(w, mx::float32) - mx::array(1.0f, mx::float32);
+}
+
+// Build the QSA selected-token mask for one draft step. `indexer` is updated
+// in place: qsa_full_indexer appends the current raw keys + positions exactly
+// like Python's QSAKVCache.update_indexer.
+std::optional<mx::array> mtp_sparse_mask(
+    const MTPConfig& cfg, const Linear& index_qk_proj,
+    const mx::array& index_q_norm, const mx::array& index_k_norm,
+    const mx::array& x, QSACache& indexer, int past_len, int B, int S) {
+  indexer.offset = past_len;
+  mx::array pos = mtp_indexer_positions(B, S, past_len);
+  return qsa_full_indexer(x, index_qk_proj, index_q_norm, index_k_norm,
+                          mtp_qsa_config(cfg), indexer, pos);
+}
+
+// SDPA with a boolean QSA mask. Mirrors Python's mask truncation in
+// Qwen3_5Attention._prepare_projected_qkv (mask[..., :kv_seq_len]) and the
+// decoder_full.cpp full_attention_forward pattern.
+mx::array mtp_masked_sdpa(const mx::array& q, const mx::array& k,
+                          const mx::array& v, const mx::array& mask,
+                          float scale, int B, int S, int kv_seq_len) {
+  const int mask_w = static_cast<int>(mask.shape(3));
+  mx::array use_mask = mask;
+  if (kv_seq_len < mask_w)
+    use_mask = mx::slice(mask, {0, 0, 0, 0}, {B, 1, S, kv_seq_len},
+                         {1, 1, 1, 1});
+  return mx::fast::scaled_dot_product_attention(
+      q, k, v, scale, /*mask_mode=*/"", /*mask_arr=*/use_mask,
+      /*sinks=*/std::nullopt);
+}
+
 // softmax over the single key; rotary is evaluated at `cfg.position`.
 mx::array dense_attention(const MTPConfig& cfg, const MTPWeights& w,
                           const mx::array& x) {
@@ -118,6 +218,57 @@ mx::array dense_attention(const MTPConfig& cfg, const MTPWeights& w,
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}),
                     mx::Shape{B, S, nH * D});
   // o_proj(out * sigmoid(gate)), matching Qwen3_5Attention.__call__.
+  return linear(mx::multiply(out, mx::sigmoid(gate)), Linear(w.o_proj));
+}
+
+// Sparse counterpart of dense_attention(): identical q/k/v projection, norm and
+// RoPE, but the QSA mask (from qsa_full_indexer) is applied in SDPA and past K/V
+// are concatenated for a prepopulated cache. Only called when the indexer
+// selects blocks; the dense path above is untouched.
+mx::array sparse_attention(const MTPConfig& cfg, const MTPWeights& w,
+                           const mx::array& x, const MTPDraftCache& cache,
+                           const mx::array& mask, MTPSparseDebug* debug) {
+  const int B = static_cast<int>(x.shape(0));
+  const int S = static_cast<int>(x.shape(1));
+  const int nH = cfg.n_heads, nKV = cfg.n_kv_heads, D = cfg.head_dim;
+
+  mx::array qproj = linear(x, Linear(w.q_proj));
+  mx::array kproj = linear(x, Linear(w.k_proj));
+  mx::array vproj = linear(x, Linear(w.v_proj));
+  mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, nH, 2 * D});
+  std::vector<mx::array> halves = mx::split(q4, 2, -1);
+  mx::array q = halves[0], gate = halves[1];
+  gate = mx::reshape(gate, mx::Shape{B, S, nH * D});
+  q = mx::transpose(qsa_rms_norm(q, w.q_norm, cfg.eps), {0, 2, 1, 3});
+  mx::array k = mx::transpose(
+      qsa_rms_norm(mx::reshape(kproj, mx::Shape{B, S, nKV, D}), w.k_norm,
+                   cfg.eps), {0, 2, 1, 3});
+  mx::array v = mx::transpose(mx::reshape(vproj, mx::Shape{B, S, nKV, D}),
+                              {0, 2, 1, 3});
+
+  const int start = cache.empty() ? cfg.position : cache.past_len;
+  mx::array position_ids =
+      draft_positions(B, S, start);  // defined below; forward-declared here
+  QSARotaryParams rp;
+  rp.dim = static_cast<int>(D * cfg.partial_rotary_factor);
+  rp.base = cfg.rope_base;
+  rp.mrope_section = cfg.mrope_section;
+  rp.max_position_embeddings = cfg.max_position_embeddings;
+  q = qsa_apply_rope(q, position_ids, rp);
+  k = qsa_apply_rope(k, position_ids, rp);
+  if (!cache.empty()) {
+    k = mx::concatenate({*cache.past_keys, k}, 2);
+    v = mx::concatenate({*cache.past_values, v}, 2);
+  }
+
+  const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
+  const int kv_seq_len = S + (cache.empty() ? 0 : cache.past_len) + 1;
+  mx::array out = mtp_masked_sdpa(q, k, v, mask, scale, B, S, kv_seq_len);
+  if (debug) {
+    debug->qsa_mask = mask;
+    debug->attn_out = out;  // [B, nH, S, D] per-head SDPA output
+  }
+  out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, nH * D});
   return linear(mx::multiply(out, mx::sigmoid(gate)), Linear(w.o_proj));
 }
 
@@ -272,6 +423,57 @@ mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
   return linear(mx::multiply(out, mx::sigmoid(gate)), w.o_proj);
 }
 
+// Sparse counterpart of dense_attention_real(): same projections / one-centered
+// norms / MRoPE, but applies the QSA mask from qsa_full_indexer and concatenates
+// the prepopulated past K/V. Only called when the indexer selects blocks.
+mx::array sparse_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                const mx::array& x, const MTPDraftCache& cache,
+                                const mx::array& mask, MTPSparseDebug* debug) {
+  const int B = static_cast<int>(x.shape(0));
+  const int S = static_cast<int>(x.shape(1));
+  const int nH = cfg.n_heads, nKV = cfg.n_kv_heads, D = cfg.head_dim;
+
+  mx::array qproj = linear(x, w.q_proj);
+  mx::array kproj = linear(x, w.k_proj);
+  mx::array vproj = linear(x, w.v_proj);
+  mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, nH, 2 * D});
+  std::vector<mx::array> halves = mx::split(q4, 2, -1);
+  mx::array q = halves[0], gate = halves[1];
+  gate = mx::reshape(gate, mx::Shape{B, S, nH * D});
+  q = mx::transpose(oc_rms_norm(q, w.q_norm, cfg.eps, -1), {0, 2, 1, 3});
+  mx::array k = mx::transpose(
+      oc_rms_norm(mx::reshape(kproj, mx::Shape{B, S, nKV, D}), w.k_norm,
+                  cfg.eps, -1), {0, 2, 1, 3});
+  mx::array v = mx::transpose(mx::reshape(vproj, mx::Shape{B, S, nKV, D}),
+                              {0, 2, 1, 3});
+
+  const int start = cache.empty() ? cfg.position : cache.past_len;
+  mx::array position_ids = draft_positions(B, S, start);
+  QSARotaryParams rp;
+  rp.dim = static_cast<int>(D * cfg.partial_rotary_factor);
+  rp.base = cfg.rope_base;
+  rp.style = "interleaved";
+  rp.attention_scaling = 1.0f;
+  rp.mrope_section = cfg.mrope_section;
+  rp.max_position_embeddings = cfg.max_position_embeddings;
+  q = qsa_apply_rope(q, position_ids, rp);
+  k = qsa_apply_rope(k, position_ids, rp);
+  if (!cache.empty()) {
+    k = mx::concatenate({*cache.past_keys, k}, 2);
+    v = mx::concatenate({*cache.past_values, v}, 2);
+  }
+
+  const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
+  const int kv_seq_len = S + (cache.empty() ? 0 : cache.past_len) + 1;
+  mx::array out = mtp_masked_sdpa(q, k, v, mask, scale, B, S, kv_seq_len);
+  if (debug) {
+    debug->qsa_mask = mask;
+    debug->attn_out = out;
+  }
+  out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, nH * D});
+  return linear(mx::multiply(out, mx::sigmoid(gate)), w.o_proj);
+}
+
 // Router + packed SwitchGLU (via the validated q4_projection/moe_block) +
 // dense shared expert. One token is the bit-exact decode path (indices.size <
 // 64, so Python's SwitchGLU does not sort).
@@ -337,6 +539,17 @@ mx::array mtp_fuse_inputs(const MTPConfig& cfg, const MTPWeights& w,
 mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
                             const mx::array& hidden_states,
                             const mx::array& next_token_ids) {
+  // Legacy fresh-cache path: delegate with an empty cache so every byte stays
+  // identical to the validated position-0 synthetic regression.
+  return mtp_draft_forward(cfg, w, hidden_states, next_token_ids,
+                           MTPDraftCache{}, nullptr);
+}
+
+mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
+                            const mx::array& hidden_states,
+                            const mx::array& next_token_ids,
+                            const MTPDraftCache& cache,
+                            MTPSparseDebug* debug) {
   // nn.Embedding lookup: gather embed_tokens.weight rows at next_token_ids.
   // w.emb is [V,H]; take(..., axis=-2) with ids [B,S] yields [B,S,H].
   mx::array token_emb =
@@ -348,7 +561,21 @@ mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
   GatedResult ag = gated_residual_mtp(fused, w.attn_hc_norm, w.attn_down,
                                       w.attn_up, w.attn_inject, cfg.hc_count,
                                       cfg.hidden_size, cfg.eps);
-  mx::array attn_branch = dense_attention(cfg, w, ag.mixed_input);
+
+  const int B = static_cast<int>(hidden_states.shape(0));
+  const int S = static_cast<int>(hidden_states.shape(1));
+  std::optional<mx::array> mask;
+  if (mtp_sparse_active(cfg, w.has_indexer(), cache.has_indexer_state(),
+                        cache.past_len, S)) {
+    QSACache idx = cache.indexer;  // const overload: keep caller's state intact
+    mask = mtp_sparse_mask(cfg, Linear(*w.index_qk_proj), *w.index_q_norm,
+                           *w.index_k_norm, ag.mixed_input, idx,
+                           cache.past_len, B, S);
+  }
+  mx::array attn_branch =
+      mask.has_value()
+          ? sparse_attention(cfg, w, ag.mixed_input, cache, *mask, debug)
+          : dense_attention(cfg, w, ag.mixed_input);
   mx::array h1 = inject_residual(fused, attn_branch, *ag.injection_weights);
 
   // ---- layer: MLP hyper-connection + dense MoE -----------------------------
@@ -378,6 +605,15 @@ mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
                                   const mx::array& hidden_states,
                                   const mx::array& next_token_ids,
                                   const MTPDraftCache& cache) {
+  MTPDraftCache copy = cache;  // preserve the existing signature / short path
+  return mtp_draft_forward_real(cfg, w, hidden_states, next_token_ids, copy,
+                                nullptr);
+}
+
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids,
+                                  MTPDraftCache& cache, MTPSparseDebug* debug) {
   if (!cache.empty() &&
       (!cache.past_keys.has_value() || !cache.past_values.has_value()))
     throw std::invalid_argument(
@@ -421,7 +657,30 @@ mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
   GatedResult ag = gated_residual_real(
       fused, w.attn_hc_norm, w.attn_down, w.attn_up, w.attn_inject,
       cfg.hc_count, cfg.hidden_size, cfg.eps);
-  mx::array attn_branch = dense_attention_real(cfg, w, ag.mixed_input, cache);
+
+  const int B = static_cast<int>(hidden_states.shape(0));
+  const int S = static_cast<int>(hidden_states.shape(1));
+  if (cache.has_indexer_state()) {
+    const int ik = static_cast<int>(cache.indexer.index_keys->shape(1));
+    if (ik != cache.past_len)
+      throw std::invalid_argument(
+          "mtp_draft_forward_real: cache.indexer.index_keys.shape[1] != past_len");
+  }
+  std::optional<mx::array> mask;
+  if (mtp_sparse_active(cfg, w.has_indexer(), cache.has_indexer_state(),
+                        cache.past_len, S)) {
+    // Sparse regime: the QSA indexer scores/selects blocks and returns a
+    // selected-token mask; the non-const overload writes the updated indexer
+    // state back to `cache` so multi-step callers can continue.
+    mask = mtp_sparse_mask(cfg, *w.index_qk_proj,
+                           one_centered_to_qsa_gain(*w.index_q_norm),
+                           one_centered_to_qsa_gain(*w.index_k_norm),
+                           ag.mixed_input, cache.indexer, cache.past_len, B, S);
+  }
+  mx::array attn_branch =
+      mask.has_value()
+          ? sparse_attention_real(cfg, w, ag.mixed_input, cache, *mask, debug)
+          : dense_attention_real(cfg, w, ag.mixed_input, cache);
   mx::array h1 = inject_residual(fused, attn_branch, *ag.injection_weights);
 
   // mlp hyper-connection + SwitchGLU/shared expert + inject.

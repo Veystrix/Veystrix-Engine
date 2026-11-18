@@ -16,8 +16,14 @@
 //                         cache (see MTPDraftCache / mtp_draft_forward_real):
 //                         RoPE is evaluated at cache.offset and attention is a
 //                         dense softmax over the past keys + the current token.
-//                         The QSA indexer returns None while key_len <= 2048,
-//                         so dense is correct for short contexts.
+//                         The QSA indexer returns None while
+//                         key_len / compress_ratio <= block_topk (~2048 for the
+//                         real checkpoint), so dense is correct for short
+//                         contexts. When the caller supplies QSA indexer weights
+//                         AND indexer cache state (MTPDraftCache::indexer), a
+//                         long draft step calls qsa_full_indexer() to build the
+//                         selected-token mask and applies masked SDPA (the same
+//                         primitive/pattern as decoder_full.cpp).
 //   * mtp_verify        : point-mass accept/reject + redraw, lossless.
 //
 // The LM head here is TIED to embed_tokens (tie_word_embeddings=True, the path
@@ -67,12 +73,19 @@ struct MTPConfig {
   int max_position_embeddings = 2048;
   int position = 0;         // draft-step position (0 for the fresh-cache step)
 
-  // QSA indexer geometry. Kept for full-integration parity; the dense
-  // single-token draft path does not consume the indexer (it returns None).
+  // QSA indexer geometry (Qwen4ExpQSAIndexer). Consumed by the sparse draft
+  // path when indexer weights + cache state are supplied; the short-context
+  // single-token draft path does not consume it (the indexer returns None).
   int indexer_n_heads = 0;
+  int indexer_kv_heads = 1;  // Hk, Qwen uses 1
   int indexer_head_dim = 0;
   int indexer_budget = 0;
   int indexer_compress_ratio = 1;
+  // Fast gate for attempting the sparse path. The indexer itself decides
+  // None vs mask: sparse is only actually applied when
+  // (past_len + S) / compress_ratio > block_topk. Defaults to the real
+  // checkpoint's ~2048 token threshold; synthetic configs can lower it.
+  int sparse_threshold = 2048;
 
   // Real-checkpoint conventions. The synthetic golden vectors use the
   // unpatched (1 + weight) gain and a tied LM head; the real sidecar has
@@ -123,6 +136,23 @@ struct MTPWeights {
   mx::array mix_hc_norm;            // [HC*H]
   mx::array mix_down;               // [LOW, HC*H]
   mx::array mix_up;                 // [HC*H, LOW]
+
+  // QSA indexer weights (layer.self_attn.indexer). std::optional keeps the
+  // existing MTPWeights constructor source-compatible; the dense/short path
+  // leaves these unset. Set them to enable the long-context sparse mask.
+  std::optional<mx::array> index_qk_proj;  // [(n_idx_heads+n_idx_kv)*IDXD, H]
+  std::optional<mx::array> index_q_norm;   // [IDXD]
+  std::optional<mx::array> index_k_norm;   // [IDXD]
+
+  void set_indexer_weights(mx::array proj, mx::array q_norm, mx::array k_norm) {
+    index_qk_proj = std::move(proj);
+    index_q_norm = std::move(q_norm);
+    index_k_norm = std::move(k_norm);
+  }
+  bool has_indexer() const {
+    return index_qk_proj.has_value() && index_q_norm.has_value() &&
+           index_k_norm.has_value();
+  }
 
   MTPWeights() = delete;  // mx::array has no default constructor
   MTPWeights(
@@ -201,6 +231,24 @@ struct MTPRealWeights {
 
   QPacked lm_head;                 // language_model.lm_head (untied)
 
+  // QSA indexer weights (language_model.mtp.layers.0.self_attn.indexer.*),
+  // in the same packed layout as the other checkpoint Linear weights. Optional
+  // so the existing loader / constructor stay source-compatible; the dense path
+  // needs none of them.
+  std::optional<Linear> index_qk_proj;  // indexer.index_qk_proj (quantized Linear)
+  std::optional<mx::array> index_q_norm;  // indexer.q_layernorm.weight
+  std::optional<mx::array> index_k_norm;  // indexer.k_layernorm.weight
+
+  void set_indexer_weights(Linear proj, mx::array q_norm, mx::array k_norm) {
+    index_qk_proj = std::move(proj);
+    index_q_norm = std::move(q_norm);
+    index_k_norm = std::move(k_norm);
+  }
+  bool has_indexer() const {
+    return index_qk_proj.has_value() && index_q_norm.has_value() &&
+           index_k_norm.has_value();
+  }
+
   MTPRealWeights() = delete;
   MTPRealWeights(
       QPacked a_embed, mx::array a_pre_fc_norm_embedding, Linear a_fc_embedding,
@@ -265,17 +313,49 @@ mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
 //       `position_ids = arange(cache.offset, cache.offset + L)` when
 //       position_ids=None). This is the nonzero "draft position".
 //
-// An empty cache reproduces the legacy fresh-cache S=1 position-0 path. Indexer
-// state (index_keys / index_position_ids) is deliberately NOT carried: while
-// `key_len <= 2048` the QSA indexer returns None and the mask is None, so dense
-// attention is bit-correct (see docs/engineering/mtp_full_parity.md). A sparse
-// indexer mask for `past_len >= 2048` is out of scope for this path.
+// An empty cache reproduces the legacy fresh-cache S=1 position-0 path. For a
+// short cache with no `indexer` state, dense attention is still bit-correct:
+// while `key_len / compress_ratio <= block_topk` the QSA indexer returns None
+// and the mask is None (see docs/engineering/mtp_full_parity.md). To take the
+// sparse path, the caller additionally supplies the QSA indexer state below
+// (the raw, un-RoPE'd index_qk_proj keys + their 2-D text positions) from the
+// same Python QSAKVCache that produced past_keys/past_values. qsa_full_indexer()
+// appends the current step's raw keys to `indexer` in place; the non-const
+// overload writes the updated state back so multi-step callers can continue.
 struct MTPDraftCache {
-  std::optional<mx::array> past_keys;
-  std::optional<mx::array> past_values;
+  std::optional<mx::array> past_keys;    // [B, n_kv_heads, past_len, head_dim]
+  std::optional<mx::array> past_values;  // [B, n_kv_heads, past_len, head_dim]
   int past_len = 0;
   bool empty() const { return past_len == 0 && !past_keys.has_value(); }
+
+  // QSA indexer cache state (mirrors mlx_vlm QSAKVCache.index_keys /
+  // index_position_ids). index_keys is [B, past_len, indexer_head_dim] of RAW
+  // (pre-RoPE) indexer keys; index_position_ids is [B, past_len] int32.
+  QSACache indexer;
+  bool has_indexer_state() const {
+    return indexer.index_keys.has_value() &&
+           indexer.index_position_ids.has_value();
+  }
 };
+
+// Optional debug capture for the sparse-parity tooling. When non-null, the
+// draft step records the per-head SDPA inputs/output and the QSA mask so they
+// can be compared byte-for-byte against the Python module. nullptr (default)
+// leaves every validated path unchanged.
+struct MTPSparseDebug {
+  std::optional<mx::array> qsa_mask;    // [B, 1, S, key_len] (bool)
+  std::optional<mx::array> attn_out;    // [B, n_heads, S, head_dim] (f32/bf16)
+};
+
+// Sparse-capable overload. With an empty cache this is byte-identical to the
+// 4-argument fresh-cache path above. With a prepopulated cache + QSA indexer
+// weights + indexer state it builds the QSA sparse mask and applies masked SDPA
+// when the indexer selects blocks (else falls back to the dense path).
+mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
+                            const mx::array& hidden_states,
+                            const mx::array& next_token_ids,
+                            const MTPDraftCache& cache,
+                            MTPSparseDebug* debug = nullptr);
 
 // Full single-token draft step against the REAL checkpoint's MTP sidecar
 // (packed Q4 weights, one-centered norms, 512 streamed experts and an untied
@@ -287,7 +367,13 @@ struct MTPDraftCache {
 // The 4-argument overload is the legacy fresh-cache path (position 0, no past
 // KV) and is kept byte-identical for regression. The 5-argument overload takes
 // a prepopulated cache: RoPE uses `cache.past_len` and attention runs densely
-// over `past_keys/past_values` concatenated with the current key/value.
+// over `past_keys/past_values` concatenated with the current key/value (this is
+// the short-context path, kept byte-exact for the position-7/11 regressions).
+//
+// The non-const overload is the sparse-capable one: when indexer weights + index
+// state are present and the indexer selects blocks, it applies the QSA mask and
+// writes the updated index state back to `cache`. The const overload copies the
+// cache and delegates to it, preserving the existing signature.
 mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
                                   const mx::array& hidden_states,
                                   const mx::array& next_token_ids);
@@ -295,6 +381,11 @@ mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
                                   const mx::array& hidden_states,
                                   const mx::array& next_token_ids,
                                   const MTPDraftCache& cache);
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids,
+                                  MTPDraftCache& cache,
+                                  MTPSparseDebug* debug = nullptr);
 
 // Result of mtp_verify, mirroring Sampler.verify_point_mass's return tuple.
 struct MTPVerifyResult {

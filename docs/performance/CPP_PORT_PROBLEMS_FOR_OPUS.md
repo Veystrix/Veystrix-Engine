@@ -84,12 +84,22 @@ A diagnostic subagent conclusively localized the S-dependent divergence (doc
 - Added opt-in `VEYSTRIX_CPP_PREFILL_SLOTS=N` (default off) that builds a
   per-layer large resident MoE pool on the fly for batched prefill (S>1) so the
   whole prompt goes through one sorted gather_qmm (avoids 48x pool memory blowup).
-- **Probe result**: with S=128 dumped inputs, `moe_block_sorted` gives
-  maxdiff=0.00122, 21% exact vs Python `combined`; unsorted gives 100% vs
-  `ref_comb`. So my sorted path is NOT equivalent to Python's production sorted
-  kernel. Likely the kernel's numerics depend on the actual rhs index VALUES
-  (global expert IDs vs slot indices) or the resident-stack ordering, not just
-  the `sorted_indices` flag + permutation. Needs Opus-level analysis.
+- **Probe result (CORRECTED 2026-11-18: earlier probe hard-coded T=16, invalid)**:
+  with the proper T=128, `moe_block_sorted` matches Python `combined` **100%
+  exactly (maxdiff=0)** when fed Python's dumped `py_local` stacked-row indices
+  and stacked weights; unsorted `moe_block` matches Python `ref_comb` 100%.
+  So the sorted kernel implementation is CORRECT.
+- **Remaining integration blocker**: in the real forward, feeding the same
+  sorted path via (a) a 512-slot streaming pool or (b) a full 512-expert layer
+  (`expert_store::load_layer`), both driven by the router's GLOBAL expert IDs,
+  still produces the OLD unsorted digest (`5dbb28cc`), not Python's `c6f51dae`.
+  Python's `combined` uses a weight stack of the **241 distinct routed experts
+  in first-occurrence order** with routes remapped to stacked-row indices
+  (`py_local`), then sorts those. Global-ID ordering / full-512 ordering gives
+  a different gather_qmm reduction grouping and thus different bf16 rounding.
+  To match, the prefill MoE must build the same first-occurrence stacked expert
+  table with remapped indices before the sorted kernel. This is the concrete
+  next fix; needs Opus-level verification.
 - Gate (b) at 16 tokens still passes (default path unchanged); ctests 27/28.
 
 ## Questions for Opus

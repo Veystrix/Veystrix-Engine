@@ -43,6 +43,7 @@
 // Output: one line per generated token,
 //   step=<i> in=<token_in> out=<token_out> sha256=<64 hex>
 #include "decoder_full.hpp"
+#include "expert_store.hpp"
 #include "moe_stream.hpp"
 #include "cross_shard_moe.hpp"
 #include "dense_manifest.hpp"
@@ -482,6 +483,7 @@ struct RealLayer {
   int layer_idx = 0;
   bool split_layer = false;
   std::string expert_prefix;
+  std::string expert_shard_path;  // shard path for full-layer expert load (prefill)
   std::optional<PLEWeights> ple;              // set only on PLE layers (index 1)
   PLECache ple_cache;                         // mutable n-gram/conv cache for that layer
   int top_k = 0;
@@ -1267,6 +1269,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     layers.back().layer_idx = l;
     layers.back().split_layer = split;
     layers.back().expert_prefix = ep;
+    layers.back().expert_shard_path = ckpt + "/" + first_shard;
     if (l == ple_layer && ple_weights)
       layers.back().ple = std::move(ple_weights);
 
@@ -1357,22 +1360,20 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         // on the fly (created and destroyed within the call, so only one layer's
         // experts are resident at a time ~= 1.3 GiB), process the whole prompt
         // at once so StreamingMoE::forward picks moe_block_sorted, then eval.
-        static const char* pslots_env = std::getenv("VEYSTRIX_CPP_PREFILL_SLOTS");
-        static const int pslots = pslots_env ? std::atoi(pslots_env) : 0;
-        if (S > 1 && pslots >= top_k) {
-          if (R.split_layer) {
-            CrossShardMoE pf(ckpt, cfg, R.expert_prefix, pslots, group_size,
-                             bits, debug_capture::get().copy_cross_shard);
-            mx::array pfout = pf.forward(x, idx, sc).output;
-            mx::eval(pfout);
-            return pfout;
-          } else {
-            StreamingMoE pf(ckpt, R.layer_idx, pslots, group_size, bits,
-                            /*read_width=*/8, R.expert_prefix);
-            mx::array pfout = pf.forward(x, idx, sc).output;
-            mx::eval(pfout);
-            return pfout;
-          }
+        static const bool sorted_prefill =
+            std::getenv("VEYSTRIX_CPP_PREFILL_SLOTS") != nullptr;
+        if (S > 1 && sorted_prefill && !R.split_layer) {
+          // Load the layer's FULL expert set indexed by global expert id (the
+          // same ordering Python's SwitchGLU sorts over), run one batched
+          // sorted gather_qmm, and discard. Only one layer resident at a time.
+          ExpertWeights ew = load_layer(R.expert_shard_path, R.expert_prefix,
+                                        group_size, bits);
+          mx::eval(ew.gate.weight); mx::eval(ew.gate.scales); mx::eval(ew.gate.biases);
+          mx::eval(ew.up.weight);   mx::eval(ew.up.scales);   mx::eval(ew.up.biases);
+          mx::eval(ew.down.weight); mx::eval(ew.down.scales); mx::eval(ew.down.biases);
+          mx::array pfout = moe_block_sorted(x, idx, sc, ew);
+          mx::eval(pfout);
+          return pfout;
         }
         if (S <= 1)
           return R.stream ? R.stream->forward(x, idx, sc).output

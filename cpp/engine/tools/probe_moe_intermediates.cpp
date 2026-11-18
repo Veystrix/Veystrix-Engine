@@ -247,7 +247,9 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   auto cfg = read_config(dir);
 
-  const int T = 16, H = 2560, E = 512, K = 10;
+  const int H = 2560, E = 512, K = 10;
+  // Derive T from the m2d dump size (dumped as little-endian f32).
+  const int T = static_cast<int>(file_size(join(dir, "m2d.bin")) / (4ULL * H));
   const int inter = 640, gs = std::stoi(cfg.at("group_size"));
   const int bits = std::stoi(cfg.at("bits"));
   // Number of stacked experts = file bytes / (weight itemsize * out * packed_in).

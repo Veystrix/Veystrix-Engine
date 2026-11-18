@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -121,14 +122,40 @@ mx::array read_streamed_rows(const PLERowTensorRef& ref,
   void* buf = std::malloc(bytes ? bytes : 1);
   if (buf == nullptr) throw std::runtime_error("PLE streamed: malloc failed");
   uint8_t* p = static_cast<uint8_t*>(buf);
-  for (size_t i = 0; i < n; ++i) {
-    off_t off = (off_t)(ref.data_offset + rows[i] * ref.row_bytes);
-    ssize_t got = ::pread(ref.fd, p + i * ref.row_bytes,
-                          (size_t)ref.row_bytes, off);
-    if (got != ref.row_bytes) {
-      std::free(buf);
-      throw std::runtime_error("PLE streamed: short pread");
+  // PERF: issue one pread per CONTIGUOUS RUN instead of one per row. n-gram
+  // rows scattered across a shard are gathered in sorted order and adjacent
+  // rows coalesce into a single read; the bytes placed at p[i*row_bytes] are
+  // identical to the per-row version (bit-exact), but at S=1024 this cuts tens
+  // of thousands of tiny pread syscalls to a handful of large reads.
+  std::vector<size_t> order(n);
+  for (size_t i = 0; i < n; ++i) order[i] = i;
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) { return rows[a] < rows[b]; });
+  size_t i = 0;
+  while (i < n) {
+    size_t j = i + 1;
+    int64_t run_row = rows[order[i]];
+    while (j < n && rows[order[j]] == run_row + (int64_t)(j - i)) ++j;
+    size_t count = j - i;
+    off_t off = (off_t)(ref.data_offset + run_row * ref.row_bytes);
+    size_t want = count * (size_t)ref.row_bytes;
+    // Destination slots for this run are order[i..j), which are not
+    // necessarily contiguous, so read into a temp then scatter.
+    std::vector<uint8_t> tmp(want);
+    size_t done = 0;
+    while (done < want) {
+      ssize_t got = ::pread(ref.fd, tmp.data() + done, want - done, off + done);
+      if (got <= 0) {
+        std::free(buf);
+        throw std::runtime_error("PLE streamed: short pread");
+      }
+      done += (size_t)got;
     }
+    for (size_t k = 0; k < count; ++k)
+      std::memcpy(p + order[i + k] * (size_t)ref.row_bytes,
+                  tmp.data() + k * (size_t)ref.row_bytes,
+                  (size_t)ref.row_bytes);
+    i = j;
   }
   mx::Shape shape{(int)n, (int)ref.elements_per_row};
   auto free_buf = [](void* q) { std::free(q); };

@@ -161,9 +161,16 @@ def main():
     original_call = Sampler.__call__
     logit_digests = []
 
+    import os
+    dump_prefix = os.environ.get("PYCAP_DUMP_LOGITS")
+
     def capturing_call(self, logits):
         row = np.asarray(logits.reshape(-1).astype(mx.float32), dtype="<f4")
         logit_digests.append(hashlib.sha256(row.tobytes()).hexdigest())
+        if dump_prefix:
+            step = len(logit_digests) - 1
+            with open(f"{dump_prefix}.step{step}.f32", "wb") as fh:
+                fh.write(row.tobytes())
         return original_call(self, logits)
 
     Sampler.__call__ = capturing_call

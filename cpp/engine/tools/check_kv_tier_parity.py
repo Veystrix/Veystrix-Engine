@@ -105,6 +105,59 @@ def gen_tiered4(d: Path, rng):
     return inputs, keys
 
 
+def bf16_bits(a: mx.array):
+    mx.eval(a)
+    return np.frombuffer(bytes(a), dtype=np.uint16)
+
+
+def u32_bits(a: mx.array):
+    mx.eval(a)
+    return np.frombuffer(bytes(mx.astype(a, mx.uint32)), dtype=np.uint32)
+
+
+def device_gap():
+    """Measure (do not assert) the CPU-vs-GPU difference of the REAL MLX ops.
+
+    This is characterization, not a parity gate: real serving runs both sides on
+    the same device (GPU), which the selftest above proves bit-exact. The numbers
+    here explain WHY cross-device vectors cannot be reused. See
+    docs/engineering/kv_tier_bitexact_resolution.md for the root cause.
+    """
+    rng = np.random.default_rng(SEED)
+    for mode, bits in (("affine4", 4), ("affine8", 8)):
+        x = make_input(rng, int(np.prod(SHAPE)))
+        mx.set_default_device(mx.cpu)
+        xc = mx.reshape(x, SHAPE)
+        qc = mx.quantize(xc, GROUP, bits, "affine")
+        mx.eval(*qc)
+        mx.set_default_device(mx.gpu)
+        xg = mx.reshape(x, SHAPE)
+        qg = mx.quantize(xg, GROUP, bits, "affine")
+        mx.eval(*qg)
+        sd = int((bf16_bits(qc[1]) != bf16_bits(qg[1])).sum())
+        bd = int((bf16_bits(qc[2]) != bf16_bits(qg[2])).sum())
+        pd = int((u32_bits(qc[0]) != u32_bits(qg[0])).sum())
+        mx.set_default_device(mx.cpu)
+        oc = mx.dequantize(*qc, GROUP, bits, "affine")
+        mx.eval(oc)
+        mx.set_default_device(mx.gpu)
+        og = mx.dequantize(*qg, GROUP, bits, "affine")
+        mx.eval(og)
+        step = bf16_bits(og).astype(np.int32) - bf16_bits(oc).astype(np.int32)
+        nz = int((step != 0).sum())
+        small = int(((step != 0) & (np.abs(step) <= 8)).sum())
+        identical = (bytes(qc[0]) == bytes(qg[0]) and bytes(qc[1]) == bytes(qg[1])
+                     and bytes(qc[2]) == bytes(qg[2]))
+        print(f"{mode}: quantize scales diff={sd}/{qc[1].size}, "
+              f"biases diff={bd}/{qc[2].size}, packed-word diff={pd}/{qc[0].size}")
+        print(f"  dequantize CPU vs GPU: {nz}/{step.size} bf16-bit outputs differ "
+              f"({small} within <=8 bf16 bits, {nz-small} larger near cancellations)")
+        if identical:
+            print("  quantize output byte-identical => dequant diff is PURELY the "
+                  "dequantize kernel (different bf16 rounding count)")
+    return 0
+
+
 LINE = __import__("re").compile(
     r"^step=(\d+)\s+in=(-?\d+)\s+out=(-?\d+)\s+sha256=([0-9a-f]{64})$")
 
@@ -150,14 +203,20 @@ def run_selftest(binary: str, root: Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", required=True, help="output directory for golden vectors")
+    ap.add_argument("--out", default=None, help="output directory for golden vectors")
     ap.add_argument("--binary", default=None,
                     help="C++ binary to run with VEYSTRIX_CPP_KV_TIER_SELFTEST")
     ap.add_argument("--compare-arms", default=None,
                     help="JSON mapping mode -> {cpp: OUT, python: reference.json}")
+    ap.add_argument("--device-gap", action="store_true",
+                    help="measure (not assert) the CPU-vs-GPU op difference")
     args = ap.parse_args()
+    if args.device_gap:
+        return device_gap()
     if args.compare_arms:
         return compare_arms(Path(args.compare_arms))
+    if not args.out:
+        ap.error("--out is required unless --device-gap or --compare-arms is given")
 
     mx.set_default_device(mx.gpu)  # MUST match the C++ generator's default device
     rng = np.random.default_rng(SEED)

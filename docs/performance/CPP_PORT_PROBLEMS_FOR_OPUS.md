@@ -102,6 +102,29 @@ A diagnostic subagent conclusively localized the S-dependent divergence (doc
   next fix; needs Opus-level verification.
 - Gate (b) at 16 tokens still passes (default path unchanged); ctests 27/28.
 
+## P0/P5 RESOLVED 2026-11-18 — long-context parity achieved
+
+The S-dependent divergence is FIXED. Root cause was NOT just the sorted_indices
+flag: MLX gather_qmm's rounding depends on the weight matrix BATCH DIMENSION and
+the expert ordering. Python's SwitchGLU builds a compact stack of the distinct
+routed experts in FIRST-OCCURRENCE order (241 experts at S=128), remaps routes to
+stacked-row indices, and runs one sorted gather_qmm over that compact stack.
+
+Fix (default, no env var): StreamingMoE::forward_stacked and
+CrossShardMoE::forward_stacked read ONLY the distinct expert rows via pread into
+a compact first-occurrence stack, remap routes, and call moe_block_sorted.
+Evidence:
+- 16-token gate (b): 3/3, 8/8 tokens + 8/8 digests.
+- S=128: all 48 layer hidden states bit-exact vs Python; step-0 digest matches.
+- 1024-token, 4 decode steps: ALL 4 token ids + digests match Python exactly;
+  3/3 deterministic runs; ~31s (was 174s), swap_peak 3636 MiB.
+- ctests 27/28 (only native_generate worktree .venv artifact).
+Branch cpp-engine-qdense @ 17dbb66. No env vars required.
+
+Remaining feature gaps (Nemotron decode path, prefix cache, non-greedy sampling
+parity, continuous batching) are NOT yet ported — see inventory. Python remains
+serving engine until the full feature set is validated.
+
 ## Questions for Opus
 
 1. What is the most likely S-dependent op causing the systematic 1-2 ULP divergence at

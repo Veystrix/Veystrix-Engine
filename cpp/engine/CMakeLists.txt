@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -182,6 +182,13 @@ target_link_libraries(test_gdn_layer PRIVATE veystrix_engine)
 set_target_properties(test_gdn_layer PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Nemotron attention decode primitive (bf16 KV path) bit-exact parity.
+add_executable(test_nemo_attention tests/test_nemo_attention.cpp)
+target_include_directories(test_nemo_attention PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_nemo_attention PRIVATE veystrix_engine)
+set_target_properties(test_nemo_attention PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Final head (gated residual no-combine -> lm_head) bit-exact parity.
 add_executable(test_final_head tests/test_final_head.cpp)
 target_include_directories(test_final_head PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -273,6 +280,10 @@ add_test(NAME model_adapter COMMAND test_model_adapter
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head/expected.npy")
   add_test(NAME final_head COMMAND test_final_head
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_attention/meta.json")
+  add_test(NAME nemo_attention COMMAND test_nemo_attention
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_attention")
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_gdn_layer/meta.json")
   add_test(NAME gdn_layer COMMAND test_gdn_layer

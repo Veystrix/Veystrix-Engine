@@ -1,0 +1,11 @@
+{
+  "kv_path": "bf16",
+  "hidden_size": 64,
+  "num_heads": 4,
+  "num_key_value_heads": 2,
+  "head_dim": 16,
+  "scale": 0.25,
+  "steps": 3,
+  "batch": 1,
+  "seed": 20261118
+}

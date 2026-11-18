@@ -94,6 +94,14 @@ target_link_libraries(native_generate PRIVATE veystrix_engine)
 set_target_properties(native_generate PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Real-checkpoint Nemotron 3.5 Lightning C++ greedy decode tool. Gated by a
+# Python reference under real_run_guard.py (no ctest: real checkpoint required).
+add_executable(nemotron_generate tools/nemotron_generate.cpp)
+target_include_directories(nemotron_generate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nemotron_generate PRIVATE veystrix_engine)
+set_target_properties(nemotron_generate PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Mixed-layer decoder loop (GDN + full attn + shared expert) bit-exact parity.
 add_executable(test_decoder_full tests/test_decoder_full.cpp)
 target_include_directories(test_decoder_full PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

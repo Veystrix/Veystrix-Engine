@@ -20,6 +20,7 @@
 #include <mlx/mlx.h>
 
 #include "decoder_full.hpp"  // DecoderFullLayerCache
+#include "ple.hpp"           // PLECache
 
 namespace veystrix::engine {
 
@@ -42,12 +43,19 @@ struct LayerSnapshot {
   bool has_qsa = false;
   TensorBlob qsa_keys, qsa_positions;
   int qsa_offset = 0;
+  // PLE layer state (context + conv), only on the configured PLE layer.
+  bool has_ple = false;
+  TensorBlob ple_context, ple_conv;
 };
 
 struct PrefixSnapshot {
   std::string chain_key;        // SHA-256 fingerprint+token chain (hex)
   std::vector<int32_t> tokens;  // exact token ids, re-checked on load
   std::vector<LayerSnapshot> layers;
+  // The logits after the prefix (needed to skip re-prefill on a cache hit).
+  // Empty when capturing a pure cache snapshot without logits.
+  bool has_logits = false;
+  TensorBlob logits;
 };
 
 // Compute the SHA-256 chain key over a canonical JSON of fingerprint and the
@@ -59,11 +67,21 @@ std::string prefix_chain_key(const std::string& fingerprint,
 PrefixSnapshot prefix_capture(const std::vector<DecoderFullLayerCache>& caches,
                               const std::vector<int32_t>& tokens,
                               const std::string& fingerprint);
+// As above, also storing the post-prefix logits so decode can resume without
+// re-running prefill.
+PrefixSnapshot prefix_capture_with_logits(
+    const std::vector<DecoderFullLayerCache>& caches,
+    const std::vector<int32_t>& tokens,
+    const std::string& fingerprint,
+    const mx::array& logits,
+    const std::vector<PLECache>& ple_caches);
 
 // Restore a fresh cache vector from a snapshot. Throws on shape/dtype/token
 // mismatch or corrupt data. The returned arrays are independent copies.
+// If `ple_out` is non-null, also restores the per-layer PLE caches into it.
 std::vector<DecoderFullLayerCache> prefix_restore(
-    const PrefixSnapshot& snap, int n_layers);
+    const PrefixSnapshot& snap, int n_layers,
+    std::vector<PLECache>* ple_out = nullptr);
 
 // Persist / load a snapshot to a directory (one file per tensor + meta.json).
 // load() verifies chain_key and tokens; failures throw.

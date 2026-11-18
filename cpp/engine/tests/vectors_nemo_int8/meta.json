@@ -1,0 +1,19 @@
+{
+  "kv_path": "int8",
+  "format": "affine-int8-g64",
+  "group_size": 64,
+  "bits": 8,
+  "hidden_size": 512,
+  "num_heads": 4,
+  "num_key_value_heads": 2,
+  "head_dim": 128,
+  "scale": 0.08838834764831845,
+  "seed": 20261118,
+  "cases": [
+    "decode",
+    "prompt",
+    "multiblock"
+  ],
+  "block_tokens": 4096,
+  "note": "decode/prompt use production 4096 (single block); multiblock patches only BLOCK_TOKENS=4 to validate the loop algorithm"
+}

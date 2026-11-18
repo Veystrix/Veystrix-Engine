@@ -197,6 +197,13 @@ target_link_libraries(test_nemo_attention PRIVATE veystrix_engine)
 set_target_properties(test_nemo_attention PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Nemotron INT8 affine block KV attention (production default) bit-exact parity.
+add_executable(test_nemo_int8 tests/test_nemo_int8.cpp)
+target_include_directories(test_nemo_int8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_nemo_int8 PRIVATE veystrix_engine)
+set_target_properties(test_nemo_int8 PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Final head (gated residual no-combine -> lm_head) bit-exact parity.
 add_executable(test_final_head tests/test_final_head.cpp)
 target_include_directories(test_final_head PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -292,6 +299,10 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_attention/meta.json")
   add_test(NAME nemo_attention COMMAND test_nemo_attention
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_attention")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_int8/meta.json")
+  add_test(NAME nemo_int8 COMMAND test_nemo_int8
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_int8")
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_gdn_layer/meta.json")
   add_test(NAME gdn_layer COMMAND test_gdn_layer

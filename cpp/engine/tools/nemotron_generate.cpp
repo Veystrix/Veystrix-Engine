@@ -5,7 +5,8 @@
 // primitives:
 //   * mx::fast::rms_norm          (nn.RMSNorm block / final norm)
 //   * mamba_layer_forward()       (S=1 Mamba-2 layer, mamba_layer.hpp)
-//   * nemo_attention_forward()    (bf16 KV S=1 attention, nemo_attention.hpp)
+//   * nemo_attention_int8_forward() (INT8 affine block KV S=1 attention, default)
+//   * nemo_attention_forward()    (bf16 KV S=1 attention, VEYSTRIX_NEMOTRON_KV=bf16)
 //   * moe_block_relu2()           (top-6 of 128 relu2 Q4 G64 experts)
 //   * linear()                    (QPacked G64 dense / fused quantized_matmul)
 //   * sample_greedy()             (greedy argmax)
@@ -406,7 +407,8 @@ struct AttnLayer {
   mx::array norm_w = empty_f32();
   NemoAttentionWeights weights;
   NemoAttentionConfig cfg;
-  NemoAttentionCache cache;
+  NemoAttentionCache cache;      // bf16 KV (VEYSTRIX_NEMOTRON_KV=bf16)
+  NemoInt8Cache int8_cache;      // INT8 affine block KV (production default)
   int cache_idx = -1;
 };
 struct MoeLayer {
@@ -436,6 +438,9 @@ struct Model {
   mx::array norm_f_w = empty_f32();
   Linear lm_head;
   bool dump_layers = false;
+  // Production default is INT8 affine block KV (FORMAT="affine-int8-g64").
+  // Opt into the legacy bf16 KV path with VEYSTRIX_NEMOTRON_KV=bf16.
+  bool use_int8_kv = true;
 };
 
 mx::array embed_token(const Model& m, int token) {
@@ -498,6 +503,11 @@ Model load_model(const std::string& ckpt, const Config& cfg) {
   m.eps = get_float(cfg, "norm_eps", 1e-5f);
   m.routed_scale = get_float(cfg, "routed_scaling_factor", 2.5f);
   m.dump_layers = std::getenv("NEMOTRON_DUMP_LAYERS") != nullptr;
+  // Default to the production INT8 KV path; bf16 is an explicit opt-in.
+  const char* kv = std::getenv("VEYSTRIX_NEMOTRON_KV");
+  m.use_int8_kv = !(kv && std::string(kv) == "bf16");
+  std::fprintf(stderr, "[load] VEYSTRIX_NEMOTRON_KV=%s -> %s KV attention\n",
+               kv ? kv : "(unset)", m.use_int8_kv ? "int8" : "bf16");
 
   std::vector<std::string> layer_types = split(get_str(cfg, "layer_types"), ',');
   if (static_cast<int>(layer_types.size()) != m.n_layers)
@@ -640,7 +650,10 @@ mx::array run_step(Model& m, ExpertReader& er, int token) {
       delta = std::move(out.output);
     } else if (m.kinds[l] == LayerKind::FULL_ATTN_QSA) {
       AttnLayer& al = m.attn_layers[attn_i++];
-      delta = nemo_attention_forward(xn, al.weights, al.cfg, al.cache);
+      if (m.use_int8_kv)
+        delta = nemo_attention_int8_forward(xn, al.weights, al.cfg, al.int8_cache);
+      else
+        delta = nemo_attention_forward(xn, al.weights, al.cfg, al.cache);
     } else {
       MoeLayer& ml = m.moe_layers[moe_i++];
       NemotronRoute route = nemotron_route(xn, ml, m.top_k, m.routed_scale);

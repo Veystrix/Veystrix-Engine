@@ -182,13 +182,36 @@ PrefixSnapshot prefix_capture(const std::vector<DecoderFullLayerCache>& caches,
   return snap;
 }
 
+PrefixSnapshot prefix_capture_with_logits(
+    const std::vector<DecoderFullLayerCache>& caches,
+    const std::vector<int32_t>& tokens,
+    const std::string& fingerprint,
+    const mx::array& logits,
+    const std::vector<PLECache>& ple_caches) {
+  PrefixSnapshot snap = prefix_capture(caches, tokens, fingerprint);
+  snap.has_logits = true;
+  snap.logits = to_blob(logits);
+  for (size_t i = 0; i < snap.layers.size() && i < ple_caches.size(); ++i) {
+    const auto& pc = ple_caches[i];
+    if (pc.context.has_value() || pc.conv_state.has_value()) {
+      snap.layers[i].has_ple = true;
+      if (pc.context.has_value()) snap.layers[i].ple_context = to_blob(*pc.context);
+      if (pc.conv_state.has_value()) snap.layers[i].ple_conv = to_blob(*pc.conv_state);
+    }
+  }
+  return snap;
+}
+
 std::vector<DecoderFullLayerCache> prefix_restore(const PrefixSnapshot& snap,
-                                                  int n_layers) {
+                                                  int n_layers,
+                                                  std::vector<PLECache>* ple_out) {
   if (static_cast<int>(snap.layers.size()) != n_layers)
     throw std::runtime_error("prefix_cache: layer count mismatch");
+  if (ple_out) { ple_out->clear(); ple_out->resize(n_layers); }
   std::vector<DecoderFullLayerCache> out;
   out.reserve(n_layers);
-  for (const auto& l : snap.layers) {
+  for (int li = 0; li < n_layers; ++li) {
+    const auto& l = snap.layers[li];
     GDNCacheState gdn(clone_blob(l.gdn_conv), clone_blob(l.gdn_recurrent));
     QSACache qsa;
     if (l.has_qsa) {
@@ -203,6 +226,10 @@ std::vector<DecoderFullLayerCache> prefix_restore(const PrefixSnapshot& snap,
       full.values = clone_blob(l.full_values);
       full.offset = l.full_offset;
     }
+    if (ple_out && l.has_ple) {
+      if (!l.ple_context.bytes.empty()) (*ple_out)[li].context = clone_blob(l.ple_context);
+      if (!l.ple_conv.bytes.empty()) (*ple_out)[li].conv_state = clone_blob(l.ple_conv);
+    }
     out.emplace_back(std::move(base), std::move(full));
   }
   return out;
@@ -216,7 +243,14 @@ void prefix_save(const PrefixSnapshot& snap, const std::string& directory) {
   meta << "chain_key " << snap.chain_key << "\n";
   meta << "n_tokens " << snap.tokens.size() << "\n";
   meta << "n_layers " << snap.layers.size() << "\n";
+  meta << "has_logits " << (snap.has_logits ? 1 : 0) << "\n";
   for (size_t i = 0; i < snap.tokens.size(); ++i) meta << "tok " << snap.tokens[i] << "\n";
+  if (snap.has_logits) {
+    std::ofstream f(directory + "/logits", std::ios::binary);
+    for (int d : snap.logits.shape) f << d << " ";
+    f << "\n" << snap.logits.dtype << "\n";
+    f.write(reinterpret_cast<const char*>(snap.logits.bytes.data()), snap.logits.bytes.size());
+  }
   for (size_t li = 0; li < snap.layers.size(); ++li) {
     const auto& l = snap.layers[li];
     std::string p = directory + "/L" + std::to_string(li);
@@ -230,6 +264,7 @@ void prefix_save(const PrefixSnapshot& snap, const std::string& directory) {
     write_blob(".gdn_recur", l.gdn_recurrent);
     if (l.has_qsa) { write_blob(".qsa_keys", l.qsa_keys); write_blob(".qsa_pos", l.qsa_positions); }
     if (l.has_full) { write_blob(".full_keys", l.full_keys); write_blob(".full_vals", l.full_values); }
+    if (l.has_ple) { write_blob(".ple_ctx", l.ple_context); write_blob(".ple_conv", l.ple_conv); }
   }
 }
 
@@ -241,7 +276,8 @@ PrefixSnapshot prefix_load(const std::string& directory,
   if (!meta) throw std::runtime_error("prefix_cache: meta missing");
   std::string key; meta >> key >> snap.chain_key;
   size_t nt = 0, nl = 0;
-  meta >> key >> nt; meta >> key >> nl;
+  int has_logits = 0;
+  meta >> key >> nt; meta >> key >> nl; meta >> key >> has_logits;
   snap.tokens.resize(nt);
   for (size_t i = 0; i < nt; ++i) { meta >> key; meta >> snap.tokens[i]; }
   // Fail closed: verify fingerprint+token chain and exact token ids.
@@ -270,6 +306,21 @@ PrefixSnapshot prefix_load(const std::string& directory,
     if (l.has_qsa) { read_blob(".qsa_keys", l.qsa_keys); read_blob(".qsa_pos", l.qsa_positions); }
     l.has_full = std::ifstream(p + ".full_keys").good();
     if (l.has_full) { read_blob(".full_keys", l.full_keys); read_blob(".full_vals", l.full_values); }
+    l.has_ple = std::ifstream(p + ".ple_ctx").good();
+    if (l.has_ple) { read_blob(".ple_ctx", l.ple_context); read_blob(".ple_conv", l.ple_conv); }
+  }
+  snap.has_logits = (has_logits != 0);
+  if (snap.has_logits) {
+    std::ifstream f(directory + "/logits", std::ios::binary);
+    if (!f) throw std::runtime_error("prefix_cache: logits missing");
+    std::string line; std::getline(f, line);
+    std::istringstream ss(line); int d;
+    while (ss >> d) snap.logits.shape.push_back(d);
+    f >> snap.logits.dtype; f.ignore(1);
+    size_t n = 1; for (int dd : snap.logits.shape) n *= size_t(dd);
+    snap.logits.bytes.resize(n * dtype_bytes(static_cast<mx::Dtype::Val>(snap.logits.dtype)));
+    f.read(reinterpret_cast<char*>(snap.logits.bytes.data()), snap.logits.bytes.size());
+    if (!f) throw std::runtime_error("prefix_cache: truncated logits");
   }
   return snap;
 }

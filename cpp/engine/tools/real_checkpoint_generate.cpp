@@ -45,6 +45,7 @@
 #include "decoder_full.hpp"
 #include "expert_store.hpp"
 #include "moe_stream.hpp"
+#include "prefix_cache.hpp"
 #include "cross_shard_moe.hpp"
 #include "dense_manifest.hpp"
 #include "rope_fused_apply.hpp"
@@ -183,6 +184,26 @@ std::string sha256_hex(const void* data, size_t len) {
     }
   }
   return out;
+}
+
+// Opt-in prefix-cache state hash dump (recurrent / PLE conv / full-attn KV).
+void dump_prefix_state(const std::vector<DecoderFullLayerCache>& caches,
+                       const std::vector<PLECache>& ple, const char* tag,
+                       int n_layers) {
+  auto h = [&](const mx::array& a) {
+    mx::array f = mx::reshape(mx::astype(a, mx::float32), mx::Shape{-1});
+    mx::eval(f);
+    return sha256_hex(f.data<float>(), f.size() * sizeof(float));
+  };
+  for (int l = 0; l < n_layers; ++l) {
+    std::fprintf(stderr, "[PREFIXDIAG %s L%02d] rec=%s", tag, l,
+                 h(caches[l].base.gdn.recurrent_state).c_str());
+    if (l < (int)ple.size() && ple[l].conv_state.has_value())
+      std::fprintf(stderr, " ple=%s", h(*ple[l].conv_state).c_str());
+    if (caches[l].full.keys.has_value())
+      std::fprintf(stderr, " fk=%s", h(*caches[l].full.keys).c_str());
+    std::fprintf(stderr, "\n");
+  }
 }
 
 // Opt-in: SHA-256 the float32 GDN cache state AFTER each prefill step. These
@@ -1332,7 +1353,47 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   int pos = 0;
   std::optional<mx::array> logits;
   const bool seq_prefill = std::getenv("VEYSTRIX_CPP_SEQ_PREFILL") != nullptr;
-  if (!seq_prefill && prompt.size() > 1) {
+  // Opt-in exact prefix restore: if a saved snapshot matches this prompt's
+  // fingerprint+token chain, restore the cache and the post-prefill logits and
+  // skip prefill entirely. A chain/token mismatch throws (fail closed).
+  bool prefix_hit = false;
+  if (const char* pdir = std::getenv("VEYSTRIX_CPP_PREFIX_LOAD")) {
+    std::vector<int32_t> ptoks(prompt.begin(), prompt.end());
+    std::string fp = "cpp-qwen4-" + get_str(cfg, "prompt_sha256");
+    PrefixSnapshot snap = prefix_load(pdir, fp, ptoks);
+    if (!snap.has_logits)
+      throw std::runtime_error("prefix snapshot lacks logits; cannot skip prefill");
+    std::vector<PLECache> restored_ple;
+    caches = prefix_restore(snap, n_layers, &restored_ple);
+    for (int l = 0; l < n_layers; ++l)
+      if (restored_ple[l].context.has_value() || restored_ple[l].conv_state.has_value())
+        layers[l].ple_cache = restored_ple[l];
+    // Rebuild the logits array from the stored raw bytes (owning buffer).
+    const TensorBlob& lb = snap.logits;
+    auto v = static_cast<mx::Dtype::Val>(lb.dtype);
+    size_t nbytes = lb.bytes.size();
+    void* raw = nullptr;
+    if (::posix_memalign(&raw, 64, nbytes ? nbytes : 1) != 0)
+      throw std::runtime_error("prefix logits alloc failed");
+    std::memcpy(raw, lb.bytes.data(), nbytes);
+    mx::Shape lshape(lb.shape.begin(), lb.shape.end());
+    auto ldt = mx::Dtype(v, static_cast<uint8_t>(lb.dtype == static_cast<int>(mx::Dtype::Val::float32) ? 4 : 2));
+    if (v == mx::Dtype::Val::float32)
+      logits = mx::array(static_cast<float*>(raw), lshape, ldt, [](void* p){ std::free(p); });
+    else
+      logits = mx::array(static_cast<mx::bfloat16_t*>(raw), lshape, ldt, [](void* p){ std::free(p); });
+    pos = static_cast<int>(prompt.size());
+    prefix_hit = true;
+    if (std::getenv("VEYSTRIX_CPP_PREFIX_DIAG")) {
+      std::vector<PLECache> dp(n_layers);
+      for (int l = 0; l < n_layers; ++l) dp[l] = layers[l].ple_cache;
+      dump_prefix_state(caches, dp, "load", n_layers);
+    }
+    std::fprintf(stderr, "[prefix] restored snapshot from %s (prefill skipped)\n", pdir);
+    // copy back mutable PLE caches from the restored state is unnecessary: the
+    // decode loop uses `caches` directly.
+  }
+  if (!prefix_hit && !seq_prefill && prompt.size() > 1) {
     // Batched prefill: ONE call feeds all S prompt tokens through every layer,
     // matching production language(ids, cache). Eliminates the sequential-S=1
     // ULP drift that amplifies through MoE routing. (Synthetic bit-exact vs Python.)
@@ -1508,9 +1569,24 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     // copy back mutable PLE caches
     for (int l = 0; l < n_layers; ++l)
       if (bl[l].ple) layers[l].ple_cache = bl[l].ple_cache;
+    // Opt-in exact prefix snapshot: persist the post-prefill cache state + the
+    // step-0 logits so a later run with the same prompt can resume decode
+    // without re-running prefill. NON-NUMERIC (raw bytes, SHA-256 chain).
+    if (const char* pdir = std::getenv("VEYSTRIX_CPP_PREFIX_SAVE")) {
+      std::vector<int32_t> ptoks(prompt.begin(), prompt.end());
+      std::string fp = "cpp-qwen4-" + get_str(cfg, "prompt_sha256");
+      std::vector<PLECache> plc(n_layers);
+      for (int l = 0; l < n_layers; ++l) plc[l] = layers[l].ple_cache;
+      PrefixSnapshot snap =
+          prefix_capture_with_logits(caches, ptoks, fp, *logits, plc);
+      prefix_save(snap, pdir);
+      if (std::getenv("VEYSTRIX_CPP_PREFIX_DIAG"))
+        dump_prefix_state(caches, plc, "save", n_layers);
+      std::fprintf(stderr, "[prefix] saved post-prefill snapshot to %s\n", pdir);
+    }
     pos = static_cast<int>(prompt.size());
     mem_telemetry("prefill-batched");
-  } else {
+  } else if (!prefix_hit) {
     for (size_t i = 0; i < prompt.size(); ++i) {
       std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
       mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);

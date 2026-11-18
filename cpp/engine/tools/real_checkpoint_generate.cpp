@@ -1370,6 +1370,10 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       mx::array w = mx::take(embed.w, f, 0), s = mx::take(embed.s, f, 0),
                 b = mx::take(embed.b, f, 0);
       mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
+      // Materialize the gathered+dequantized embeddings before the prefill
+      // graph consumes them (avoids a lazy dequantize read racing the GPU at
+      // long context; matches Python's eagerly-evaluated parameters).
+      mx::eval(row);
       static bool printed = false;
       if (!printed) {
         std::fprintf(stderr, "[embed] w=%ld s=%ld b=%ld dequant=%ld (bf16=%ld f32=%ld)\n",

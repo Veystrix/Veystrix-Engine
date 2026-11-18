@@ -280,6 +280,14 @@ mx::array ple_ngram_embedding(const mx::array& input_ids,
   mx::array embeddings = w.emb_streamed.empty()
                              ? sharded_embedding(ngram_ids, w, dims)
                              : sharded_embedding_streamed(ngram_ids, w, dims);
+  // The streamed path reads packed n-gram rows with pread() inside the lazy
+  // graph (read_streamed_rows wraps a malloc'd buffer with a deleter). Left
+  // lazy, the pread + dequantize nodes run on the CPU/IO streams INSIDE the
+  // GPU prefill graph and race the GPU — like the dense-weight Load nodes.
+  // Python keeps the PLE table resident and has no IO node in its forward
+  // graph. Materialize here (S=16: 256 rows; S=1024: 16,384 rows) so the reads
+  // complete before the graph, fixing the long-prefill divergence.
+  mx::eval(embeddings);
   return mx::reshape(embeddings, mx::Shape{B, S, dims * ngram_heads});
 }
 

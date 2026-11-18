@@ -322,8 +322,15 @@ int main(int argc, char** argv) {
     mx::array a = swiglu(g, u);
     mx::array d = mx::squeeze(gather_q(a, w.down, py_local, gs, bits, true), -2);
     mx::array comb = weighted_combine(d, s2);
-    cmp("moe_block (sorted=true) vs routed combine",
+    cmp("moe_block (sorted=true, invalid unsorted idx) vs routed combine",
         mx::reshape(comb, mx::Shape{1, T, H}), py_combined);
+    // Proper sorted path: _gather_sort + gather_qmm(sorted_indices=True) +
+    // _scatter_unsort, matching Python SwitchGLU.__call__ at S>=64.
+    mx::array comb_sorted = moe_block_sorted(x2, py_local, s2, w);
+    cmp("moe_block_sorted (proper) vs Python combined",
+        mx::reshape(comb_sorted, mx::Shape{1, T, H}), py_combined);
+    cmp("moe_block (unsorted) vs Python ref_comb",
+        mx::reshape(out, mx::Shape{1, T, H}), load(dir, "ref_comb", {1, T, H}, mx::bfloat16));
 
     // Per-stage comparison against a Python reference replay with IDENTICAL
     // x / local / scores / weights and NO gather_sort, sorted_indices=False.

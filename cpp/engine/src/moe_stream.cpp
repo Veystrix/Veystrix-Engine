@@ -351,7 +351,12 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
   mx::array route_slots(slots.begin(),
                         mx::Shape{static_cast<int>(T), static_cast<int>(K)},
                         mx::int32);
-  mx::array out = moe_block(x, route_slots, scores, w);
+  // Python SwitchGLU.__call__ sorts whenever indices.size >= 64 and calls
+  // gather_qmm(sorted_indices=True). At prefill (T*K >= 64) this kernel differs
+  // from the unsorted one by ~1 ULP, so use the matching sorted path.
+  mx::array out = (T * K >= 64)
+                      ? moe_block_sorted(x, route_slots, scores, w)
+                      : moe_block(x, route_slots, scores, w);
   mx::eval(out);  // command buffers complete -> safe to unpin slots
 
   for (int32_t slot : used) --s.slot_refcount[slot];

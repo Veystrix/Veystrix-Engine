@@ -127,6 +127,15 @@ mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores)
 mx::array moe_block(const mx::array& x, const mx::array& route,
                     const mx::array& scores, const ExpertWeights& w);
 
+// Prefill MoE block matching SwitchGLU.__call__ with _gather_sort /
+// _scatter_unsort and gather_qmm(..., sorted_indices=True), used when the
+// routed index count >= 64 (i.e. S>1 prefill). The sorted and unsorted MLX
+// gather_qmm kernels are bit-identical for small M but diverge by ~1 bf16 ULP
+// for large M (S>=128); Python always takes the sorted path at prefill.
+// route/scores are slot indices/weights in router-rank order [tokens, k].
+mx::array moe_block_sorted(const mx::array& x, const mx::array& route,
+                           const mx::array& scores, const ExpertWeights& w);
+
 // Convenience: compute router then moe_block (matches _moe_call at thr 1.0).
 mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
                                 int top_k, float renorm_blend,

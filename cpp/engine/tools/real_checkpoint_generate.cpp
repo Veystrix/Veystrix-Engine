@@ -479,6 +479,9 @@ struct RealLayer {
   std::optional<FullAttentionWeights> full;
   std::unique_ptr<StreamingMoE> stream;       // single-shard layers
   std::unique_ptr<CrossShardMoE> cross;       // layers split across two shards
+  int layer_idx = 0;
+  bool split_layer = false;
+  std::string expert_prefix;
   std::optional<PLEWeights> ple;              // set only on PLE layers (index 1)
   PLECache ple_cache;                         // mutable n-gram/conv cache for that layer
   int top_k = 0;
@@ -499,8 +502,8 @@ struct RealLayer {
         gate_w(std::move(gw)), shared_gw(std::move(sg)),
         shared_uw(std::move(su)), shared_dw(std::move(sd)),
         shared_glw(std::move(sgl)), gdn(std::move(g)), full(std::move(f)),
-        stream(std::move(st)), cross(std::move(cr)), ple(std::move(p)),
-        top_k(tk), kind(k) {}
+        stream(std::move(st)), cross(std::move(cr)),
+        ple(std::move(p)), top_k(tk), kind(k) {}
 };
 
 struct RealHead {
@@ -1249,6 +1252,7 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       stream = std::make_unique<StreamingMoE>(ckpt, l, num_slots, group_size,
                                               bits, /*read_width=*/8, ep);
     }
+
     if ((l + 1) % 8 == 0 || l == n_layers - 1)
       std::fprintf(stderr, "[load] prepared layer %d/%d%s\n", l + 1, n_layers,
                    split ? " (cross-shard experts)" : "");
@@ -1260,6 +1264,9 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         std::move(sglw), std::move(gdn), std::move(full), std::move(stream),
         std::move(cross), std::nullopt, top_k,
         linear ? AttnKind::Linear : AttnKind::FullAttention);
+    layers.back().layer_idx = l;
+    layers.back().split_layer = split;
+    layers.back().expert_prefix = ep;
     if (l == ple_layer && ple_weights)
       layers.back().ple = std::move(ple_weights);
 
@@ -1338,12 +1345,35 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       if (R.gdn) B.gdn = R.gdn;
       if (R.full) B.full = R.full;
       if (R.ple) { B.ple = R.ple; B.ple_cache = R.ple_cache; }
-      B.moe_forward = [&R](const mx::array& x, const mx::array& idx,
+      B.moe_forward = [&R, &ckpt, &cfg, group_size, bits, top_k](const mx::array& x, const mx::array& idx,
                            const mx::array& sc) {
         // MoE is per-token independent (gather_qmm gathers each row's experts
         // separately), so process one token at a time to stay within the
         // num_slots=16 slot pool. This is bit-exact regardless of batching.
         int S = static_cast<int>(x.shape(0));
+        // Bit-exact prefill: Python sorts all S*K indices and runs one batched
+        // sorted gather_qmm, which rounds differently from M=1 per-token calls
+        // at large S. When enabled, build a large resident pool for THIS layer
+        // on the fly (created and destroyed within the call, so only one layer's
+        // experts are resident at a time ~= 1.3 GiB), process the whole prompt
+        // at once so StreamingMoE::forward picks moe_block_sorted, then eval.
+        static const char* pslots_env = std::getenv("VEYSTRIX_CPP_PREFILL_SLOTS");
+        static const int pslots = pslots_env ? std::atoi(pslots_env) : 0;
+        if (S > 1 && pslots >= top_k) {
+          if (R.split_layer) {
+            CrossShardMoE pf(ckpt, cfg, R.expert_prefix, pslots, group_size,
+                             bits, debug_capture::get().copy_cross_shard);
+            mx::array pfout = pf.forward(x, idx, sc).output;
+            mx::eval(pfout);
+            return pfout;
+          } else {
+            StreamingMoE pf(ckpt, R.layer_idx, pslots, group_size, bits,
+                            /*read_width=*/8, R.expert_prefix);
+            mx::array pfout = pf.forward(x, idx, sc).output;
+            mx::eval(pfout);
+            return pfout;
+          }
+        }
         if (S <= 1)
           return R.stream ? R.stream->forward(x, idx, sc).output
                           : R.cross->forward(x, idx, sc).output;

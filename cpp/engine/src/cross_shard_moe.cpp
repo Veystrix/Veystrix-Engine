@@ -281,7 +281,9 @@ StreamForwardResult CrossShardMoE::forward(const mx::array& x,
   mx::array route_slots(slots.begin(),
                         mx::Shape{static_cast<int>(T), static_cast<int>(K)},
                         mx::int32);
-  mx::array out = moe_block(x, route_slots, scores, ew);
+  mx::array out = (T * K >= 64)
+                      ? moe_block_sorted(x, route_slots, scores, ew)
+                      : moe_block(x, route_slots, scores, ew);
   mx::eval(out);
   for (int32_t slot : used) --s.slot_ref[slot];
   for (int32_t slot : used) s.slot_last[slot] = ++s.tick;

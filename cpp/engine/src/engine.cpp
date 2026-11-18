@@ -109,6 +109,42 @@ mx::array moe_block(const mx::array& x, const mx::array& route,
   return weighted_combine(d, scores);              // [tokens,hidden]
 }
 
+mx::array moe_block_sorted(const mx::array& x, const mx::array& route,
+                           const mx::array& scores, const ExpertWeights& w) {
+  // Mirror SwitchGLU.__call__ with do_sort=True (indices.size >= 64):
+  //   x4 = expand_dims(x, (-2,-3))                    [T,1,1,H]
+  //   x_s, idx_s, inv = _gather_sort(x4, route)
+  //   g/up/down = gather_qmm(..., idx_s, sorted_indices=True)
+  //   out = _scatter_unsort(out, inv, route.shape) then squeeze(-2)
+  // route/scores: [T,k] slot indices/weights in router-rank order.
+  int H = x.shape(1);
+  int M = route.shape(1);  // k (top_k experts per token)
+  mx::array x4 = mx::expand_dims(x, std::vector<int>{-2, -3});  // [T,1,1,H]
+  mx::array xf = mx::reshape(x4, mx::Shape{x.shape(0), 1, H});  // x4.flatten(0,-3) = [T,1,H]
+
+  mx::array flat = mx::reshape(route, mx::Shape{-1});  // [T*k]
+  mx::array order = mx::argsort(flat);                 // sorted positions
+  mx::array inv = mx::argsort(order);                  // inverse permutation
+  // _gather_sort: xf[order // M] -> [T*k,1,H]; idx_sorted = flat[order] -> [T*k]
+  mx::array row_src = mx::astype(mx::divide(order, mx::array(M)), mx::int32);
+  mx::array xg = mx::take(xf, row_src, 0);             // [T*k,1,H]
+  mx::array idx_sorted = mx::take(flat, order, 0);     // [T*k]
+
+  // gather_qmm with sorted_indices=True, 3-D x [T*k,1,H] + 1-D rhs_indices.
+  mx::array g = q4_projection(xg, w.gate, idx_sorted, w.group_size, w.bits,
+                              /*slot_input=*/false, /*sorted_indices=*/true);
+  mx::array u = q4_projection(xg, w.up, idx_sorted, w.group_size, w.bits,
+                              /*slot_input=*/false, /*sorted_indices=*/true);
+  mx::array a = swiglu(g, u);                          // [T*k,1,inter]
+  mx::array d = q4_projection(a, w.down, idx_sorted, w.group_size, w.bits,
+                              /*slot_input=*/false, /*sorted_indices=*/true);  // [T*k,1,H]
+  // _scatter_unsort: d[inv] -> [T*k,1,H], unflatten(0,[T,k]) -> [T,k,1,H].
+  mx::array ds = mx::take(d, inv, 0);
+  ds = mx::reshape(ds, mx::Shape{x.shape(0), M, 1, H});
+  ds = mx::squeeze(ds, 2);                             // [T,k,H] (like unsorted squeeze(-2))
+  return weighted_combine(ds, scores);                 // [T,H]
+}
+
 mx::array moe_block_from_logits(const mx::array& x, const mx::array& logits,
                                 int top_k, float renorm_blend,
                                 const ExpertWeights& w) {

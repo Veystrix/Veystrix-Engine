@@ -66,6 +66,32 @@ Label: [measured] / [estimate] / [cited]. Update as work proceeds.
 - Priority per owner: core engine + features that give profit, incrementally, with
   tests; multi-session Phase 0 is done on a separate branch but on hold.
 
+## P5 — Long-context root cause REVISED: MoE gather_qmm sorted kernel [measured 2026-11-18]
+
+A diagnostic subagent conclusively localized the S-dependent divergence (doc
+`docs/engineering/q1024_divergence_diagnosis.md`):
+- At S=128, L00 (GDN, no PLE): gdnin, GDN branch, m2d, gate_logits, router,
+  mlpinj all bit-exact; ONLY `moe2d` differs (maxabs 0.00195).
+- Python's own two MoE paths differ: `ref_comb` (unsorted gather_qmm) vs
+  `combined` (production `_gather_sort` + `sorted_indices=True`) differ by
+  ~260k/328k elements, same maxabs. C++ end-to-end matches `ref_comb` exactly.
+- So Python production uses the SORTED gather_qmm kernel; C++ uses unsorted.
+  At S=16 the two kernels are bit-identical (why gate (b) passes).
+
+### Fix attempted (in progress, not yet bit-exact)
+- Added `moe_block_sorted` (engine.cpp): mirrors `SwitchGLU.__call__` with
+  `_gather_sort` / `gather_qmm(sorted_indices=True)` / `_scatter_unsort`.
+- Added opt-in `VEYSTRIX_CPP_PREFILL_SLOTS=N` (default off) that builds a
+  per-layer large resident MoE pool on the fly for batched prefill (S>1) so the
+  whole prompt goes through one sorted gather_qmm (avoids 48x pool memory blowup).
+- **Probe result**: with S=128 dumped inputs, `moe_block_sorted` gives
+  maxdiff=0.00122, 21% exact vs Python `combined`; unsorted gives 100% vs
+  `ref_comb`. So my sorted path is NOT equivalent to Python's production sorted
+  kernel. Likely the kernel's numerics depend on the actual rhs index VALUES
+  (global expert IDs vs slot indices) or the resident-stack ordering, not just
+  the `sorted_indices` flag + permutation. Needs Opus-level analysis.
+- Gate (b) at 16 tokens still passes (default path unchanged); ctests 27/28.
+
 ## Questions for Opus
 
 1. What is the most likely S-dependent op causing the systematic 1-2 ULP divergence at

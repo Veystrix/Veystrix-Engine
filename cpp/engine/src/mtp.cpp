@@ -1,13 +1,34 @@
 #include "mtp.hpp"
 
+#include "rope_fused_apply.hpp"
+
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace veystrix::engine {
 namespace {
+
+// Production's MTP draft attention uses the SAME fused-Metal MRoPE kernel as
+// the backbone's full-attention path (see real_checkpoint_generate.cpp's
+// rope_apply_fused calls). The eager qsa_apply_rope path differed by ~1 f32 ULP
+// at nonzero positions, so it is now opt-in for the legacy regression gate:
+//
+//   VEYSTRIX_CPP_MTP_EAGER_ROPE=1  -> qsa_apply_rope (matches Python
+//                                     `fused_apply=False`)
+//   unset / "0"                   -> rope_apply_fused (production default)
+//
+// See docs/engineering/mtp_fused_rope_parity.md.
+mx::array mtp_apply_rope(const mx::array& x, const mx::array& position_ids,
+                         const QSARotaryParams& rp) {
+  const char* eager = std::getenv("VEYSTRIX_CPP_MTP_EAGER_ROPE");
+  const bool use_eager = eager && *eager && std::strcmp(eager, "0") != 0;
+  return use_eager ? qsa_apply_rope(x, position_ids, rp)
+                   : rope_apply_fused(x, position_ids, rp);
+}
 
 // Qwen4ExpRMSNorm with group_size=hidden_size (the hyper-connection norm).
 // Python: reshape [...,HC,H]; per-group RMS over last axis; gain = 1 + weight.
@@ -106,8 +127,8 @@ mx::array dense_attention(const MTPConfig& cfg, const MTPWeights& w,
   rp.base = cfg.rope_base;
   rp.mrope_section = cfg.mrope_section;
   rp.max_position_embeddings = cfg.max_position_embeddings;
-  q = qsa_apply_rope(q, position_ids, rp);
-  k = qsa_apply_rope(k, position_ids, rp);
+  q = mtp_apply_rope(q, position_ids, rp);
+  k = mtp_apply_rope(k, position_ids, rp);
 
   // No mask (Python mask is None for a fresh cache with S=1). SDPA broadcasts
   // nKV -> nH (GQA); with a single key the softmax is 1, so out == v.
@@ -250,8 +271,8 @@ mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
   rp.attention_scaling = 1.0f;
   rp.mrope_section = cfg.mrope_section;
   rp.max_position_embeddings = cfg.max_position_embeddings;
-  q = qsa_apply_rope(q, position_ids, rp);
-  k = qsa_apply_rope(k, position_ids, rp);
+  q = mtp_apply_rope(q, position_ids, rp);
+  k = mtp_apply_rope(k, position_ids, rp);
 
   // Prepopulated cache: the past K/V are already RoPE-rotated at their own
   // positions (Python stores them after rotary). Concatenate them ahead of the

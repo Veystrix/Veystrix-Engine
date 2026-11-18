@@ -69,6 +69,14 @@ struct MTPConfig {
   int indexer_head_dim = 0;
   int indexer_budget = 0;
   int indexer_compress_ratio = 1;
+
+  // Real-checkpoint conventions. The synthetic golden vectors use the
+  // unpatched (1 + weight) gain and a tied LM head; the real sidecar has
+  // one-centered gains (see models/flashnext/patch_rmsnorm.py) and an untied
+  // lm_head (tie_word_embeddings=False). Defaults keep the synthetic path
+  // byte-identical.
+  bool one_centered_norms = false;
+  bool tie_word_embeddings = true;
 };
 
 // Every weight of one MTP draft head, verbatim from the real module (float32).
@@ -157,6 +165,73 @@ struct MTPWeights {
         mix_up(std::move(a_mix_up)) {}
 };
 
+// Real-checkpoint weights for one MTP draft head. Unlike the synthetic
+// MTPWeights above, these stay in the checkpoint's packed affine-Q4 layout:
+// projections are `Linear` (dense or QPacked), the routed experts are an
+// `ExpertWeights` triplet consumed by q4_projection/gather_qmm, and the
+// tokenizer embedding / untied LM head are QPacked tables. Loading them with
+// the tool's DenseLoader avoids materializing ~5 GiB of bf16 expert arrays and
+// matches Python's QuantizedLinear / gather_qmm arithmetic exactly. Norm gains
+// are the RAW checkpoint values; with cfg.one_centered_norms=true they are used
+// as-is (the patched production convention).
+struct MTPRealWeights {
+  QPacked embed;                   // language_model.model.embed_tokens
+  mx::array pre_fc_norm_embedding;
+  Linear fc_embedding;
+  mx::array pre_fc_norm_hidden;
+  Linear fc_hidden;
+
+  mx::array attn_hc_norm;
+  Linear attn_down, attn_up, attn_inject;
+  Linear q_proj, k_proj, v_proj, o_proj;
+  mx::array q_norm, k_norm;
+
+  mx::array mlp_hc_norm;
+  Linear mlp_down, mlp_up, mlp_inject;
+  Linear gate;                     // router (unquantized BF16 weight)
+  ExpertWeights experts;           // mlp.switch_mlp (packed Q4 triplets)
+  Linear shared_gate, shared_up, shared_down, shared_gate_logits;
+
+  mx::array mix_hc_norm;
+  Linear mix_down, mix_up;
+
+  QPacked lm_head;                 // language_model.lm_head (untied)
+
+  MTPRealWeights() = delete;
+  MTPRealWeights(
+      QPacked a_embed, mx::array a_pre_fc_norm_embedding, Linear a_fc_embedding,
+      mx::array a_pre_fc_norm_hidden, Linear a_fc_hidden,
+      mx::array a_attn_hc_norm, Linear a_attn_down, Linear a_attn_up,
+      Linear a_attn_inject, Linear a_q_proj, Linear a_k_proj, Linear a_v_proj,
+      Linear a_o_proj, mx::array a_q_norm, mx::array a_k_norm,
+      mx::array a_mlp_hc_norm, Linear a_mlp_down, Linear a_mlp_up,
+      Linear a_mlp_inject, Linear a_gate, ExpertWeights a_experts,
+      Linear a_shared_gate, Linear a_shared_up, Linear a_shared_down,
+      Linear a_shared_gate_logits, mx::array a_mix_hc_norm,
+      Linear a_mix_down, Linear a_mix_up, QPacked a_lm_head)
+      : embed(std::move(a_embed)),
+        pre_fc_norm_embedding(std::move(a_pre_fc_norm_embedding)),
+        fc_embedding(std::move(a_fc_embedding)),
+        pre_fc_norm_hidden(std::move(a_pre_fc_norm_hidden)),
+        fc_hidden(std::move(a_fc_hidden)),
+        attn_hc_norm(std::move(a_attn_hc_norm)),
+        attn_down(std::move(a_attn_down)), attn_up(std::move(a_attn_up)),
+        attn_inject(std::move(a_attn_inject)),
+        q_proj(std::move(a_q_proj)), k_proj(std::move(a_k_proj)),
+        v_proj(std::move(a_v_proj)), o_proj(std::move(a_o_proj)),
+        q_norm(std::move(a_q_norm)), k_norm(std::move(a_k_norm)),
+        mlp_hc_norm(std::move(a_mlp_hc_norm)),
+        mlp_down(std::move(a_mlp_down)), mlp_up(std::move(a_mlp_up)),
+        mlp_inject(std::move(a_mlp_inject)), gate(std::move(a_gate)),
+        experts(std::move(a_experts)),
+        shared_gate(std::move(a_shared_gate)), shared_up(std::move(a_shared_up)),
+        shared_down(std::move(a_shared_down)),
+        shared_gate_logits(std::move(a_shared_gate_logits)),
+        mix_hc_norm(std::move(a_mix_hc_norm)),
+        mix_down(std::move(a_mix_down)), mix_up(std::move(a_mix_up)),
+        lm_head(std::move(a_lm_head)) {}
+};
+
 // Qwen4ExpMTPModule.fuse_inputs:
 //   fused = (fc_embedding(rmsnorm(emb))[...,None,:]
 //            + fc_hidden(rmsnorm(hidden).reshape(...,HC,H))).reshape(...,HC*H)
@@ -173,6 +248,16 @@ mx::array mtp_fuse_inputs(const MTPConfig& cfg, const MTPWeights& w,
 mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
                             const mx::array& hidden_states,
                             const mx::array& next_token_ids);
+
+// Full fresh-cache single-token draft step against the REAL checkpoint's MTP
+// sidecar (packed Q4 weights, one-centered norms, 512 streamed experts and an
+// untied lm_head). Geometry/weights are the exact shard-22 tensors; the caller
+// supplies the same hidden stream and token ids as Python's
+// `mtp.forward(language, hidden, ids, mtp.make_cache(language))`.
+// Returns draft logits [B, S, V].
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids);
 
 // Result of mtp_verify, mirroring Sampler.verify_point_mass's return tuple.
 struct MTPVerifyResult {

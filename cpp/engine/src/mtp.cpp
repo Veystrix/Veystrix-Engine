@@ -148,6 +148,136 @@ mx::array dense_moe(const MTPConfig& cfg, const MTPWeights& w,
   return y + mx::multiply(sg, sh);
 }
 
+// ---------------------------------------------------------------------------
+// Real checkpoint (shard 22) path. Production patches every Qwen4ExpRMSNorm to
+// ONE-centered gains (models/flashnext/patch_rmsnorm.py: gain = weight, no
+// +1.0), keeps the 512 routed experts packed for gather_qmm, and uses an untied
+// lm_head. Everything else is the same math as the synthetic path above.
+// ---------------------------------------------------------------------------
+
+// One-centered Qwen4ExpRMSNorm, mirroring patch_rmsnorm._rms_norm exactly:
+//   y = x.astype(f32); group_size ? reshape[...,-1,gs] : x
+//   y *= rsqrt(mean(square(y),-1,keepdims)+eps); y *= weight.astype(f32)
+//   return reshape(y, x.shape).astype(x.dtype)
+mx::array oc_rms_norm(const mx::array& x, const mx::array& weight, float eps,
+                      int group_size) {
+  auto dtype = x.dtype();
+  mx::array y = mx::astype(x, mx::float32);
+  mx::array w = mx::astype(weight, mx::float32);
+  if (group_size > 0) {
+    mx::Shape grouped(x.shape().begin(), x.shape().end());
+    grouped[grouped.size() - 1] /= group_size;
+    grouped.push_back(group_size);
+    y = mx::reshape(y, grouped);
+    w = mx::reshape(w, mx::Shape{-1, group_size});
+  }
+  y = y * mx::rsqrt(mx::mean(mx::square(y), -1, /*keepdims=*/true) + eps);
+  y = y * w;
+  return mx::astype(mx::reshape(y, x.shape()), dtype);
+}
+
+GatedResult gated_residual_real(const mx::array& hyper_input,
+                                const mx::array& raw_norm,
+                                const Linear& down, const Linear& up,
+                                const std::optional<Linear>& inject,
+                                int hc_count, int hidden_size, float eps) {
+  mx::array normed =
+      oc_rms_norm(hyper_input, raw_norm, eps, /*group_size=*/hidden_size);
+  mx::array hc_arr = mx::array(hc_count);  // int32 scalar: keeps bf16
+  mx::array low = mx::divide(linear(normed, down), hc_arr);
+  mx::array mix = mx::sigmoid(linear(hc_silu(low), up));
+  mx::Shape groups(hyper_input.shape().begin(), hyper_input.shape().end() - 1);
+  groups.push_back(hc_count);
+  groups.push_back(hidden_size);
+  mx::array mixed_input = mx::mean(
+      mx::multiply(mx::reshape(mix, groups), mx::reshape(normed, groups)), -2);
+  if (inject) {
+    mx::array two = mx::array(2);
+    mx::array inj = mx::multiply(
+        two, mx::sigmoid(mx::divide(linear(normed, *inject), hc_arr)));
+    return GatedResult{mixed_input, inj};
+  }
+  return GatedResult{mixed_input, std::nullopt};
+}
+
+// QSA decoder layer, fresh cache / one token -> dense softmax (indexer None).
+mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                               const mx::array& x) {
+  const int B = static_cast<int>(x.shape(0));
+  const int S = static_cast<int>(x.shape(1));
+  const int nH = cfg.n_heads, nKV = cfg.n_kv_heads, D = cfg.head_dim;
+
+  mx::array qproj = linear(x, w.q_proj);
+  mx::array kproj = linear(x, w.k_proj);
+  mx::array vproj = linear(x, w.v_proj);
+
+  mx::array q4 = mx::reshape(qproj, mx::Shape{B, S, nH, 2 * D});
+  std::vector<mx::array> halves = mx::split(q4, 2, -1);
+  mx::array q = halves[0], gate = halves[1];
+  gate = mx::reshape(gate, mx::Shape{B, S, nH * D});
+
+  q = mx::transpose(oc_rms_norm(q, w.q_norm, cfg.eps, -1), {0, 2, 1, 3});
+  mx::array k = mx::transpose(
+      oc_rms_norm(mx::reshape(kproj, mx::Shape{B, S, nKV, D}), w.k_norm,
+                  cfg.eps, -1),
+      {0, 2, 1, 3});
+  mx::array v = mx::transpose(mx::reshape(vproj, mx::Shape{B, S, nKV, D}),
+                              {0, 2, 1, 3});
+
+  std::vector<int32_t> pos(static_cast<size_t>(3) * B * S,
+                           static_cast<int32_t>(cfg.position));
+  mx::array position_ids(pos.begin(), mx::Shape{3, B, S}, mx::int32);
+  QSARotaryParams rp;
+  rp.dim = static_cast<int>(D * cfg.partial_rotary_factor);
+  rp.base = cfg.rope_base;
+  rp.style = "interleaved";
+  rp.attention_scaling = 1.0f;
+  rp.mrope_section = cfg.mrope_section;
+  rp.max_position_embeddings = cfg.max_position_embeddings;
+  q = qsa_apply_rope(q, position_ids, rp);
+  k = qsa_apply_rope(k, position_ids, rp);
+
+  const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
+  mx::array out = mx::fast::scaled_dot_product_attention(
+      q, k, v, scale, /*mask_mode=*/"", /*mask_arr=*/std::nullopt,
+      /*sinks=*/std::nullopt);
+  out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}),
+                    mx::Shape{B, S, nH * D});
+  return linear(mx::multiply(out, mx::sigmoid(gate)), w.o_proj);
+}
+
+// Router + packed SwitchGLU (via the validated q4_projection/moe_block) +
+// dense shared expert. One token is the bit-exact decode path (indices.size <
+// 64, so Python's SwitchGLU does not sort).
+mx::array dense_moe_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                         const mx::array& x) {
+  const int B = static_cast<int>(x.shape(0));
+  const int S = static_cast<int>(x.shape(1));
+  const int T = B * S;
+  mx::array x2d = mx::reshape(x, mx::Shape{T, cfg.hidden_size});
+  RouterOutput r = router(linear(x2d, w.gate), cfg.top_k, 0.0f);
+  mx::array y = moe_block(x2d, r.indices, r.scores, w.experts);
+
+  mx::array sg = mx::sigmoid(linear(x2d, w.shared_gate_logits));
+  mx::array sh_gate = linear(x2d, w.shared_gate);
+  mx::array sh_up = linear(x2d, w.shared_up);
+  mx::array sh = linear(swiglu(sh_gate, sh_up), w.shared_down);
+  mx::array out = y + mx::multiply(sg, sh);
+  return mx::reshape(out, mx::Shape{B, S, cfg.hidden_size});
+}
+
+// Gather one row of a quantized embedding table and dequantize it, matching
+// Python's QuantizedEmbedding.__call__ for the real sidecar.
+mx::array embed_row_real(const QPacked& e, const mx::array& ids, int H,
+                         int group_size, int bits) {
+  mx::array idx = mx::reshape(mx::astype(ids, mx::int32), mx::Shape{-1});
+  mx::array w = mx::take(e.w, idx, 0);
+  mx::array s = mx::take(e.scales, idx, 0);
+  mx::array b = mx::take(e.biases, idx, 0);
+  mx::array row = mx::dequantize(w, s, b, group_size, bits, "affine");
+  return mx::reshape(row, mx::Shape{ids.shape(0), ids.shape(1), H});
+}
+
 }  // namespace
 
 mx::array mtp_fuse_inputs(const MTPConfig& cfg, const MTPWeights& w,
@@ -207,6 +337,61 @@ mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
                                        std::nullopt, cfg.hc_count,
                                        cfg.hidden_size, cfg.eps);
   return linear(mix.mixed_input, Linear(w.emb));  // embed_tokens.as_linear
+}
+
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids) {
+  const int hc_hidden = cfg.hc_count * cfg.hidden_size;
+  if (hidden_states.shape(hidden_states.shape().size() - 1) != hc_hidden)
+    throw std::invalid_argument(
+        "mtp_draft_forward_real: hidden last dim != hc_count * hidden_size");
+  // Fail closed: this path is the real Qwen3.8-Flash-Next sidecar convention.
+  // The synthetic (1+weight, tied-head) path is mtp_draft_forward above.
+  if (!cfg.one_centered_norms || cfg.tie_word_embeddings)
+    throw std::invalid_argument(
+        "mtp_draft_forward_real: expects one_centered_norms and an untied lm_head");
+
+  mx::array token_emb = embed_row_real(
+      w.embed, next_token_ids, cfg.hidden_size,
+      w.embed.group_size, w.embed.bits);
+
+  // fuse_inputs (one-centered full-width norms in the real checkpoint).
+  mx::array proj_emb = linear(
+      oc_rms_norm(token_emb, w.pre_fc_norm_embedding, cfg.eps, -1),
+      w.fc_embedding);
+  mx::Shape streams_shape(hidden_states.shape().begin(),
+                          hidden_states.shape().end());
+  streams_shape[streams_shape.size() - 1] = cfg.hc_count;
+  streams_shape.push_back(cfg.hidden_size);
+  mx::array streams = mx::reshape(
+      oc_rms_norm(hidden_states, w.pre_fc_norm_hidden, cfg.eps, -1),
+      streams_shape);
+  mx::array fused = mx::reshape(
+      mx::add(mx::expand_dims(proj_emb, -2), linear(streams, w.fc_hidden)),
+      hidden_states.shape());
+
+  // attn hyper-connection + QSA self-attention + inject.
+  GatedResult ag = gated_residual_real(
+      fused, w.attn_hc_norm, w.attn_down, w.attn_up, w.attn_inject,
+      cfg.hc_count, cfg.hidden_size, cfg.eps);
+  mx::array attn_branch = dense_attention_real(cfg, w, ag.mixed_input);
+  mx::array h1 = inject_residual(fused, attn_branch, *ag.injection_weights);
+
+  // mlp hyper-connection + SwitchGLU/shared expert + inject.
+  GatedResult mg = gated_residual_real(
+      h1, w.mlp_hc_norm, w.mlp_down, w.mlp_up, w.mlp_inject,
+      cfg.hc_count, cfg.hidden_size, cfg.eps);
+  mx::array moe_branch = dense_moe_real(cfg, w, mg.mixed_input);
+  mx::array h2 = inject_residual(h1, moe_branch, *mg.injection_weights);
+
+  // hyper-connection mixer (use_combine=False) + untied lm_head.
+  GatedResult mix = gated_residual_real(
+      h2, w.mix_hc_norm, w.mix_down, w.mix_up, std::nullopt,
+      cfg.hc_count, cfg.hidden_size, cfg.eps);
+  return mx::quantized_matmul(mix.mixed_input, w.lm_head.w, w.lm_head.scales,
+                              w.lm_head.biases, /*transpose=*/true,
+                              w.lm_head.group_size, w.lm_head.bits, "affine");
 }
 
 MTPVerifyResult mtp_verify(const std::vector<mx::array>& rows,

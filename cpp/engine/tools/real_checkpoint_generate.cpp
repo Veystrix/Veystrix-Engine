@@ -291,14 +291,14 @@ SamplingParams mtp_greedy_params() {
 
 struct MTPConfigRT {
   bool enabled = false;
+  bool use_real = true;      // real shard-22 head; synthetic is opt-in fallback
   int depth = 1;
   uint64_t seed = 0;
   MTPConfig cfg;
-  MTPWeights weights;
+  MTPWeights weights;        // tiny synthetic head (explicit fallback only)
+  std::optional<MTPRealWeights> real;
   SamplingParams params;
 
-  // cfg is declared before weights, so the configured geometry is available
-  // when the (unpacked, tied-embedding) synthetic head is built.
   MTPConfigRT()
       : cfg(mtp_default_config()),
         weights(make_synthetic_mtp_weights(cfg)),
@@ -309,6 +309,7 @@ struct MTPConfigRT {
 MTPConfigRT MTPConfigRT::from_env() {
   MTPConfigRT rt;
   rt.enabled = std::getenv("VEYSTRIX_CPP_MTP") != nullptr;
+  rt.use_real = std::getenv("VEYSTRIX_CPP_MTP_SYNTHETIC") == nullptr;
   if (const char* d = std::getenv("VEYSTRIX_CPP_MTP_DEPTH")) rt.depth = std::atoi(d);
   if (rt.depth < 1 || rt.depth > 4)
     throw std::runtime_error("VEYSTRIX_CPP_MTP_DEPTH must be in [1,4]");
@@ -746,6 +747,196 @@ class DenseLoader {
   std::map<std::string, std::unordered_map<std::string, mx::array>> shards_;
   std::map<std::string, dmanifest::MInfo> manifest_;
 };
+
+// --------------------------------------------------------------------------- //
+// MTP real-checkpoint draft parity entry point (VEYSTRIX_CPP_MTP_REAL_PARITY).
+// Loads ONLY the shard-22 MTP sidecar + lm_head + the embedding table (no 48
+// layer backbone, no expert pools), runs the real MTP draft head on the hidden
+// stream dumped by check_mtp_real_parity.py, and writes f32 logits for a byte
+// comparison against Python's Qwen4ExpMTPModule on the SAME input. This is the
+// replacement for the old synthetic-weight MTP wiring.
+// --------------------------------------------------------------------------- //
+namespace mtp_real {
+
+Q4Projection as_q4(const Linear& L) {
+  if (!L.q)
+    throw std::runtime_error("MTP real: expected a quantized (packed) projection");
+  return Q4Projection(L.q->w, L.q->scales, L.q->biases);
+}
+
+std::vector<float> read_f32(const std::string& path) {
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (!f) throw std::runtime_error("MTP real: cannot open " + path);
+  std::vector<float> out;
+  float buf[8192];
+  size_t got;
+  while ((got = std::fread(buf, sizeof(float), 8192, f)) > 0)
+    out.insert(out.end(), buf, buf + got);
+  std::fclose(f);
+  return out;
+}
+
+// The older gen_real_config.py flat config has no MTP shard map. All 76 sidecar
+// tensors live in the same shard as lm_head in this checkpoint; derive their
+// shard entries from lm_head rather than scanning the 420 KB index JSON.
+void add_mtp_shard_entries(Config& cfg) {
+  auto it = cfg.find("shard.language_model.lm_head.weight");
+  if (it == cfg.end())
+    throw std::runtime_error(
+        "MTP real: flat config lacks shard.language_model.lm_head.weight");
+  const std::string shard = it->second;
+  static const char* bases[] = {
+      "fc_embedding", "fc_hidden",
+      "pre_fc_norm_embedding.weight", "pre_fc_norm_hidden.weight",
+      "hyper_connection_mixer.hc_norm.weight",
+      "hyper_connection_mixer.input_mix_weight_down",
+      "hyper_connection_mixer.input_mix_weight_up",
+      "layers.0.attn_hyper_connection.hc_norm.weight",
+      "layers.0.attn_hyper_connection.input_mix_weight_down",
+      "layers.0.attn_hyper_connection.input_mix_weight_up",
+      "layers.0.attn_hyper_connection.block_inject_weight",
+      "layers.0.mlp_hyper_connection.hc_norm.weight",
+      "layers.0.mlp_hyper_connection.input_mix_weight_down",
+      "layers.0.mlp_hyper_connection.input_mix_weight_up",
+      "layers.0.mlp_hyper_connection.block_inject_weight",
+      "layers.0.self_attn.q_proj", "layers.0.self_attn.k_proj",
+      "layers.0.self_attn.v_proj", "layers.0.self_attn.o_proj",
+      "layers.0.self_attn.q_norm.weight", "layers.0.self_attn.k_norm.weight",
+      "layers.0.mlp.gate.weight",
+      "layers.0.mlp.switch_mlp.gate_proj", "layers.0.mlp.switch_mlp.up_proj",
+      "layers.0.mlp.switch_mlp.down_proj",
+      "layers.0.mlp.shared_expert.gate_proj",
+      "layers.0.mlp.shared_expert.up_proj",
+      "layers.0.mlp.shared_expert.down_proj",
+      "layers.0.mlp.shared_expert_gate",
+  };
+  for (const char* b : bases) {
+    const std::string base = std::string("language_model.mtp.") + b;
+    for (const char* suf : {"", ".weight", ".scales", ".biases"})
+      cfg["shard." + base + suf] = shard;
+  }
+}
+
+MTPConfig config_from(const Config& cfg) {
+  MTPConfig c;
+  c.hidden_size = get_int(cfg, "hidden_size");
+  c.hc_count = get_int(cfg, "hc_count");
+  c.hc_lowrank = get_int(cfg, "hc_lowrank");
+  c.n_heads = get_int(cfg, "n_heads");
+  c.n_kv_heads = get_int(cfg, "kv_heads");
+  c.head_dim = get_int(cfg, "head_dim");
+  c.n_experts = get_int(cfg, "n_experts", get_int(cfg, "num_experts", 512));
+  c.top_k = get_int(cfg, "top_k");
+  c.inter = get_int(cfg, "inter", get_int(cfg, "moe_intermediate_size", 640));
+  c.shared_inter = get_int(cfg, "shared_inter",
+                           get_int(cfg, "shared_expert_intermediate_size", 640));
+  c.vocab = get_int(cfg, "vocab");
+  c.eps = get_float(cfg, "eps", 1e-6f);
+  c.rope_base = get_float(cfg, "rope_base", 10000.0f);
+  c.partial_rotary_factor = get_float(cfg, "partial_rotary_factor", 0.25f);
+  for (auto& s : split(get_str(cfg, "rope_mrope"), ','))
+    c.mrope_section.push_back(std::stoi(s));
+  c.max_position_embeddings = get_int(cfg, "rope_max_pos", 2048);
+  c.position = 0;  // fresh MTP cache + position_ids=None (validated path)
+  c.one_centered_norms = get_int(cfg, "one_centered_norms", 1) != 0;
+  c.tie_word_embeddings = get_int(cfg, "tie_word_embeddings", 0) != 0;
+  return c;
+}
+
+MTPRealWeights load_weights(DenseLoader& dl, const MTPConfig& c,
+                            int gs, int bits) {
+  const std::string p = "language_model.mtp.";
+  const int H = c.hidden_size, HC = c.hc_count, LOW = c.hc_lowrank;
+  const int HH = HC * H, Q = c.n_heads * c.head_dim;
+
+  auto norm = [&](const std::string& n) { return dl.raw(p + n + ".weight"); };
+  auto lin = [&](const std::string& n, int in) { return dl.linear(p + n, in); };
+
+  DenseLoader::QTriplet et =
+      dl.quantized("language_model.model.embed_tokens");
+  QPacked embed(et.w, et.s, et.b, gs, bits);
+
+  const std::string ep = "layers.0.mlp.switch_mlp.";
+  ExpertWeights experts(as_q4(lin(ep + "gate_proj", H)),
+                        as_q4(lin(ep + "up_proj", H)),
+                        as_q4(lin(ep + "down_proj", c.inter)), gs, bits);
+
+  DenseLoader::QTriplet lt = dl.quantized("language_model.lm_head");
+  QPacked lm(lt.w, lt.s, lt.b, gs, bits);
+
+  return MTPRealWeights(
+      std::move(embed),
+      norm("pre_fc_norm_embedding"), lin("fc_embedding", H),
+      norm("pre_fc_norm_hidden"), lin("fc_hidden", H),
+      norm("layers.0.attn_hyper_connection.hc_norm"),
+      lin("layers.0.attn_hyper_connection.input_mix_weight_down", HH),
+      lin("layers.0.attn_hyper_connection.input_mix_weight_up", LOW),
+      lin("layers.0.attn_hyper_connection.block_inject_weight", HH),
+      lin("layers.0.self_attn.q_proj", H), lin("layers.0.self_attn.k_proj", H),
+      lin("layers.0.self_attn.v_proj", H), lin("layers.0.self_attn.o_proj", Q),
+      norm("layers.0.self_attn.q_norm"),
+      norm("layers.0.self_attn.k_norm"),
+      norm("layers.0.mlp_hyper_connection.hc_norm"),
+      lin("layers.0.mlp_hyper_connection.input_mix_weight_down", HH),
+      lin("layers.0.mlp_hyper_connection.input_mix_weight_up", LOW),
+      lin("layers.0.mlp_hyper_connection.block_inject_weight", HH),
+      lin("layers.0.mlp.gate", 0), std::move(experts),
+      lin("layers.0.mlp.shared_expert.gate_proj", H),
+      lin("layers.0.mlp.shared_expert.up_proj", H),
+      lin("layers.0.mlp.shared_expert.down_proj", c.shared_inter),
+      lin("layers.0.mlp.shared_expert_gate", H),
+      norm("hyper_connection_mixer.hc_norm"),
+      lin("hyper_connection_mixer.input_mix_weight_down", HH),
+      lin("hyper_connection_mixer.input_mix_weight_up", LOW), std::move(lm));
+}
+
+int run(const std::string& dir, const std::string& ckpt) {
+  Config cfg = read_config(dir + "/config.txt");
+  if (cfg.empty())
+    throw std::runtime_error("MTP real: empty/missing " + dir + "/config.txt");
+  const int gs = get_int(cfg, "group_size", 32);
+  const int bits = get_int(cfg, "bits", 4);
+  DenseLoader dl(ckpt, cfg, gs, bits);
+  MTPConfig c = config_from(cfg);
+  MTPRealWeights w = load_weights(dl, c, gs, bits);
+
+  std::vector<float> hv = read_f32(dir + "/hidden.f32");
+  if (static_cast<int>(hv.size()) != c.hc_count * c.hidden_size)
+    throw std::runtime_error("MTP real: hidden.f32 has " +
+                             std::to_string(hv.size()) + " floats, expected " +
+                             std::to_string(c.hc_count * c.hidden_size));
+  mx::array hidden(hv.data(), mx::Shape{1, 1, c.hc_count * c.hidden_size},
+                   mx::float32);
+  hidden = mx::astype(hidden, mx::bfloat16);
+  mx::eval(hidden);
+
+  std::FILE* tf = std::fopen((dir + "/token.txt").c_str(), "r");
+  if (!tf) throw std::runtime_error("MTP real: cannot open token.txt");
+  long token = 0;
+  if (std::fscanf(tf, "%ld", &token) != 1)
+    throw std::runtime_error("MTP real: token.txt is not an integer");
+  std::fclose(tf);
+  std::vector<int32_t> ids{static_cast<int32_t>(token)};
+  mx::array idarr(ids.data(), mx::Shape{1, 1}, mx::int32);
+
+  mx::array logits = mtp_draft_forward_real(c, w, hidden, idarr);
+  mx::array f = mx::reshape(mx::astype(logits, mx::float32), mx::Shape{-1});
+  mx::eval(f);
+  std::FILE* of = std::fopen((dir + "/cpp_logits.f32").c_str(), "wb");
+  if (!of) throw std::runtime_error("MTP real: cannot write cpp_logits.f32");
+  std::fwrite(f.data<float>(), sizeof(float), f.size(), of);
+  std::fclose(of);
+
+  mx::array am = mx::astype(mx::argmax(f, 0), mx::int32);
+  mx::eval(am);
+  std::string digest = sha256_hex(f.data<float>(), f.size() * sizeof(float));
+  std::printf("MTP_REAL_PARITY argmax=%d logits_sha256=%s elems=%zu\n",
+              am.item<int32_t>(), digest.c_str(), f.size());
+  mem_telemetry("mtp-real-parity");
+  return 0;
+}
+
+}  // namespace mtp_real
 
 
 // --------------------------------------------------------------------------- //
@@ -1381,7 +1572,7 @@ static PLEWeights load_ple(DenseLoader& dl, const Config& cfg,
 }
 
 std::vector<StepRecord> run_generation(const std::string& ckpt,
-                                       const Config& cfg, int num_tokens) {
+                                       Config cfg, int num_tokens) {
   const int n_layers = get_int(cfg, "n_layers");
   const int H = get_int(cfg, "hidden_size");
   const int hc_count = get_int(cfg, "hc_count");
@@ -1440,11 +1631,28 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     for (auto& x : sec) fa.rope.mrope_section.push_back(std::stoi(x));
   }
 
+  // Real MTP draft head: load the shard-22 sidecar into MTPRealWeights instead
+  // of the old synthetic tiny head. The flat config from gen_real_config.py
+  // predates MTP, so derive the missing shard entries from lm_head's shard.
+  phase1::MTPConfigRT mtp = phase1::MTPConfigRT::from_env();
+  if (mtp.enabled && mtp.use_real) mtp_real::add_mtp_shard_entries(cfg);
+
   DenseLoader dl(ckpt, cfg, group_size, bits);
   {
     const char* em = std::getenv("VEYSTRIX_CPP_DENSE_MANIFEST");
     std::string mp = em ? std::string(em) : get_str(cfg, "dense_manifest", "");
     if (!mp.empty()) dl.load_manifest(mp);
+  }
+  if (mtp.enabled && mtp.use_real) {
+    mtp.cfg = mtp_real::config_from(cfg);
+    mtp.real.emplace(mtp_real::load_weights(dl, mtp.cfg, group_size, bits));
+    std::fprintf(stderr,
+                 "[mtp] real shard-22 head loaded (H=%d HC=%d E=%d topk=%d "
+                 "vocab=%d one_centered=%d tied=%d)\n",
+                 mtp.cfg.hidden_size, mtp.cfg.hc_count, mtp.cfg.n_experts,
+                 mtp.cfg.top_k, mtp.cfg.vocab,
+                 static_cast<int>(mtp.cfg.one_centered_norms),
+                 static_cast<int>(mtp.cfg.tie_word_embeddings));
   }
   const std::string prefix_fmt = get_str(
       cfg, "expert_prefix",
@@ -1908,16 +2116,16 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   int token = prompt.empty() ? 0 : prompt.back();
 
   // Decode. With VEYSTRIX_CPP_MTP unset this is the original greedy loop
-  // (identical digests to gate (b)). With it set, each step calls the real
-  // mtp_draft_forward to propose a draft and mtp_verify to accept/reject it.
-  // Verification is lossless: an accepted draft is consumed through the target
-  // (advancing the KV cache), a rejected draft is replaced by mtp_verify's
-  // redraw FROM THE CURRENT target row without consuming a target step.
-  phase1::MTPConfigRT mtp = phase1::MTPConfigRT::from_env();
-  if (mtp.enabled)
+  // (identical digests to gate (b)). With it set, each step calls the REAL
+  // shard-22 mtp_draft_forward_real to propose a draft and mtp_verify to
+  // accept/reject it. Verification is lossless: an accepted draft is consumed
+  // through the target (advancing the KV cache), a rejected draft is replaced
+  // by mtp_verify's redraw FROM THE CURRENT target row without consuming a
+  // target step. VEYSTRIX_CPP_MTP_SYNTHETIC=1 restores the old tiny head.
+  if (mtp.enabled && !mtp.use_real)
     std::fprintf(stderr,
-                 "[mtp] enabled depth=%d seed=%llu (synthetic tiny draft head; "
-                 "lossless greedy verify)\n", mtp.depth,
+                 "[mtp] enabled depth=%d seed=%llu (SYNTHETIC fallback head; "
+                 "lossless greedy verify, NOT a parity claim)\n", mtp.depth,
                  static_cast<unsigned long long>(mtp.seed));
 
   int produced = 0;
@@ -1963,11 +2171,16 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       // that predicts it. An accept consumes a target step (and yields the row
       // for the next draft); a reject emits the redraw and consumes no step.
       for (int d = 0; d < mtp.depth && produced < num_tokens; ++d) {
-        std::vector<int32_t> ids{static_cast<int32_t>(token % mtp.cfg.vocab)};
+        const int draft_tok =
+            mtp.use_real ? token : (token % mtp.cfg.vocab);
+        std::vector<int32_t> ids{static_cast<int32_t>(draft_tok)};
         mx::array idarr(ids.data(), mx::Shape{1, 1}, mx::int32);
-        mx::array dl = mtp_draft_forward(mtp.cfg, mtp.weights,
-                                         phase1::adapt_hidden(*mtp_hidden, mtp.cfg),
-                                         idarr);
+        mx::array dl =
+            mtp.use_real
+                ? mtp_draft_forward_real(mtp.cfg, *mtp.real, *mtp_hidden, idarr)
+                : mtp_draft_forward(
+                      mtp.cfg, mtp.weights,
+                      phase1::adapt_hidden(*mtp_hidden, mtp.cfg), idarr);
         int32_t draft = phase1::mtp_argmax(dl);
         ++mtp_proposed;
         MTPVerifyResult vr =
@@ -2085,6 +2298,17 @@ static int kv_tier_selftest(const std::string& root) {
 }
 
 int main(int argc, char** argv) {
+  if (const char* d = std::getenv("VEYSTRIX_CPP_MTP_REAL_PARITY")) {
+    try {
+      if (argc < 2)
+        throw std::runtime_error(
+            "MTP real parity: usage <binary> <checkpoint-dir> [unused...]");
+      return mtp_real::run(d, argv[1]);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "mtp_real_parity failed: %s\n", e.what());
+      return 1;
+    }
+  }
   if (const char* d = std::getenv("VEYSTRIX_CPP_KV_TIER_SELFTEST")) {
     try {
       return kv_tier_selftest(d);

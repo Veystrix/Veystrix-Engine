@@ -1,0 +1,81 @@
+{
+  "checkpoint": "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+  "prompt_sha256": "f01215c52941e19b67a00ccaec1fb9b42bab3dfd7108be26222812dc7af33104",
+  "prompt_tokens": 16,
+  "requested_tokens": 4,
+  "token_ids": [
+    271,
+    248068,
+    198,
+    760
+  ],
+  "n_logit_digests": 4,
+  "steps": [
+    {
+      "token": 271,
+      "logit_sha256": "1638ab11b2debcebf8b8fbe30138766154e28d25d3479d92c7c3dfbac2196102"
+    },
+    {
+      "token": 248068,
+      "logit_sha256": "9c3a9173ade7397c434ff35fab68a193aeec4de76a824def2451713652aa1319"
+    },
+    {
+      "token": 198,
+      "logit_sha256": "4d5d49e8cef4b6cf06bc0a41f3c42c0a11e5a16920711fa48ebd634eac714a00"
+    },
+    {
+      "token": 760,
+      "logit_sha256": "f41be938282d135a6d54969da7e999129d2efd01f21623e0ca4057c1cf724179"
+    }
+  ],
+  "finish": "length",
+  "mlx_version": "0.32.2",
+  "effective_config": {
+    "sources": {
+      "prefill_chunk_tokens": "models/flashnext/prefill.py:26,75-93 (FLAG_CHUNK_TOKENS, default 0=off); models/flashnext/prefill_autotune.py:69 (autotune override)",
+      "prefill_chunk_policy": "models/flashnext/prefill.py:36,96-105 (FLAG_CHUNK_POLICY default grid)",
+      "kv_mode": "models/flashnext/quantized_kv.py:19,33-39 (FLAG_KV_DTYPE default bf16)",
+      "kv_group_size": "models/flashnext/quantized_kv.py:20,86-94 (default 64)",
+      "kv_bits": "models/flashnext/quantized_kv.py:21,97-109 (default by mode)",
+      "mtp": "veystrix/backends/flashnext.py:62-79 (_resolve_startup_mtp: FLASHNEXT_NATIVE_MTP default off, FLASHNEXT_MTP_DEPTH default 3), :163",
+      "ple_layer_ids": "mlx_vlm qwen4_exp/language.py:734-740,848 (layer_idx+1 in ple_layer_ids)",
+      "stream_embed": "models/flashnext/loader.py:284,297 (FLAG_STREAM_EMBED default 0)",
+      "rope_path": "models/flashnext/qsa_chunk.py:352,402 (indexer._apply_rope -> fused mx.fast.rope)",
+      "sampler": "veystrix/backends/flashnext.py:211 (Sampling.greedy_settings); veystrix/sampling.py:47-62 (greedy iff temperature<=0)"
+    },
+    "env": {
+      "FLASHNEXT_PREFILL_CHUNK_TOKENS": "0",
+      "FLASHNEXT_PREFILL_CHUNK_POLICY": "grid",
+      "FLASHNEXT_KV_CACHE_DTYPE": "bf16",
+      "FLASHNEXT_NATIVE_MTP": "off",
+      "FLASHNEXT_MTP_DEPTH": "3",
+      "FLASHNEXT_STREAM_EMBED": "0",
+      "VEYSTRIX_SAMPLING_GREEDY": "1"
+    },
+    "read_errors": {},
+    "prefill_chunk_tokens": 0,
+    "prefill_chunk_configured": 0,
+    "prefill_chunk_policy": "grid",
+    "kv_mode": "bf16",
+    "kv_group_size": 64,
+    "kv_bits": 4,
+    "mtp": {
+      "native": "off",
+      "depth": 3,
+      "active": false
+    },
+    "ple_layer_ids": [
+      2
+    ],
+    "stream_embed": false,
+    "rope_path": "fused_mx_fast_rope (indexer._apply_rope)",
+    "sampler": {
+      "greedy": true,
+      "temperature": 0.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0
+    }
+  }
+}

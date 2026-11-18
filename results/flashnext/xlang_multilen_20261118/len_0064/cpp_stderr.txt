@@ -1,0 +1,84 @@
+[load] shard model-00007-of-00022.safetensors (110 tensors)
+[load] shard model-00001-of-00022.safetensors (450 tensors)
+[load] PLE: 128 streamed embedding shards, 2500012 rows/shard
+[load] shard model-00008-of-00022.safetensors (185 tensors)
+[load] shard model-00009-of-00022.safetensors (185 tensors)
+[load] prepared layer 8/48
+[load] shard model-00010-of-00022.safetensors (185 tensors)
+[load] shard model-00011-of-00022.safetensors (185 tensors)
+[load] shard model-00012-of-00022.safetensors (236 tensors)
+[load] prepared layer 16/48
+[load] shard model-00013-of-00022.safetensors (185 tensors)
+[load] shard model-00014-of-00022.safetensors (185 tensors)
+[load] prepared layer 24/48
+[load] shard model-00015-of-00022.safetensors (185 tensors)
+[load] shard model-00016-of-00022.safetensors (185 tensors)
+[load] shard model-00017-of-00022.safetensors (236 tensors)
+[load] prepared layer 32/48
+[load] shard model-00018-of-00022.safetensors (185 tensors)
+[load] shard model-00019-of-00022.safetensors (185 tensors)
+[load] prepared layer 40/48
+[load] shard model-00020-of-00022.safetensors (185 tensors)
+[load] shard model-00021-of-00022.safetensors (185 tensors)
+[load] shard model-00022-of-00022.safetensors (180 tensors)
+[load] prepared layer 48/48
+[load] all weights ready; starting generation
+[mem post-load] active=2.97 GiB cache=0.00 GiB peak=2.97 GiB
+[embed] w=3 s=12 b=12 dequant=12 (bf16=12 f32=10)
+[pb dtype L00] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L01] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L02] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L03] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L04] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L05] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L06] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L07] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L08] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L09] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L10] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L11] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L12] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L13] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L14] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L15] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L16] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L17] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L18] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L19] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L20] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L21] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L22] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L23] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L24] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L25] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L26] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L27] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L28] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L29] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L30] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L31] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L32] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L33] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L34] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L35] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L36] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L37] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L38] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L39] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L40] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L41] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L42] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L43] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L44] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L45] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L46] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb dtype L47] ar.mixed=12 branch=12 inj=12 moe2d=12 hidden=12
+[pb head] mixed=12 last=12 logits=12
+[mem prefill-batched] active=3.25 GiB cache=0.06 GiB peak=3.71 GiB
+[step 0] in=125323 out=271 sha=c7d07880100a2096dbcbb4ccc27972d3e84a157b0dd543e905900eb9cbf4d85b
+[mem decode-step] active=3.13 GiB cache=0.23 GiB peak=3.71 GiB
+[step 1] in=271 out=104980 sha=3403ad3a793b468e378381e023c95cb09237d7db5478ed327cd019b3888faeae
+[mem decode-step] active=3.13 GiB cache=0.23 GiB peak=3.71 GiB
+[step 2] in=104980 out=99943 sha=ffa2c5cb130486dc7131b20c1bdfbe7d101b9f3ea7735b94f42de15ab4ff1e0b
+[mem decode-step] active=3.13 GiB cache=0.23 GiB peak=3.71 GiB
+[step 3] in=99943 out=103916 sha=8fc481dfac374ca6405bb1ac423a25b2eb6775cdbc33df77069bd8d3f157df1a

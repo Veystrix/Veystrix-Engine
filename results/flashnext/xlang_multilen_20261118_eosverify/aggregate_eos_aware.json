@@ -1,0 +1,156 @@
+{
+  "purpose": "Test reviewer premise: C++ vs Python bit-exactness on fresh prompts at multiple lengths (fixed seed 20261117, distinct prompt per N).",
+  "binary": "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/cpp/engine/build/real_checkpoint_generate",
+  "checkpoint": "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+  "tokens": 4,
+  "budget_seconds": 600,
+  "lengths": [
+    128
+  ],
+  "runs": [
+    {
+      "prompt_tokens": 128,
+      "dir": "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/len_0128",
+      "python_run": {
+        "name": "N=128 python-capture",
+        "command": [
+          "/Users/vincent/Documents/Veystrix/.venv/bin/python",
+          "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/_capture_all_digests.py",
+          "--checkpoint",
+          "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+          "--out",
+          "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/len_0128/reference.json",
+          "--tokens",
+          "4",
+          "--prompt-tokens",
+          "128"
+        ],
+        "swap_before_mib": 3281,
+        "returncode": 0,
+        "guard_stopped": null,
+        "guard_summary": {
+          "event": "end",
+          "stopped": null,
+          "returncode": 0,
+          "seconds": 14.1,
+          "available_floor_gib": 3.58,
+          "swap_baseline_mib": 3281,
+          "swap_peak_mib": 3281,
+          "swap_end_mib": 3281,
+          "compressor_baseline_mib": 409,
+          "compressor_peak_mib": 5584,
+          "swapout_mib": 0,
+          "compressed_gib_total": 18.6,
+          "thermal_seconds": {
+            "0": 14
+          }
+        }
+      },
+      "prompt_sha256": "5c9d73b2a0e9a9ffa6b08ce1f5610498472eec23c47de88844e140a7042333f9",
+      "mlx_version": "0.32.2",
+      "config_gen": {
+        "returncode": 0,
+        "stdout": "wrote /Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/len_0128/real_config.txt: 48 layers, 6404 dense tensors, prompt sha=5c9d73b2a0e9"
+      },
+      "cpp_run": {
+        "name": "N=128 cpp-generate",
+        "command": [
+          "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/cpp/engine/build/real_checkpoint_generate",
+          "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+          "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/len_0128/reference.json",
+          "4",
+          "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118_eosverify/len_0128/real_config.txt"
+        ],
+        "swap_before_mib": 3281,
+        "returncode": 0,
+        "guard_stopped": null,
+        "guard_summary": {
+          "event": "end",
+          "stopped": null,
+          "returncode": 0,
+          "seconds": 15.1,
+          "available_floor_gib": 3.2,
+          "swap_baseline_mib": 3281,
+          "swap_peak_mib": 3281,
+          "swap_end_mib": 3281,
+          "compressor_baseline_mib": 652,
+          "compressor_peak_mib": 6356,
+          "swapout_mib": 0,
+          "compressed_gib_total": 29.8,
+          "thermal_seconds": {
+            "0": 15
+          }
+        }
+      },
+      "comparison": {
+        "pass": false,
+        "strict_pass": false,
+        "bit_exact_compute_pass": true,
+        "eos_early_stop": true,
+        "eos_ids": [
+          248046,
+          248044
+        ],
+        "n_ref_steps": 1,
+        "n_cpp_steps": 4,
+        "tokens_ok": 1,
+        "digests_ok": 1,
+        "all_python_digests": 2,
+        "digests_ok_all": 2,
+        "count_ok": false,
+        "first_token_divergence_step": null,
+        "first_digest_divergence_step": null,
+        "first_unpaired_digest_divergence_step": null,
+        "rows": [
+          {
+            "step": 0,
+            "cpp_token": 271,
+            "py_token": 271,
+            "token_ok": true,
+            "cpp_digest": "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+            "py_digest": "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+            "digest_ok": true
+          }
+        ],
+        "all_digest_rows": [
+          {
+            "step": 0,
+            "cpp_digest": "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+            "py_digest": "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+            "digest_ok": true
+          },
+          {
+            "step": 1,
+            "cpp_digest": "5ab68c5caf814a55d5a664cffad7c3734e91b284b3cdd4b8f7c5478e7483000b",
+            "py_digest": "5ab68c5caf814a55d5a664cffad7c3734e91b284b3cdd4b8f7c5478e7483000b",
+            "digest_ok": true
+          }
+        ],
+        "python_token_ids": [
+          271
+        ],
+        "cpp_token_ids": [
+          271,
+          248046,
+          198,
+          248045
+        ],
+        "python_digests": [
+          "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc"
+        ],
+        "python_all_digests": [
+          "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+          "5ab68c5caf814a55d5a664cffad7c3734e91b284b3cdd4b8f7c5478e7483000b"
+        ],
+        "cpp_digests": [
+          "c6f51dae37658d7bc3b2f8a05dd239a282b8cbc8a4d47d4d89dc7feaf11fe9bc",
+          "5ab68c5caf814a55d5a664cffad7c3734e91b284b3cdd4b8f7c5478e7483000b",
+          "52fe57896fce31cf53f49f8f5a95e00d2ca926bfc86a3b9ced3612ca17203308",
+          "aa1bc43c9798e96ea8be949fa911bfa557f8d8197ab0d7412b5dfe60a2db8888"
+        ]
+      }
+    }
+  ],
+  "aborted": null,
+  "claim": "bit-exact = identical greedy token ids AND identical per-step float32-LE logit SHA-256 digests"
+}

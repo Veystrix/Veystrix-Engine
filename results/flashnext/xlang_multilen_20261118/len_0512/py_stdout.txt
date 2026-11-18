@@ -1,0 +1,2 @@
+wrote /Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0512/reference.json: 4 tokens, 4 logits
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 31.2, "available_floor_gib": 1.68, "swap_baseline_mib": 3387, "swap_peak_mib": 5616, "swap_end_mib": 4893, "compressor_baseline_mib": 1267, "compressor_peak_mib": 7736, "swapout_mib": 3202, "compressed_gib_total": 60.4, "thermal_seconds": {"0": 31}}

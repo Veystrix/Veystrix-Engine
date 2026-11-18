@@ -1,0 +1,5 @@
+step=0 in=125323 out=271 sha256=c7d07880100a2096dbcbb4ccc27972d3e84a157b0dd543e905900eb9cbf4d85b
+step=1 in=271 out=104980 sha256=3403ad3a793b468e378381e023c95cb09237d7db5478ed327cd019b3888faeae
+step=2 in=104980 out=99943 sha256=ffa2c5cb130486dc7131b20c1bdfbe7d101b9f3ea7735b94f42de15ab4ff1e0b
+step=3 in=99943 out=103916 sha256=8fc481dfac374ca6405bb1ac423a25b2eb6775cdbc33df77069bd8d3f157df1a
+guard: {"event": "end", "stopped": null, "returncode": 0, "seconds": 13.1, "available_floor_gib": 2.47, "swap_baseline_mib": 3395, "swap_peak_mib": 3395, "swap_end_mib": 3395, "compressor_baseline_mib": 1289, "compressor_peak_mib": 5663, "swapout_mib": 0, "compressed_gib_total": 24.9, "thermal_seconds": {"0": 13}}

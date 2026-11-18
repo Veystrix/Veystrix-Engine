@@ -1,0 +1,147 @@
+{
+  "prompt_tokens": 256,
+  "dir": "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0256",
+  "python_run": {
+    "name": "N=256 python-capture",
+    "command": [
+      "/Users/vincent/Documents/Veystrix/.venv/bin/python",
+      "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/cpp/engine/tools/capture_real_reference.py",
+      "--checkpoint",
+      "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+      "--out",
+      "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0256/reference.json",
+      "--tokens",
+      "4",
+      "--prompt-tokens",
+      "256"
+    ],
+    "swap_before_mib": 3395,
+    "returncode": 0,
+    "guard_stopped": null,
+    "guard_summary": {
+      "event": "end",
+      "stopped": null,
+      "returncode": 0,
+      "seconds": 18.1,
+      "available_floor_gib": 3.31,
+      "swap_baseline_mib": 3395,
+      "swap_peak_mib": 3395,
+      "swap_end_mib": 3387,
+      "compressor_baseline_mib": 1577,
+      "compressor_peak_mib": 5927,
+      "swapout_mib": 0,
+      "compressed_gib_total": 24.8,
+      "thermal_seconds": {
+        "0": 18
+      }
+    }
+  },
+  "prompt_sha256": "2175c9c0486709fddaf856062b21faf43e17c14c74dcd0d80ca5793a0060e741",
+  "mlx_version": "0.32.2",
+  "config_gen": {
+    "returncode": 0,
+    "stdout": "wrote /Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0256/real_config.txt: 48 layers, 6404 dense tensors, prompt sha=2175c9c04867"
+  },
+  "cpp_run": {
+    "name": "N=256 cpp-generate",
+    "command": [
+      "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/cpp/engine/build/real_checkpoint_generate",
+      "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP",
+      "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0256/reference.json",
+      "4",
+      "/Users/vincent/.local/share/opencode/worktree/dd9a0e/xlang-parity/results/flashnext/xlang_multilen_20261118/len_0256/real_config.txt"
+    ],
+    "swap_before_mib": 3387,
+    "returncode": 0,
+    "guard_stopped": null,
+    "guard_summary": {
+      "event": "end",
+      "stopped": null,
+      "returncode": 0,
+      "seconds": 19.1,
+      "available_floor_gib": 2.8,
+      "swap_baseline_mib": 3387,
+      "swap_peak_mib": 3387,
+      "swap_end_mib": 3387,
+      "compressor_baseline_mib": 1399,
+      "compressor_peak_mib": 7477,
+      "swapout_mib": 0,
+      "compressed_gib_total": 34.0,
+      "thermal_seconds": {
+        "0": 19
+      }
+    }
+  },
+  "comparison": {
+    "pass": true,
+    "n_ref_steps": 4,
+    "n_cpp_steps": 4,
+    "tokens_ok": 4,
+    "digests_ok": 4,
+    "count_ok": true,
+    "first_token_divergence_step": null,
+    "first_digest_divergence_step": null,
+    "rows": [
+      {
+        "step": 0,
+        "cpp_token": 271,
+        "py_token": 271,
+        "token_ok": true,
+        "cpp_digest": "a010ff0d9b5ff8871dbb069f894fb4adb1b8661f4b7541f80201da58bdcfff83",
+        "py_digest": "a010ff0d9b5ff8871dbb069f894fb4adb1b8661f4b7541f80201da58bdcfff83",
+        "digest_ok": true
+      },
+      {
+        "step": 1,
+        "cpp_token": 248068,
+        "py_token": 248068,
+        "token_ok": true,
+        "cpp_digest": "02a8690e31eca53f6bd06c53206a9570dca075afdd1e4e801dbad5c8067bfe87",
+        "py_digest": "02a8690e31eca53f6bd06c53206a9570dca075afdd1e4e801dbad5c8067bfe87",
+        "digest_ok": true
+      },
+      {
+        "step": 2,
+        "cpp_token": 271,
+        "py_token": 271,
+        "token_ok": true,
+        "cpp_digest": "5d802cf69a06ec21038276701178dee45ef56c2527dec21ea146e9512047a3c9",
+        "py_digest": "5d802cf69a06ec21038276701178dee45ef56c2527dec21ea146e9512047a3c9",
+        "digest_ok": true
+      },
+      {
+        "step": 3,
+        "cpp_token": 248069,
+        "py_token": 248069,
+        "token_ok": true,
+        "cpp_digest": "aa7633af2fc164383dbe432eaff32212de19631c30657736768ffddda1532c77",
+        "py_digest": "aa7633af2fc164383dbe432eaff32212de19631c30657736768ffddda1532c77",
+        "digest_ok": true
+      }
+    ],
+    "python_token_ids": [
+      271,
+      248068,
+      271,
+      248069
+    ],
+    "cpp_token_ids": [
+      271,
+      248068,
+      271,
+      248069
+    ],
+    "python_digests": [
+      "a010ff0d9b5ff8871dbb069f894fb4adb1b8661f4b7541f80201da58bdcfff83",
+      "02a8690e31eca53f6bd06c53206a9570dca075afdd1e4e801dbad5c8067bfe87",
+      "5d802cf69a06ec21038276701178dee45ef56c2527dec21ea146e9512047a3c9",
+      "aa7633af2fc164383dbe432eaff32212de19631c30657736768ffddda1532c77"
+    ],
+    "cpp_digests": [
+      "a010ff0d9b5ff8871dbb069f894fb4adb1b8661f4b7541f80201da58bdcfff83",
+      "02a8690e31eca53f6bd06c53206a9570dca075afdd1e4e801dbad5c8067bfe87",
+      "5d802cf69a06ec21038276701178dee45ef56c2527dec21ea146e9512047a3c9",
+      "aa7633af2fc164383dbe432eaff32212de19631c30657736768ffddda1532c77"
+    ]
+  }
+}

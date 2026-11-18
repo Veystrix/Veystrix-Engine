@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 
 
@@ -42,7 +43,9 @@ def ref_moe_block(x, route, scores, weights, group_size, bits):
     x4 = mx.expand_dims(x, (-2, -3))
     g = ref_projection(x4, weights["gw"], weights["gs"], weights["gb"], route, group_size, bits)
     u = ref_projection(x4, weights["uw"], weights["us"], weights["ub"], route, group_size, bits)
-    a = u * (g * mx.sigmoid(g))
+    # Production uses mlx-vlm swiglu = nn.silu(gate) * up, and nn.silu is a
+    # compiled/fused kernel in MLX 0.32.2 (not the unfused g*sigmoid(g)).
+    a = u * nn.silu(g)
     d = ref_projection(a, weights["dw"], weights["ds"], weights["db"], route, group_size, bits)
     d = mx.squeeze(d, axis=-2)
     return (d * scores[..., None]).sum(axis=-2)

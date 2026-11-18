@@ -84,12 +84,7 @@ mx::array hc_silu(const mx::array& x) {
         return {in[0] * mx::sigmoid(in[0])};
       },
       /*shapeless=*/true);
-  mx::array out = fn({x})[0];
-  // Force the fused silu kernel to complete before returning so the shared
-  // shapeless compiled graph is never invoked concurrently by MLX's lazy
-  // scheduler across the many layers (a nondeterminism source on gate (a)).
-  mx::eval(out);
-  return out;
+  return fn({x})[0];
 }
 
 mx::array weighted_combine(const mx::array& expert_out, const mx::array& scores) {

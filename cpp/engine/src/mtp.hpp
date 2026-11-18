@@ -16,6 +16,11 @@
 //                         None there, so attention is a dense 1-token softmax.
 //   * mtp_verify        : point-mass accept/reject + redraw, lossless.
 //
+// The LM head here is TIED to embed_tokens (tie_word_embeddings=True, the path
+// exercised by the synthetic golden vectors). For an untied checkpoint, add a
+// separate lm_head weight and use it in place of `w.emb` in the final matmul —
+// see mtp.py::forward, which branches on args.tie_word_embeddings.
+//
 // Everything is float32 and uses the same MLX 0.32.2 ops as Python, so the
 // tests compare raw bytes against vectors produced by the REAL Python modules
 // on a tiny synthetic config (tools/gen_mtp_vectors.py). No checkpoint needed.

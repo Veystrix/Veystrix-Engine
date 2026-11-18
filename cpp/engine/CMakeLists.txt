@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp src/kv_quant.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp src/kv_quant.cpp src/mtp.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -248,6 +248,13 @@ target_link_libraries(test_sampling PRIVATE veystrix_engine)
 set_target_properties(test_sampling PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# MTP foundation: draft head forward + verify/accept bit-exact parity.
+add_executable(test_mtp tests/test_mtp.cpp)
+target_include_directories(test_mtp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_mtp PRIVATE veystrix_engine)
+set_target_properties(test_mtp PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # GDN causal-conv1d decode chain bit-exact parity.
 add_executable(test_conv tests/test_conv.cpp)
 target_link_libraries(test_conv PRIVATE veystrix_engine)
@@ -300,6 +307,10 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors/cases.txt")
   add_test(NAME sampling COMMAND test_sampling
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mtp/config.json")
+  add_test(NAME mtp COMMAND test_mtp
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mtp")
 endif()
 add_test(NAME prefix_cache COMMAND test_prefix_cache)
 add_test(NAME model_adapter COMMAND test_model_adapter

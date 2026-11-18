@@ -17,9 +17,9 @@ mx::array hc_norm_one_centered(const mx::array& x, const mx::array& raw_weight,
   groups.push_back(hc_count);
   groups.push_back(hidden_size);
   mx::array w2d = mx::reshape(raw_weight, mx::Shape{hc_count, hidden_size});
-  // qsa_rms_norm already does: f32, rsqrt(mean(square)+eps), *(1+weight),
-  // reshape back and cast to the input dtype -- exactly Qwen4ExpRMSNorm.
-  return qsa_rms_norm(mx::reshape(x, groups), w2d, eps);
+  // qsa_rms_norm does: f32, rsqrt(mean(square)+eps), *(1+weight), cast back,
+  // all on the grouped [...,HC,H] view. Reshape back to the flat [...,HC*H].
+  return mx::reshape(qsa_rms_norm(mx::reshape(x, groups), w2d, eps), x.shape());
 }
 
 struct GatedResult {
@@ -48,16 +48,14 @@ GatedResult gated_residual_mtp(const mx::array& hyper_input,
   mx::array mixed_input = mx::mean(
       mx::multiply(mx::reshape(mix, groups), mx::reshape(normed, groups)), -2);
 
-  GatedResult out;
-  out.mixed_input = mixed_input;
   if (inject_w) {
     // injection = 2 * sigmoid(block_inject(normed) / hc_count)
     mx::array two = mx::array(2);  // int32 scalar
-    out.injection_weights =
-        mx::multiply(two, mx::sigmoid(mx::divide(
-                              linear(normed, Linear(*inject_w)), hc_arr)));
+    mx::array inj = mx::multiply(
+        two, mx::sigmoid(mx::divide(linear(normed, Linear(*inject_w)), hc_arr)));
+    return GatedResult{mixed_input, inj};
   }
-  return out;
+  return GatedResult{mixed_input, std::nullopt};
 }
 
 // Fold an injection (branch output broadcast over HC streams) back into the
@@ -183,10 +181,10 @@ mx::array mtp_fuse_inputs(const MTPConfig& cfg, const MTPWeights& w,
 mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
                             const mx::array& hidden_states,
                             const mx::array& next_token_ids) {
-  mx::array token_emb = linear(next_token_ids, Linear(w.emb));
-  // nn.Embedding lookup is a row gather, not a matmul: gather W[ids].
-  // (Corrected below: use mx::take on the embedding weight.)
-  token_emb = mx::take(w.emb, mx::astype(next_token_ids, mx::int32), -2);
+  // nn.Embedding lookup: gather embed_tokens.weight rows at next_token_ids.
+  // w.emb is [V,H]; take(..., axis=-2) with ids [B,S] yields [B,S,H].
+  mx::array token_emb =
+      mx::take(w.emb, mx::astype(next_token_ids, mx::int32), -2);
 
   mx::array fused = mtp_fuse_inputs(cfg, w, token_emb, hidden_states);
 
@@ -218,8 +216,11 @@ MTPVerifyResult mtp_verify(const std::vector<mx::array>& rows,
   mx::random::seed(seed);
   std::vector<int32_t> history(seen.begin(), seen.end());
 
-  auto draw_token = [&](const Distribution& dist) -> int32_t {
-    mx::array drawn = mx::random::categorical(dist.masked, -1);
+  // Draw one token from a (possibly overridden) masked row and remap through
+  // the top-k survivor ids, exactly like verify_point_mass's categorical.
+  auto draw_from = [](const Distribution& dist,
+                      const mx::array& masked) -> int32_t {
+    mx::array drawn = mx::random::categorical(masked, -1);
     mx::array token = dist.has_ids ? mx::take(dist.ids, drawn, -1) : drawn;
     mx::eval(token);
     return static_cast<int32_t>(
@@ -248,16 +249,16 @@ MTPVerifyResult mtp_verify(const std::vector<mx::array>& rows,
       continue;
     }
     // Rejected: redraw from the target with the draft token removed.
-    mx::array residual = mx::where(hit, mx::array(-std::numeric_limits<float>::infinity()),
-                                   dist.masked);
-    return MTPVerifyResult{static_cast<int>(index), draw_token(dist_with(residual, dist))};
+    mx::array residual = mx::where(
+        hit, mx::array(-std::numeric_limits<float>::infinity()), dist.masked);
+    return MTPVerifyResult{static_cast<int>(index), draw_from(dist, residual)};
   }
 
   // All drafts accepted: draw the next token from the final target row.
   Distribution final_dist =
       sampling_distribution(rows[drafts.size()], params, history);
   return MTPVerifyResult{static_cast<int>(drafts.size()),
-                         draw_token(final_dist)};
+                         draw_from(final_dist, final_dist.masked)};
 }
 
 }  // namespace veystrix::engine

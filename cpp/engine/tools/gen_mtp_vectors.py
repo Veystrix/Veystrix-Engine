@@ -132,7 +132,8 @@ def set_weights(module, rng: np.random.Generator, scale: float = 0.2) -> None:
 
 
 def save(d: Path, name: str, a: mx.array) -> None:
-    mx.save(str(d / f"{name}.npy"), mx.astype(a, mx.float32))
+    # Preserve dtype: weights are float32, next_tokens must stay int32.
+    mx.save(str(d / f"{name}.npy"), a)
 
 
 def emit_draft(out: Path) -> dict:

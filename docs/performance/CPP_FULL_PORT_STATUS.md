@@ -36,7 +36,7 @@ Branch `cpp-engine-qdense`, PR #3.
 | Expert pool policies (s3fifo/etc) | LRU default + alternatives | [TODO] C++ has LRU slot pool | NON-NUMERIC |
 | **Nemotron Mamba layer** | Mamba-2 mixer decode | [DONE-OFFLINE] bit-exact output+conv+ssm state vs real Python mixer | NUMERIC |
 | **Nemotron bf16 attention** | dense bf16 KV decode | [DONE-OFFLINE] bit-exact output+q/k/v+cache vs real StreamedAttention (INT8 path still TODO) | NUMERIC |
-| **Nemotron 52-layer loop (bf16 KV)** | full decode + final head | [DONE-VALIDATED] real 24 GB checkpoint: 4/4 tokens + 4/4 digests, 3/3 runs | mixed |
+| **Nemotron 52-layer loop (INT8 KV, production default)** | full decode + final head | [DONE-VALIDATED] real 24 GB checkpoint: 4/4 tokens + 4/4 digests, 3/3 runs; bf16 opt-in also validated | mixed |
 
 ## Nemotron port plan
 `docs/engineering/nemotron_mamba_port_plan.md` on `cpp-engine-qdense`:

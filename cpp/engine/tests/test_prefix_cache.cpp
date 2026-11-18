@@ -45,7 +45,13 @@ int main() {
   {
     auto g = GDNCacheState(randf({1,3,8}, seed, 1.f), randf({1,4,6,6}, seed, 1.f));
     QSACache q; q.index_keys = randf({1,5,4}, seed, 1.f); q.index_position_ids = randf({1,5}, seed, 10.f); q.offset = 5;
-    FullAttentionCache f; f.keys = randf({1,2,5,4}, seed, 1.f); f.values = randf({1,2,5,4}, seed, 1.f); f.offset = 5;
+    FullAttentionCache f;
+    f.keys = randf({1,2,5,4}, seed, 1.f);
+    // Non-contiguous transposed values (as in the real model's KV cache):
+    // regression test that capture materializes strided views contiguously.
+    mx::array vbase = randf({1,2,4,5}, seed, 1.f);
+    f.values = mx::transpose(vbase, {0,1,3,2});  // [1,2,5,4], strided
+    f.offset = 5;
     caches.emplace_back(DecoderLayerCache(std::move(g), std::move(q)), std::move(f));
   }
 

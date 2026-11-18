@@ -196,12 +196,15 @@ void dump_prefix_state(const std::vector<DecoderFullLayerCache>& caches,
     return sha256_hex(f.data<float>(), f.size() * sizeof(float));
   };
   for (int l = 0; l < n_layers; ++l) {
-    std::fprintf(stderr, "[PREFIXDIAG %s L%02d] rec=%s", tag, l,
-                 h(caches[l].base.gdn.recurrent_state).c_str());
+    std::fprintf(stderr, "[PREFIXDIAG %s L%02d] rec=%s conv=%s", tag, l,
+                 h(caches[l].base.gdn.recurrent_state).c_str(),
+                 h(caches[l].base.gdn.conv_state).c_str());
     if (l < (int)ple.size() && ple[l].conv_state.has_value())
       std::fprintf(stderr, " ple=%s", h(*ple[l].conv_state).c_str());
+    if (l < (int)ple.size() && ple[l].context.has_value())
+      std::fprintf(stderr, " ctx=%s", h(*ple[l].context).c_str());
     if (caches[l].full.keys.has_value())
-      std::fprintf(stderr, " fk=%s", h(*caches[l].full.keys).c_str());
+      std::fprintf(stderr, " fk=%s fv=%s off=%d", h(*caches[l].full.keys).c_str(), h(*caches[l].full.values).c_str(), caches[l].full.offset);
     std::fprintf(stderr, "\n");
   }
 }

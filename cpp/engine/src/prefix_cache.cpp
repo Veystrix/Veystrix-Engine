@@ -76,7 +76,10 @@ size_t dtype_bytes(mx::Dtype::Val v) {
 }
 
 TensorBlob to_blob(const mx::array& a) {
-  mx::eval(a);
+  // Force a contiguous materialization: cache tensors can be strided views
+  // (e.g. transposed KV), and raw-data memcpy requires contiguous storage.
+  mx::array ac = mx::contiguous(a);
+  mx::eval(ac);
   TensorBlob b;
   b.shape.assign(a.shape().begin(), a.shape().end());
   auto v = static_cast<mx::Dtype::Val>(a.dtype());
@@ -84,12 +87,12 @@ TensorBlob to_blob(const mx::array& a) {
   size_t n = a.size(), bytes = n * dtype_bytes(v);
   b.bytes.resize(bytes);
   switch (v) {
-    case mx::Dtype::Val::float32: std::memcpy(b.bytes.data(), a.data<float>(), bytes); break;
-    case mx::Dtype::Val::bfloat16: std::memcpy(b.bytes.data(), a.data<mx::bfloat16_t>(), bytes); break;
-    case mx::Dtype::Val::float16: std::memcpy(b.bytes.data(), a.data<mx::float16_t>(), bytes); break;
-    case mx::Dtype::Val::int32: std::memcpy(b.bytes.data(), a.data<int32_t>(), bytes); break;
-    case mx::Dtype::Val::uint32: std::memcpy(b.bytes.data(), a.data<uint32_t>(), bytes); break;
-    case mx::Dtype::Val::int64: std::memcpy(b.bytes.data(), a.data<int64_t>(), bytes); break;
+    case mx::Dtype::Val::float32: std::memcpy(b.bytes.data(), ac.data<float>(), bytes); break;
+    case mx::Dtype::Val::bfloat16: std::memcpy(b.bytes.data(), ac.data<mx::bfloat16_t>(), bytes); break;
+    case mx::Dtype::Val::float16: std::memcpy(b.bytes.data(), ac.data<mx::float16_t>(), bytes); break;
+    case mx::Dtype::Val::int32: std::memcpy(b.bytes.data(), ac.data<int32_t>(), bytes); break;
+    case mx::Dtype::Val::uint32: std::memcpy(b.bytes.data(), ac.data<uint32_t>(), bytes); break;
+    case mx::Dtype::Val::int64: std::memcpy(b.bytes.data(), ac.data<int64_t>(), bytes); break;
     default: throw std::runtime_error("prefix_cache: to_blob dtype");
   }
   return b;
@@ -103,14 +106,13 @@ mx::array from_blob(const TensorBlob& b) {
     throw std::runtime_error("prefix_cache: corrupt blob size");
   void* p = const_cast<uint8_t*>(b.bytes.data());
   mx::Shape shape(b.shape.begin(), b.shape.end());
-  auto dt = [&]() { return mx::Dtype(v, static_cast<uint8_t>(dtype_bytes(v))); };
   switch (v) {
-    case mx::Dtype::Val::float32: return mx::array(static_cast<float*>(p), shape, dt());
-    case mx::Dtype::Val::bfloat16: return mx::array(static_cast<mx::bfloat16_t*>(p), shape, dt());
-    case mx::Dtype::Val::float16: return mx::array(static_cast<mx::float16_t*>(p), shape, dt());
-    case mx::Dtype::Val::int32: return mx::array(static_cast<int32_t*>(p), shape, dt());
-    case mx::Dtype::Val::uint32: return mx::array(static_cast<uint32_t*>(p), shape, dt());
-    case mx::Dtype::Val::int64: return mx::array(static_cast<int64_t*>(p), shape, dt());
+    case mx::Dtype::Val::float32: return mx::array(static_cast<float*>(p), shape, mx::float32);
+    case mx::Dtype::Val::bfloat16: return mx::array(static_cast<mx::bfloat16_t*>(p), shape, mx::bfloat16);
+    case mx::Dtype::Val::float16: return mx::array(static_cast<mx::float16_t*>(p), shape, mx::float16);
+    case mx::Dtype::Val::int32: return mx::array(static_cast<int32_t*>(p), shape, mx::int32);
+    case mx::Dtype::Val::uint32: return mx::array(static_cast<uint32_t*>(p), shape, mx::uint32);
+    case mx::Dtype::Val::int64: return mx::array(static_cast<int64_t*>(p), shape, mx::int64);
     default: throw std::runtime_error("prefix_cache: from_blob dtype");
   }
 }
@@ -126,14 +128,13 @@ mx::array clone_blob(const TensorBlob& b) {
   std::memcpy(raw, b.bytes.data(), nbytes);
   auto deleter = [](void* p) { std::free(p); };
   mx::Shape shape(b.shape.begin(), b.shape.end());
-  auto dt = mx::Dtype(v, static_cast<uint8_t>(dtype_bytes(v)));
   switch (v) {
-    case mx::Dtype::Val::float32: return mx::array(static_cast<float*>(raw), shape, dt, deleter);
-    case mx::Dtype::Val::bfloat16: return mx::array(static_cast<mx::bfloat16_t*>(raw), shape, dt, deleter);
-    case mx::Dtype::Val::float16: return mx::array(static_cast<mx::float16_t*>(raw), shape, dt, deleter);
-    case mx::Dtype::Val::int32: return mx::array(static_cast<int32_t*>(raw), shape, dt, deleter);
-    case mx::Dtype::Val::uint32: return mx::array(static_cast<uint32_t*>(raw), shape, dt, deleter);
-    case mx::Dtype::Val::int64: return mx::array(static_cast<int64_t*>(raw), shape, dt, deleter);
+    case mx::Dtype::Val::float32: return mx::array(static_cast<float*>(raw), shape, mx::float32, deleter);
+    case mx::Dtype::Val::bfloat16: return mx::array(static_cast<mx::bfloat16_t*>(raw), shape, mx::bfloat16, deleter);
+    case mx::Dtype::Val::float16: return mx::array(static_cast<mx::float16_t*>(raw), shape, mx::float16, deleter);
+    case mx::Dtype::Val::int32: return mx::array(static_cast<int32_t*>(raw), shape, mx::int32, deleter);
+    case mx::Dtype::Val::uint32: return mx::array(static_cast<uint32_t*>(raw), shape, mx::uint32, deleter);
+    case mx::Dtype::Val::int64: return mx::array(static_cast<int64_t*>(raw), shape, mx::int64, deleter);
     default: throw std::runtime_error("prefix_cache: clone_blob dtype");
   }
 }
@@ -265,6 +266,7 @@ void prefix_save(const PrefixSnapshot& snap, const std::string& directory) {
     if (l.has_qsa) { write_blob(".qsa_keys", l.qsa_keys); write_blob(".qsa_pos", l.qsa_positions); }
     if (l.has_full) { write_blob(".full_keys", l.full_keys); write_blob(".full_vals", l.full_values); }
     if (l.has_ple) { write_blob(".ple_ctx", l.ple_context); write_blob(".ple_conv", l.ple_conv); }
+    { std::ofstream f(p + ".offsets"); f << l.full_offset << " " << l.qsa_offset << "\n"; }
   }
 }
 
@@ -308,6 +310,7 @@ PrefixSnapshot prefix_load(const std::string& directory,
     if (l.has_full) { read_blob(".full_keys", l.full_keys); read_blob(".full_vals", l.full_values); }
     l.has_ple = std::ifstream(p + ".ple_ctx").good();
     if (l.has_ple) { read_blob(".ple_ctx", l.ple_context); read_blob(".ple_conv", l.ple_conv); }
+    { std::ifstream f(p + ".offsets"); if (f) f >> l.full_offset >> l.qsa_offset; }
   }
   snap.has_logits = (has_logits != 0);
   if (snap.has_logits) {

@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -190,6 +190,11 @@ set_target_properties(test_qsa PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Extended (non-greedy) sampling bit-exact parity, incl. seeded categorical draw.
+add_executable(test_prefix_cache tests/test_prefix_cache.cpp)
+target_link_libraries(test_prefix_cache PRIVATE veystrix_engine)
+set_target_properties(test_prefix_cache PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 add_executable(test_sampling tests/test_sampling.cpp)
 target_link_libraries(test_sampling PRIVATE veystrix_engine)
 set_target_properties(test_sampling PROPERTIES
@@ -248,6 +253,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors/cases.txt")
   add_test(NAME sampling COMMAND test_sampling
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_vectors")
 endif()
+add_test(NAME prefix_cache COMMAND test_prefix_cache)
 add_test(NAME model_adapter COMMAND test_model_adapter
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_adapter_flat")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head/expected.npy")

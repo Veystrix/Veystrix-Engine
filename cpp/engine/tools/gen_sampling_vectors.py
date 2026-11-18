@@ -73,6 +73,12 @@ CASES = [
     dict(name="case9_dominant_nucleus", vocab=32, temperature=1.0, top_p=0.5,
          top_k=0, min_p=0.0, presence_penalty=0.0, seen=[], seed=20,
          data_seed=110),
+    # Exact INSTRUCT preset (0.7 / 0.80 / top_k=20 / min_p=0 / penalty=1.5)
+    # exercised together with a seen-token history so presence penalty,
+    # temperature scaling, top-k, top-p and the seeded draw all compose.
+    dict(name="case10_instruct_topk", vocab=96, temperature=0.7, top_p=0.80,
+         top_k=20, min_p=0.0, presence_penalty=1.5,
+         seen=[2, 7, 13, 31, 55, 80], seed=21, data_seed=111),
 ]
 
 

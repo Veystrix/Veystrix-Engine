@@ -200,9 +200,26 @@ GatedResult gated_residual_real(const mx::array& hyper_input,
   return GatedResult{mixed_input, std::nullopt};
 }
 
-// QSA decoder layer, fresh cache / one token -> dense softmax (indexer None).
+// MRoPE position ids [3, B, S] for a text-only draft step. Python builds
+// `position_ids = arange(offset, offset + L)`, expands axis 0 and tiles to 3
+// axes; all three axes therefore carry the same scalar position per token.
+mx::array draft_positions(int B, int S, int start) {
+  std::vector<int32_t> pos(static_cast<size_t>(3) * B * S);
+  for (int axis = 0; axis < 3; ++axis)
+    for (int b = 0; b < B; ++b)
+      for (int j = 0; j < S; ++j)
+        pos[(static_cast<size_t>(axis) * B + b) * S + j] =
+            static_cast<int32_t>(start + j);
+  return mx::array(pos.begin(), mx::Shape{3, B, S}, mx::int32);
+}
+
+// QSA decoder layer. Fresh cache -> dense softmax over the single token.
+// Prepopulated cache -> RoPE at cache.past_len and a dense softmax over past
+// keys + the current key; for key_len <= 2048 the QSA indexer returns None and
+// Python's mask is None (S=1), so dense is correct.
 mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
-                               const mx::array& x) {
+                               const mx::array& x,
+                               const MTPDraftCache& cache) {
   const int B = static_cast<int>(x.shape(0));
   const int S = static_cast<int>(x.shape(1));
   const int nH = cfg.n_heads, nKV = cfg.n_kv_heads, D = cfg.head_dim;
@@ -224,9 +241,8 @@ mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
   mx::array v = mx::transpose(mx::reshape(vproj, mx::Shape{B, S, nKV, D}),
                               {0, 2, 1, 3});
 
-  std::vector<int32_t> pos(static_cast<size_t>(3) * B * S,
-                           static_cast<int32_t>(cfg.position));
-  mx::array position_ids(pos.begin(), mx::Shape{3, B, S}, mx::int32);
+  const int start = cache.empty() ? cfg.position : cache.past_len;
+  mx::array position_ids = draft_positions(B, S, start);
   QSARotaryParams rp;
   rp.dim = static_cast<int>(D * cfg.partial_rotary_factor);
   rp.base = cfg.rope_base;
@@ -236,6 +252,16 @@ mx::array dense_attention_real(const MTPConfig& cfg, const MTPRealWeights& w,
   rp.max_position_embeddings = cfg.max_position_embeddings;
   q = qsa_apply_rope(q, position_ids, rp);
   k = qsa_apply_rope(k, position_ids, rp);
+
+  // Prepopulated cache: the past K/V are already RoPE-rotated at their own
+  // positions (Python stores them after rotary). Concatenate them ahead of the
+  // current key/value, exactly like QSAKVCache.update_and_fetch's returned
+  // keys[..., :offset, :] / values[..., :offset, :]. S=1 and no mask: the query
+  // attends densely to every past token plus itself.
+  if (!cache.empty()) {
+    k = mx::concatenate({*cache.past_keys, k}, 2);
+    v = mx::concatenate({*cache.past_values, v}, 2);
+  }
 
   const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
   mx::array out = mx::fast::scaled_dot_product_attention(
@@ -342,6 +368,26 @@ mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
 mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
                                   const mx::array& hidden_states,
                                   const mx::array& next_token_ids) {
+  // Legacy fresh-cache position-0 path: delegate with an empty cache so the
+  // math and bytes stay identical to the validated mtp-real regression.
+  return mtp_draft_forward_real(cfg, w, hidden_states, next_token_ids,
+                                MTPDraftCache{});
+}
+
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids,
+                                  const MTPDraftCache& cache) {
+  if (!cache.empty() &&
+      (!cache.past_keys.has_value() || !cache.past_values.has_value()))
+    throw std::invalid_argument(
+        "mtp_draft_forward_real: prepopulated cache needs past_keys and past_values");
+  if (!cache.empty()) {
+    const int expected = static_cast<int>(cache.past_keys->shape(2));
+    if (expected != cache.past_len)
+      throw std::invalid_argument(
+          "mtp_draft_forward_real: cache.past_len != past_keys.shape[2]");
+  }
   const int hc_hidden = cfg.hc_count * cfg.hidden_size;
   if (hidden_states.shape(hidden_states.shape().size() - 1) != hc_hidden)
     throw std::invalid_argument(
@@ -375,7 +421,7 @@ mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
   GatedResult ag = gated_residual_real(
       fused, w.attn_hc_norm, w.attn_down, w.attn_up, w.attn_inject,
       cfg.hc_count, cfg.hidden_size, cfg.eps);
-  mx::array attn_branch = dense_attention_real(cfg, w, ag.mixed_input);
+  mx::array attn_branch = dense_attention_real(cfg, w, ag.mixed_input, cache);
   mx::array h1 = inject_residual(fused, attn_branch, *ag.injection_weights);
 
   // mlp hyper-connection + SwitchGLU/shared expert + inject.

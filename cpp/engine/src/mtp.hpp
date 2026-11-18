@@ -10,10 +10,14 @@
 //   * mtp_fuse_inputs   : embedding+hidden fusion (the MTP-specific primitive).
 //   * mtp_draft_forward : one full draft step -- fusion -> one QSA decoder
 //                         layer -> hyper-connection mixer -> tied LM head.
-//                         Targets the FRESH-cache single-token draft step
-//                         (position 0), which is what mtp.make_cache() +
-//                         position_ids=None produce. The QSA indexer returns
-//                         None there, so attention is a dense 1-token softmax.
+//                         The FRESH-cache single-token draft step (position 0)
+//                         is the legacy path. The REAL-checkpoint path also
+//                         accepts a nonzero position + a PREPOPULATED QSA KV
+//                         cache (see MTPDraftCache / mtp_draft_forward_real):
+//                         RoPE is evaluated at cache.offset and attention is a
+//                         dense softmax over the past keys + the current token.
+//                         The QSA indexer returns None while key_len <= 2048,
+//                         so dense is correct for short contexts.
 //   * mtp_verify        : point-mass accept/reject + redraw, lossless.
 //
 // The LM head here is TIED to embed_tokens (tie_word_embeddings=True, the path
@@ -249,15 +253,48 @@ mx::array mtp_draft_forward(const MTPConfig& cfg, const MTPWeights& w,
                             const mx::array& hidden_states,
                             const mx::array& next_token_ids);
 
-// Full fresh-cache single-token draft step against the REAL checkpoint's MTP
-// sidecar (packed Q4 weights, one-centered norms, 512 streamed experts and an
-// untied lm_head). Geometry/weights are the exact shard-22 tensors; the caller
+// The dense attention state consumed by one MTP draft step when the QSA cache
+// is prepopulated. Mirrors the subset of Python's QSAKVCache that the head's
+// single-layer attention reads after `_prepare_projected_qkv` has run:
+//
+//   past_keys / past_values : [B, n_kv_heads, past_len, head_dim], already
+//       RoPE-rotated at their own positions (Python stores keys AFTER rotary
+//       via `cache.update_and_fetch(keys, values)`).
+//   past_len : == cache.offset. It is both the number of cached tokens and the
+//       RoPE start position for the current token (Python builds
+//       `position_ids = arange(cache.offset, cache.offset + L)` when
+//       position_ids=None). This is the nonzero "draft position".
+//
+// An empty cache reproduces the legacy fresh-cache S=1 position-0 path. Indexer
+// state (index_keys / index_position_ids) is deliberately NOT carried: while
+// `key_len <= 2048` the QSA indexer returns None and the mask is None, so dense
+// attention is bit-correct (see docs/engineering/mtp_full_parity.md). A sparse
+// indexer mask for `past_len >= 2048` is out of scope for this path.
+struct MTPDraftCache {
+  std::optional<mx::array> past_keys;
+  std::optional<mx::array> past_values;
+  int past_len = 0;
+  bool empty() const { return past_len == 0 && !past_keys.has_value(); }
+};
+
+// Full single-token draft step against the REAL checkpoint's MTP sidecar
+// (packed Q4 weights, one-centered norms, 512 streamed experts and an untied
+// lm_head). Geometry/weights are the exact shard-22 tensors; the caller
 // supplies the same hidden stream and token ids as Python's
-// `mtp.forward(language, hidden, ids, mtp.make_cache(language))`.
+// `mtp.forward(language, hidden, ids, mtp_cache)`.
 // Returns draft logits [B, S, V].
+//
+// The 4-argument overload is the legacy fresh-cache path (position 0, no past
+// KV) and is kept byte-identical for regression. The 5-argument overload takes
+// a prepopulated cache: RoPE uses `cache.past_len` and attention runs densely
+// over `past_keys/past_values` concatenated with the current key/value.
 mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
                                   const mx::array& hidden_states,
                                   const mx::array& next_token_ids);
+mx::array mtp_draft_forward_real(const MTPConfig& cfg, const MTPRealWeights& w,
+                                  const mx::array& hidden_states,
+                                  const mx::array& next_token_ids,
+                                  const MTPDraftCache& cache);
 
 // Result of mtp_verify, mirroring Sampler.verify_point_mass's return tuple.
 struct MTPVerifyResult {

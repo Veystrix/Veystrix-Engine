@@ -1,0 +1,14 @@
+{
+  "dir": "case_b2_bf16",
+  "batch": 2,
+  "H": 8,
+  "Dh": 32,
+  "groups": 2,
+  "Ds": 32,
+  "T": "mlx.core.bfloat16",
+  "U": "mlx.core.float32",
+  "tmin": "0.001",
+  "tmax": "100.0",
+  "seed": 22,
+  "mlx_version": "0.32.2"
+}

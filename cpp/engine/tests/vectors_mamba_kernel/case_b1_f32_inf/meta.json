@@ -1,0 +1,14 @@
+{
+  "dir": "case_b1_f32_inf",
+  "batch": 1,
+  "H": 8,
+  "Dh": 32,
+  "groups": 2,
+  "Ds": 32,
+  "T": "mlx.core.float32",
+  "U": "mlx.core.float32",
+  "tmin": "0.0",
+  "tmax": "inf",
+  "seed": 44,
+  "mlx_version": "0.32.2"
+}

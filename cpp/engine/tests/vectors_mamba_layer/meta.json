@@ -1,0 +1,231 @@
+{
+  "config": {
+    "batch": 1,
+    "hidden": 256,
+    "H": 16,
+    "Dh": 64,
+    "G": 2,
+    "Ds": 128,
+    "K": 4,
+    "inter": 1024,
+    "conv_dim": 1536,
+    "group_size": 512,
+    "eps": 1e-05,
+    "tmin": 0.001,
+    "tmax": 100.0,
+    "use_conv_bias": true
+  },
+  "seed": 20261118,
+  "mlx_version": "0.32.2",
+  "x": {
+    "shape": [
+      1,
+      1,
+      256
+    ],
+    "dtype": "bfloat16"
+  },
+  "w_in": {
+    "shape": [
+      2576,
+      256
+    ],
+    "dtype": "bfloat16"
+  },
+  "conv_w": {
+    "shape": [
+      1536,
+      4,
+      1
+    ],
+    "dtype": "bfloat16"
+  },
+  "conv_b": {
+    "shape": [
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "A_log": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "dt_bias": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "D": {
+    "shape": [
+      16
+    ],
+    "dtype": "float32"
+  },
+  "norm_w": {
+    "shape": [
+      1024
+    ],
+    "dtype": "bfloat16"
+  },
+  "w_out": {
+    "shape": [
+      256,
+      1024
+    ],
+    "dtype": "bfloat16"
+  },
+  "conv_state": {
+    "shape": [
+      1,
+      3,
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "ssm_state": {
+    "shape": [
+      1,
+      16,
+      64,
+      128
+    ],
+    "dtype": "float32"
+  },
+  "i_projected": {
+    "shape": [
+      1,
+      1,
+      2576
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_gate": {
+    "shape": [
+      1,
+      1,
+      1024
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_conv_input": {
+    "shape": [
+      1,
+      1,
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_dt_raw": {
+    "shape": [
+      1,
+      1,
+      16
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_padded": {
+    "shape": [
+      1,
+      4,
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_conv_out": {
+    "shape": [
+      1,
+      1,
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_hidden_ssm": {
+    "shape": [
+      1,
+      1,
+      16,
+      64
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_B": {
+    "shape": [
+      1,
+      1,
+      2,
+      128
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_C": {
+    "shape": [
+      1,
+      1,
+      2,
+      128
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_dt_post": {
+    "shape": [
+      1,
+      1,
+      16
+    ],
+    "dtype": "float32"
+  },
+  "i_y": {
+    "shape": [
+      1,
+      1,
+      16,
+      64
+    ],
+    "dtype": "bfloat16"
+  },
+  "i_state": {
+    "shape": [
+      1,
+      16,
+      64,
+      128
+    ],
+    "dtype": "float32"
+  },
+  "i_normed": {
+    "shape": [
+      1,
+      1,
+      1024
+    ],
+    "dtype": "bfloat16"
+  },
+  "expected_output": {
+    "shape": [
+      1,
+      1,
+      256
+    ],
+    "dtype": "bfloat16"
+  },
+  "expected_conv_state": {
+    "shape": [
+      1,
+      3,
+      1536
+    ],
+    "dtype": "bfloat16"
+  },
+  "expected_ssm_state": {
+    "shape": [
+      1,
+      16,
+      64,
+      128
+    ],
+    "dtype": "float32"
+  }
+}

@@ -200,6 +200,12 @@ std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
                                                const mx::array& b,
                                                const mx::array& dt_bias);
 
+// Mamba/SSM time step (mlx_lm.models.ssm.compute_dt, ssm.py:7-11):
+//   dt = clip(softplus(dt_raw.astype(f32) + dt_bias), tmin, tmax)
+// softplus == logaddexp(x, 0); the operand is f32 so no bf16-promotion hazard.
+mx::array compute_dt(const mx::array& dt_raw, const mx::array& dt_bias,
+                     float tmin, float tmax);
+
 // Qwen4 gated residual / hyper-connection (Qwen4ExpGatedResidual.__call__).
 // Returns (mixed_input, hyper_input, injection_weights). The hc_norm is applied
 // with the one-centered convention via rms_norm with group_size (passed as the

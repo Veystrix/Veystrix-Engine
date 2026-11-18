@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -58,6 +58,13 @@ add_executable(test_mamba_kernel tests/test_mamba_kernel.cpp)
 target_include_directories(test_mamba_kernel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(test_mamba_kernel PRIVATE veystrix_engine)
 set_target_properties(test_mamba_kernel PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
+# Full Mamba-2 layer bit-exact parity (production decode path).
+add_executable(test_mamba_layer tests/test_mamba_layer.cpp)
+target_include_directories(test_mamba_layer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_mamba_layer PRIVATE veystrix_engine)
+set_target_properties(test_mamba_layer PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # Fused-Metal RoPE (0 ULP vs production) + GDN prefill S>1.
@@ -274,6 +281,10 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mamba_kernel/cases.json")
   add_test(NAME mamba_kernel COMMAND test_mamba_kernel
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mamba_kernel")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mamba_layer/meta.json")
+  add_test(NAME mamba_layer COMMAND test_mamba_layer
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_mamba_layer")
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_qsa_full/cases.json")
   add_test(NAME qsa_full COMMAND test_qsa_full

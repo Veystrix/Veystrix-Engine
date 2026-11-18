@@ -206,6 +206,19 @@ std::pair<mx::array, mx::array> compute_g_beta(const mx::array& A_log,
   return {g, mx::sigmoid(b)};
 }
 
+mx::array compute_dt(const mx::array& dt_raw, const mx::array& dt_bias,
+                     float tmin, float tmax) {
+  // mlx_lm.models.ssm.compute_dt (ssm.py:7-11), @mx.compile'd in Python:
+  //   dt = dt.astype(f32); dt = nn.softplus(dt + dt_bias)
+  //   return mx.clip(dt, time_step_limit[0], time_step_limit[1])
+  // nn.softplus(x) == mx.logaddexp(x, 0). The operand is f32 here, so the
+  // same-dtype-zero promotion hazard that affects bf16 compute_g_beta does not
+  // apply (plan risk 6).
+  mx::array dt = mx::astype(dt_raw, mx::float32);
+  dt = mx::logaddexp(dt + dt_bias, mx::array(0.0f));
+  return mx::clip(dt, mx::array(tmin), mx::array(tmax));
+}
+
 GatedResidualOutput gated_residual(
     const mx::array& hyper_input,
     const mx::array& norm_weight,

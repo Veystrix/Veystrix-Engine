@@ -68,6 +68,23 @@ deferred by the owner; requires the engine full port first.
   sessions bit-identical to solo (12 digests), guard clean. Artifact:
   `results/flashnext/ms-real-parity-integrated-final/verdict.json`.
 
+## MTP production-path gaps CLOSED 2026-11-18 [measured]
+- **Fused Metal RoPE**: MTP draft head now calls `rope_apply_fused` (verbatim
+  Metal kernel) by default; `VEYSTRIX_CPP_MTP_EAGER_ROPE=1` keeps eager path.
+  Bit-exact vs Python PRODUCTION fused kernel at positions 7/11: 0/248320 diff,
+  SHA match (`39a6478d...` / `b7958a87...`). Eager path also 0/248320. The old
+  ~225220/248320 (~1 ULP) gap is eliminated. Doc + tool:
+  `docs/engineering/mtp_fused_rope_parity.md`,
+  `check_mtp_fused_rope_parity.py`.
+- **Sparse indexer mask (past_len>=2048)**: MTP draft attention calls
+  `qsa_full_indexer` + masked SDPA; one-centered indexer norm gain conversion.
+  Bit-exact vs Python at past_len=2052: 0/6144 SDPA, 0/2053 mask, 0/248320
+  logits (SHA `770afcbe...`); synthetic past_len=24 also 0 diffs. Dense/short
+  regressions preserved. Doc + tool: `docs/engineering/mtp_sparse_indexer.md`,
+  `check_mtp_sparse_parity.py`.
+- Final merged-tree validation: Qwen gate 3/3, Nemotron INT8 gate 3/3, ctests
+  37/38, multi-session N=3 end-to-end PASS (`ms-real-parity-merged-final`).
+
 ## Blocking decisions / owner inputs
 - [BLOCKED] Dropping Python: will do only after the full matrix above is validated.
 - [BLOCKED] Nemotron config.json fields (head dims, ssm_state_size, time_step_limit,

@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -14,6 +15,17 @@
 #include "rope_fused_apply.hpp"  // rope_apply_fused (bit-exact fused Metal MRoPE)
 
 namespace veystrix::engine {
+
+// Opt-in full-attention intermediate dump (for nondeterminism localization).
+// Set REALGEN_DUMP_FA=1 and REALGEN_DUMP_FA_LAYER=<layer> to capture one layer's
+// q/k/v internals into the vectors below (read by the tool after prefill).
+struct FADebug {
+  bool enabled = false;
+  int layer = -1;
+  int current_layer = -1;
+  std::optional<mx::array> qproj, qnorm, qrope, krope, sdpa;
+};
+FADebug g_fa_debug;
 
 namespace {
 
@@ -31,6 +43,7 @@ FullAttentionOutput full_attention_dense_batched(
   const int S = static_cast<int>(x.shape(1));
   const int Hq = cfg.n_heads, Hkv = cfg.kv_heads, D = cfg.head_dim;
 
+  bool fa_cap = g_fa_debug.enabled && g_fa_debug.current_layer == g_fa_debug.layer;
   mx::array qproj = linear(x, w.q_w);
   mx::array kproj = linear(x, w.k_w);
   mx::array vproj = linear(x, w.v_w);
@@ -57,8 +70,17 @@ FullAttentionOutput full_attention_dense_batched(
   mx::array v = mx::transpose(
       mx::reshape(vproj, mx::Shape{B, S, Hkv, D}), {0, 2, 1, 3});
 
+  if (fa_cap) {
+    g_fa_debug.qproj = qproj;
+    g_fa_debug.qnorm = q;  // post q_norm, pre-rope
+  }
+
   q = rope_apply_fused(q, position_ids, cfg.rope);
   k = rope_apply_fused(k, position_ids, cfg.rope);
+  if (fa_cap) {
+    g_fa_debug.qrope = q;
+    g_fa_debug.krope = k;
+  }
 
   if (!cache.keys.has_value()) {
     cache.keys = k;
@@ -72,6 +94,7 @@ FullAttentionOutput full_attention_dense_batched(
   mx::array out = mx::fast::scaled_dot_product_attention(
       q, *cache.keys, *cache.values, scale, /*mask_mode=*/"causal",
       /*mask_arr=*/std::nullopt, /*sinks=*/std::nullopt);
+  if (fa_cap) g_fa_debug.sdpa = out;  // [B,Hq,S,D]
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), mx::Shape{B, S, Hq * D});
   out = linear(out * mx::sigmoid(gate), w.o_w);
 
@@ -131,11 +154,18 @@ mx::array run_prefill_batched(
       static_cast<int>(caches.size()) != cfg.n_layers)
     throw std::runtime_error("run_prefill_batched: layers/caches size mismatch");
 
+  if (const char* e = std::getenv("REALGEN_DUMP_FA")) {
+    g_fa_debug.enabled = true;
+    const char* ly = std::getenv("REALGEN_DUMP_FA_LAYER");
+    g_fa_debug.layer = ly ? std::atoi(ly) : -1;
+  }
+
   // 1. embed [1,S,H] -> tile to [1,S,hc*H], exactly like
   //    Qwen4ExpModel.__call__ (language.py:804-807) and the tool's run_step.
   mx::array hidden = mx::tile(embed(input_ids), std::vector<int>{1, 1, hc});
 
   for (int l = 0; l < cfg.n_layers; ++l) {
+    g_fa_debug.current_layer = l;
     BatchedLayer& L = layers[l];
 
     // 2. PLE (upstream of the attention block; S>1, no mask for one prompt).
@@ -254,6 +284,19 @@ mx::array run_prefill_batched(
     pr = true;
   }
   return mx::astype(logits_bf, mx::float32);
+}
+
+FADump get_fa_dump() {
+  FADump d;
+  d.ok = g_fa_debug.enabled;
+  if (d.ok) {
+    d.qproj = g_fa_debug.qproj;
+    d.qnorm = g_fa_debug.qnorm;
+    d.qrope = g_fa_debug.qrope;
+    d.krope = g_fa_debug.krope;
+    d.sdpa = g_fa_debug.sdpa;
+  }
+  return d;
 }
 
 }  // namespace veystrix::engine

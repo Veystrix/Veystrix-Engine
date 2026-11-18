@@ -132,6 +132,12 @@ struct BatchedPrefillDebug {
   std::vector<mx::array> moe2d;               // final MoE branch [S,H] per layer
   std::vector<mx::array> mlp_inj;             // MLP injection weights [S,hc] per layer
   std::vector<mx::array> gdn_in;              // attention gated-residual mixed_input [S,H] per layer
+  // Full-attention internals (only populated for full-attn layers; empty otherwise)
+  std::vector<mx::array> fa_qproj;            // [B,S,Hq*2D]
+  std::vector<mx::array> fa_qnorm;            // q after q_norm (pre-rope)
+  std::vector<mx::array> fa_qrope;            // q after rope
+  std::vector<mx::array> fa_krope;            // k after rope
+  std::vector<mx::array> fa_sdpa;             // SDPA output pre o_proj
 };
 
 // Feed all S prompt tokens through every layer in ONE call and return the
@@ -159,5 +165,13 @@ mx::array run_prefill_batched(
     std::vector<DecoderFullLayerCache>& caches,
     int group_size, int bits,
     BatchedPrefillDebug* debug = nullptr);
+
+// Opt-in full-attention intermediate dump (REALGEN_DUMP_FA). Captures one
+// layer's q_proj / q_norm / q_rope / k_rope / sdpa tensors for race diagnosis.
+struct FADump {
+  bool ok = false;
+  std::optional<mx::array> qproj, qnorm, qrope, krope, sdpa;
+};
+FADump get_fa_dump();
 
 }  // namespace veystrix::engine

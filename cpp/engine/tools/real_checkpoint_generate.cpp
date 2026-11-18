@@ -290,7 +290,8 @@ std::vector<int> split_ints(const std::string& s) {
 class DenseLoader {
  public:
   DenseLoader(const std::string& dir, const Config& cfg, int group_size, int bits)
-      : dir_(dir), group_size_(group_size), bits_(bits) {
+      : dir_(dir), group_size_(group_size), bits_(bits),
+        lazy_dense_(std::getenv("VEYSTRIX_CPP_LAZY_DENSE") != nullptr) {
     for (const auto& [key, shard] : cfg) {
       if (key.rfind("shard.", 0) == 0) shard_of_[key.substr(6)] = shard;
     }
@@ -310,6 +311,14 @@ class DenseLoader {
     auto tit = sit->second.find(name);
     if (tit == sit->second.end())
       throw std::runtime_error("tensor missing from shard: " + name);
+    // Python evaluates ALL model parameters right after loading
+    // (models/flashnext/loader.py: mx.eval(model.parameters())). C++ used to
+    // return the lazy disk-read array here, so the read was deferred into the
+    // prefill GPU graph and raced the background IO thread (nondeterministic
+    // gate (b), large ~1.89 maxdiff at the first full-attention layer L11).
+    // Materialize each requested tensor now, matching Python's load pattern.
+    // A/B opt-out: VEYSTRIX_CPP_LAZY_DENSE=1 restores the old lazy behaviour.
+    if (!lazy_dense_) mx::eval(tit->second);
     return tit->second;
   }
 
@@ -436,14 +445,20 @@ class DenseLoader {
   }
 
  private:
-  static mx::array as_bf16(mx::array a) {
-    if (static_cast<mx::Dtype::Val>(a.dtype()) == mx::uint16)
-      return mx::view(a, mx::bfloat16);
+  mx::array as_bf16(mx::array a) const {
+    if (static_cast<mx::Dtype::Val>(a.dtype()) == mx::uint16) {
+      mx::array v = mx::view(a, mx::bfloat16);
+      // Resolve the byte reinterpret now so scales/biases are materialized at
+      // load time (same rationale as raw()); a view's source is already eval'd.
+      if (!lazy_dense_) mx::eval(v);
+      return v;
+    }
     return a;
   }
 
   std::string dir_;
   int group_size_, bits_;
+  bool lazy_dense_;
   std::map<std::string, std::string> shard_of_;
   std::map<std::string, std::unordered_map<std::string, mx::array>> shards_;
   std::map<std::string, dmanifest::MInfo> manifest_;
@@ -1432,6 +1447,23 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
           mx::eval(gf);
           std::snprintf(pth, sizeof(pth), "%s.gdnin.L%02zu.f32", hd, l);
           FILE* gfp=fopen(pth,"wb"); if(gfp){fwrite(gf.data<float>(),sizeof(float),gf.size(),gfp);fclose(gfp);}
+        }
+      }
+    }
+    if (std::getenv("REALGEN_DUMP_FA")) {
+      const char* fad = std::getenv("REALGEN_DUMP_FA_DIR");
+      if (fad) {
+        FADump f = get_fa_dump();
+        if (f.ok) {
+          const char* names[] = {"qproj", "qnorm", "qrope", "krope", "sdpa"};
+          const std::optional<mx::array> arrs[] = {f.qproj, f.qnorm, f.qrope, f.krope, f.sdpa};
+          for (int i = 0; i < 5; ++i) {
+            if (!arrs[i]) continue;
+            mx::array af = mx::reshape(mx::astype(*arrs[i], mx::float32), mx::Shape{-1});
+            mx::eval(af);
+            char pth[512]; std::snprintf(pth, sizeof(pth), "%s/%s.f32", fad, names[i]);
+            FILE* fp=fopen(pth,"wb"); if(fp){fwrite(af.data<float>(),sizeof(float),af.size(),fp);fclose(fp);}
+          }
         }
       }
     }

@@ -159,7 +159,12 @@ mx::array moe_block_relu2(const mx::array& x, const mx::array& route,
   // no SwiGLU gate. Scales/biases are Q4 affine (G64 for Lightning).
   mx::array x4 = mx::expand_dims(x, std::vector<int>{-2, -3});
   mx::array u = q4_projection(x4, up, route, 64, 4);
-  mx::array a = mx::square(mx::maximum(u, mx::array(0.0f)));  // relu2
+  // Python's nn.relu2 is `mx.square(mx.maximum(x, 0))`: a WEAK scalar zero, so
+  // a bf16 `u` stays bf16. Using a strongly-typed f32 array here would promote
+  // bf16 -> f32 and break bit-exactness (first divergent layer in the real
+  // Nemotron checkpoint). Mirror the input dtype.
+  mx::array a = mx::square(
+      mx::maximum(u, mx::astype(mx::array(0.0f), u.dtype())));  // relu2
   mx::array d = q4_projection(a, down, route, 64, 4);
   d = mx::squeeze(d, -2);
   return weighted_combine(d, scores);

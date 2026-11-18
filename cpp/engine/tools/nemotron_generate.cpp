@@ -456,23 +456,32 @@ struct NemotronRoute {
 };
 NemotronRoute nemotron_route(const mx::array& x, const MoeLayer& w, int top_k,
                              float routed_scale) {
+  // Gate logits are computed outside @mx.compile in Python (MoEGate.__call__),
+  // so keep the dense matmul unfused here too. Everything from sigmoid through
+  // the score normalization MUST be one compiled graph: Python's
+  // group_expert_select is @mx.compile and the fused kernel differs by ~1 ULP
+  // from the eager op chain (enough to change bf16 routed-expert outputs).
   mx::array gates = linear(x, w.gate);  // [1,1,E] bf16
-  mx::array orig = mx::sigmoid(mx::astype(gates, mx::float32));
-  mx::array scores = orig + w.gate_bias;
-  int last = static_cast<int>(scores.shape().size()) - 1;
-  mx::array inds_all = mx::argpartition(mx::negative(scores), top_k - 1, last);
-  mx::Shape start(scores.shape().size(), 0), stop;
-  for (size_t d = 0; d < scores.shape().size(); ++d)
-    stop.push_back(inds_all.shape(d));
-  start[last] = 0;
-  stop[last] = top_k;
-  mx::array inds = mx::slice(inds_all, start, stop);
-  mx::array top = mx::take_along_axis(orig, inds, last);
-  mx::array denom = mx::sum(top, last, /*keepdims=*/true) + mx::array(1e-20f);
-  top = top / denom;
-  top = top * mx::array(routed_scale);
-  return {mx::reshape(inds, mx::Shape{1, top_k}),
-          mx::reshape(top, mx::Shape{1, top_k})};
+  const int last = static_cast<int>(gates.shape().size()) - 1;
+  mx::array slots = mx::reshape(mx::arange(0, top_k, 1, mx::int32),
+                                mx::Shape{1, 1, top_k});  // static shape, same ndim
+  static const float cached_scale = routed_scale;
+  static auto fn = mx::compile(
+      [last, slots, k = top_k](const std::vector<mx::array>& in) -> std::vector<mx::array> {
+        mx::array orig = mx::sigmoid(mx::astype(in[0], mx::float32));
+        mx::array scores = orig + in[1];
+        mx::array inds_all = mx::argpartition(mx::negative(scores), k - 1, last);
+        mx::array inds = mx::take_along_axis(inds_all, slots, last);
+        mx::array top = mx::take_along_axis(orig, inds, last);
+        mx::array denom = mx::sum(top, last, /*keepdims=*/true) + mx::array(1e-20f);
+        top = top / denom;
+        top = top * mx::array(cached_scale);
+        return {inds, top};
+      },
+      /*shapeless=*/true);
+  std::vector<mx::array> out = fn({gates, w.gate_bias});
+  return {mx::reshape(out[0], mx::Shape{1, top_k}),
+          mx::reshape(out[1], mx::Shape{1, top_k})};
 }
 
 // --------------------------------------------------------------------------- //
@@ -666,7 +675,10 @@ mx::array run_step(Model& m, ExpertReader& er, int token) {
 
       // Shared expert: down_proj(relu2(up_proj(x))).
       mx::array su = linear(xn, ml.shared_up);
-      mx::array sa = mx::square(mx::maximum(su, mx::array(0.0f)));
+      // Mirror Python nn.relu2 (weak scalar 0): keep su's dtype (bf16), do
+      // not promote bf16 -> f32 with a strongly-typed f32 zero array.
+      mx::array sa = mx::square(
+          mx::maximum(su, mx::astype(mx::array(0.0f), su.dtype())));
       mx::array sd = linear(sa, ml.shared_down);
       delta = routed + sd;
     }

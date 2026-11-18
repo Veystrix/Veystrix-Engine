@@ -21,9 +21,19 @@ namespace {
 // The operand here is already f32, so no bf16-promotion hazard applies.
 mx::array compute_dt(const mx::array& dt_raw, const mx::array& dt_bias,
                      float tmin, float tmax) {
-  mx::array dt = mx::astype(dt_raw, mx::float32);
-  dt = mx::logaddexp(dt + dt_bias, mx::array(0.0f));
-  return mx::clip(dt, mx::array(tmin), mx::array(tmax));
+  // Python's mlx_lm compute_dt is @mx.compile around nn.softplus, which is
+  // itself @mx.compile(shapeless=True). The fused kernel differs by ~1 ULP
+  // from the unfused logaddexp/clip chain; compile the SAME graph so the real
+  // decode is bit-identical (this only surfaces after several mamba steps).
+  static auto fn = mx::compile(
+      [](const std::vector<mx::array>& in) -> std::vector<mx::array> {
+        mx::array dt = mx::astype(in[0], mx::float32);
+        dt = mx::logaddexp(dt + in[1], mx::array(0.0f));
+        dt = mx::clip(dt, in[2], in[3]);
+        return {dt};
+      },
+      /*shapeless=*/true);
+  return fn({dt_raw, dt_bias, mx::array(tmin), mx::array(tmax)})[0];
 }
 
 // NON-BIT-EXACT ops reference, used only when Metal is unavailable. It expresses

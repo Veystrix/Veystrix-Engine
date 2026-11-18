@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp src/kv_quant.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -211,6 +211,18 @@ target_link_libraries(test_final_head PRIVATE veystrix_engine)
 set_target_properties(test_final_head PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
+# Cooperative single-thread decode scheduler: interleaved == solo (bit-exact).
+add_executable(test_cooperative_decode tests/test_cooperative_decode.cpp)
+target_include_directories(test_cooperative_decode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME cooperative_decode COMMAND test_cooperative_decode)
+
+# KV tier quantization primitives (affine INT4/INT8 + tiered4 split) parity.
+add_executable(test_kv_quant tests/test_kv_quant.cpp)
+target_include_directories(test_kv_quant PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_kv_quant PRIVATE veystrix_engine)
+set_target_properties(test_kv_quant PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+
 # Model-agnostic adapter config verification (Qwen + Nemotron + future).
 add_executable(test_model_adapter tests/test_model_adapter.cpp)
 target_include_directories(test_model_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -295,6 +307,10 @@ add_test(NAME model_adapter COMMAND test_model_adapter
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head/expected.npy")
   add_test(NAME final_head COMMAND test_final_head
            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_final_head")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_kv_quant/meta.json")
+  add_test(NAME kv_quant COMMAND test_kv_quant
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_kv_quant")
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_nemo_attention/meta.json")
   add_test(NAME nemo_attention COMMAND test_nemo_attention

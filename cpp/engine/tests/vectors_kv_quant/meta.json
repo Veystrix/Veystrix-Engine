@@ -1,0 +1,16 @@
+{
+  "seed": 20261118,
+  "group_size": 64,
+  "device": "cpu",
+  "mlx_version": "0.32.2",
+  "sources": [
+    "models/flashnext/quantized_kv.py",
+    "models/flashnext/mixed_kv.py"
+  ],
+  "cases": [
+    "affine4",
+    "affine8",
+    "affine4_wide",
+    "tiered4"
+  ]
+}

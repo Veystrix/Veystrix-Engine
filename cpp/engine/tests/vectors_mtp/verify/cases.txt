@@ -1,0 +1,11 @@
+case0_accept_all
+case1_reject_first
+case2_reject_later
+case3_point_mass
+case4_topk
+case5_topp_minp
+case6_presence
+case7_argmax_chain
+case8_argmax_topk
+case9_argmax_presence
+case10_peaked_chain

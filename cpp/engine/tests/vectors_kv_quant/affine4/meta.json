@@ -1,0 +1,76 @@
+{
+  "kind": "affine",
+  "name": "affine4",
+  "seed": 20261118,
+  "shape": [
+    1,
+    2,
+    4,
+    128
+  ],
+  "group_size": 64,
+  "bits": 4,
+  "input_dtype": "mlx.core.bfloat16",
+  "packed_dtype": "mlx.core.uint32",
+  "scales_dtype": "mlx.core.bfloat16",
+  "biases_dtype": "mlx.core.bfloat16",
+  "dequant_dtype": "mlx.core.bfloat16",
+  "cache_cross_check": "AffineQuantizedQSAKVCache.dequantize() bit-identical",
+  "arrays": [
+    {
+      "name": "x",
+      "shape": [
+        1,
+        2,
+        4,
+        128
+      ],
+      "dtype": "mlx.core.bfloat16",
+      "sha256": "0b0d225b4b08bbc79da5ff32afcd74c78a2e0a48dd5c9599134a762b4d1fc9de"
+    },
+    {
+      "name": "packed",
+      "shape": [
+        1,
+        2,
+        4,
+        16
+      ],
+      "dtype": "mlx.core.uint32",
+      "sha256": "8404641319b2b2b35b471158e0339c8793792e7102495b8a82f72a8043289fe6"
+    },
+    {
+      "name": "scales",
+      "shape": [
+        1,
+        2,
+        4,
+        2
+      ],
+      "dtype": "mlx.core.bfloat16",
+      "sha256": "470410d4a08dce3c0abd1bddde6360e64c360ac3cc82b00ad453326f454f5f32"
+    },
+    {
+      "name": "biases",
+      "shape": [
+        1,
+        2,
+        4,
+        2
+      ],
+      "dtype": "mlx.core.bfloat16",
+      "sha256": "a524a2e0731c4331c221c31198bebf7acd149a5ddc58d18ab67feb1f52349256"
+    },
+    {
+      "name": "dequant",
+      "shape": [
+        1,
+        2,
+        4,
+        128
+      ],
+      "dtype": "mlx.core.bfloat16",
+      "sha256": "3ef0144cdf076c55fdcae5ce9f550befe5ec025a06c15149525a07b518d00120"
+    }
+  ]
+}

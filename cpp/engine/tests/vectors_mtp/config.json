@@ -1,0 +1,30 @@
+{
+  "hidden_size": 32,
+  "hc_count": 2,
+  "hc_lowrank": 16,
+  "n_heads": 4,
+  "n_kv_heads": 1,
+  "head_dim": 8,
+  "n_experts": 4,
+  "top_k": 2,
+  "inter": 32,
+  "shared_inter": 32,
+  "vocab": 64,
+  "eps": 1e-06,
+  "indexer_n_heads": 4,
+  "indexer_head_dim": 16,
+  "indexer_budget": 8,
+  "indexer_compress_ratio": 4,
+  "rope_base": 10000.0,
+  "mrope_section": [
+    2,
+    1,
+    1
+  ],
+  "partial_rotary_factor": 0.5,
+  "data_seed": 4242,
+  "draft_seed": 9002,
+  "mlx_version": "0.32.2",
+  "position": 0,
+  "verify_cases": 11
+}

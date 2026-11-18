@@ -23,7 +23,7 @@ add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp
 target_include_directories(veystrix_pager PUBLIC ${PAGER_DIR}/src)
 set_source_files_properties(${NATIVE_READ_C} PROPERTIES LANGUAGE C)
 
-add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp src/kv_quant.cpp src/mtp.cpp)
+add_library(veystrix_engine STATIC src/engine.cpp src/expert_store.cpp src/gdn_kernel.cpp src/mamba_kernel.cpp src/gdn_conv.cpp src/mamba_conv.cpp src/mamba_layer.cpp src/qsa.cpp src/qsa_full.cpp src/sampling.cpp src/prefix_cache.cpp src/model_adapter.cpp src/gdn_layer.cpp src/decoder.cpp src/decoder_full.cpp src/moe_stream.cpp src/slot_plan.cpp src/cross_shard_moe.cpp src/parity_gaps.cpp src/rope_fused.cpp src/ple.cpp src/prefill.cpp src/prefill_batched.cpp src/nemo_attention.cpp src/kv_quant.cpp src/mtp.cpp src/nemo_pool.cpp src/shared_expert_pool.cpp)
 target_include_directories(veystrix_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${MLX_INCLUDE_DIRS})
 target_link_libraries(veystrix_engine PUBLIC mlx veystrix_pager)
 set_target_properties(veystrix_engine PROPERTIES
@@ -215,6 +215,18 @@ set_target_properties(test_final_head PROPERTIES
 add_executable(test_cooperative_decode tests/test_cooperative_decode.cpp)
 target_include_directories(test_cooperative_decode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME cooperative_decode COMMAND test_cooperative_decode)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_shared_expert_pool/manifest.json")
+  add_test(NAME shared_expert_pool COMMAND test_shared_expert_pool
+           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_shared_expert_pool")
+endif()
+
+# Phase 1 SharedExpertPool: CPU-only synthetic fixtures (no checkpoint, no MLX
+# headers). Optional golden dir is produced by gen_shared_expert_pool_vectors.py.
+add_executable(test_shared_expert_pool tests/test_shared_expert_pool.cpp)
+target_include_directories(test_shared_expert_pool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_shared_expert_pool PRIVATE veystrix_engine)
+set_target_properties(test_shared_expert_pool PROPERTIES
+  BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
 
 # KV tier quantization primitives (affine INT4/INT8 + tiered4 split) parity.
 add_executable(test_kv_quant tests/test_kv_quant.cpp)

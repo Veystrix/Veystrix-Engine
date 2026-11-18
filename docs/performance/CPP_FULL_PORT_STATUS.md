@@ -34,7 +34,9 @@ Branch `cpp-engine-qdense`, PR #3.
 | MTP / speculative | native draft head | [TODO] | NUMERIC |
 | Continuous batching / concurrency | cooperative decode co-step | [TODO] | NON-NUMERIC |
 | Expert pool policies (s3fifo/etc) | LRU default + alternatives | [TODO] C++ has LRU slot pool | NON-NUMERIC |
-| **Nemotron decode path** | Mamba SSM + 6 attn + relu2 MoE | [IN PROGRESS] SSM kernel stage; relu2 MoE primitive exists; no 52-layer loop | mixed |
+| **Nemotron Mamba layer** | Mamba-2 mixer decode | [DONE-OFFLINE] bit-exact output+conv+ssm state vs real Python mixer | NUMERIC |
+| **Nemotron bf16 attention** | dense bf16 KV decode | [DONE-OFFLINE] bit-exact output+q/k/v+cache vs real StreamedAttention (INT8 path still TODO) | NUMERIC |
+| **Nemotron 52-layer loop** | full decode + final head | [IN PROGRESS] assembling from validated primitives + real checkpoint | mixed |
 
 ## Nemotron port plan
 `docs/engineering/nemotron_mamba_port_plan.md` on `cpp-engine-qdense`:

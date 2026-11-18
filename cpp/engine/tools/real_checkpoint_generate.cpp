@@ -54,6 +54,8 @@
 #include "io_pager.hpp"
 #include "gdn_layer.hpp"
 #include "gdn_conv.h"
+#include "kv_quant.hpp"   // phase 1: opt-in full-attention KV tier (primitives, untouched)
+#include "mtp.hpp"        // phase 1: opt-in MTP draft/verify (primitives, untouched)
 
 #include <mlx/mlx.h>
 #include <mlx/memory.h>
@@ -79,6 +81,262 @@
 
 namespace mx = mlx::core;
 using namespace veystrix::engine;
+
+// --------------------------------------------------------------------------- //
+// Phase 1 opt-in integration: KV tier + MTP.                                   //
+// Both are OFF by default, so the original gate-(b) decode path is untouched   //
+// unless VEYSTRIX_CPP_KV_TIER / VEYSTRIX_CPP_MTP is explicitly set. Only the    //
+// validated primitives (kv_quant.*, mtp.*) are called; they are never edited.  //
+// --------------------------------------------------------------------------- //
+namespace phase1 {
+
+struct KVTierConfig {
+  enum class Mode { Off, Affine4, Affine8, Tiered4 };
+  Mode mode = Mode::Off;
+  int group_size = 64;       // Python FLASHNEXT_KV_GROUP_SIZE default
+  int recent_tokens = 8192;  // Python FLASHNEXT_KV_RECENT_TOKENS default
+
+  static KVTierConfig from_env() {
+    KVTierConfig c;
+    if (const char* m = std::getenv("VEYSTRIX_CPP_KV_TIER")) {
+      const std::string s(m);
+      if (s == "affine4") c.mode = Mode::Affine4;
+      else if (s == "affine8") c.mode = Mode::Affine8;
+      else if (s == "tiered4") c.mode = Mode::Tiered4;
+      else if (s.empty() || s == "off" || s == "bf16") c.mode = Mode::Off;
+      else throw std::runtime_error("VEYSTRIX_CPP_KV_TIER: unknown mode: " + s);
+    }
+    if (const char* g = std::getenv("VEYSTRIX_CPP_KV_GROUP_SIZE"))
+      c.group_size = std::atoi(g);
+    if (const char* r = std::getenv("VEYSTRIX_CPP_KV_RECENT_TOKENS"))
+      c.recent_tokens = std::atoi(r);
+    if (c.group_size != 32 && c.group_size != 64)
+      throw std::runtime_error("VEYSTRIX_CPP_KV_GROUP_SIZE must be 32 or 64");
+    if (c.recent_tokens < 256 || c.recent_tokens % 256 != 0)
+      throw std::runtime_error("VEYSTRIX_CPP_KV_RECENT_TOKENS must be a positive multiple of 256");
+    return c;
+  }
+  bool enabled() const { return mode != Mode::Off; }
+};
+
+// Quantize -> dequantize a K/V array through the validated primitive. The real
+// cache stores dequantized arrays (SDPA consumes them directly), so a round
+// trip on write reproduces exactly what a Python affine QSA KV cache would
+// hand to SDPA. `mx::quantize/dequantize` run on the tool's default device
+// (GPU on this machine); see docs/engineering/kv_tier_mtp_integration.md for
+// the measured 1-ULP GPU/CPU difference and why no cross-device bit-exactness
+// is claimed.
+mx::array kv_roundtrip(const mx::array& x, const KVTierConfig& c) {
+  if (c.mode == KVTierConfig::Mode::Affine4)
+    return kv_dequantize(kv_quantize(x, c.group_size, /*bits=*/4));
+  if (c.mode == KVTierConfig::Mode::Affine8)
+    return kv_dequantize(kv_quantize(x, c.group_size, /*bits=*/8));
+  return x;  // tiered4 is owned by KVCacheWriter below
+}
+
+// One full-attention layer's KV tier state. For affine modes this is just the
+// round-trip above; for tiered4 the Tiered4KV primitive owns the INT4 history,
+// INT8 recent window and the page aging, and attention reads the dequantized
+// concatenation of the two tiers.
+class KVCacheWriter {
+ public:
+  explicit KVCacheWriter(const KVTierConfig& c) : cfg_(c) {
+    if (c.mode == KVTierConfig::Mode::Tiered4)
+      tiered_.emplace(c.group_size, c.recent_tokens);
+  }
+
+  // Batched prefill writes the whole cache outside run_step; prime the tier
+  // state from the finished cache and rewrite the arrays in dequantized form.
+  void prime_full(FullAttentionCache& cache) {
+    if (!enabled() || !cache.keys || !cache.values) return;
+    if (tiered_) {
+      tiered_->append(*cache.keys, *cache.values);
+      cache.keys = mx::concatenate(
+          {tiered_->dequantize_history_keys(), tiered_->dequantize_recent_keys()}, 2);
+      cache.values = mx::concatenate(
+          {tiered_->dequantize_history_values(), tiered_->dequantize_recent_values()}, 2);
+    } else {
+      cache.keys = kv_roundtrip(*cache.keys, cfg_);
+      cache.values = kv_roundtrip(*cache.values, cfg_);
+    }
+  }
+
+  // A single new K/V chunk (one decode step, or one sequential prefill step).
+  void append(const mx::array& k, const mx::array& v, FullAttentionCache& cache) {
+    if (tiered_) {
+      tiered_->append(k, v);
+      cache.keys = mx::concatenate(
+          {tiered_->dequantize_history_keys(), tiered_->dequantize_recent_keys()}, 2);
+      cache.values = mx::concatenate(
+          {tiered_->dequantize_history_values(), tiered_->dequantize_recent_values()}, 2);
+      return;
+    }
+    mx::array nk = kv_roundtrip(k, cfg_), nv = kv_roundtrip(v, cfg_);
+    if (!cache.keys) {
+      cache.keys = std::move(nk);
+      cache.values = std::move(nv);
+    } else {
+      cache.keys = mx::concatenate({*cache.keys, nk}, 2);
+      cache.values = mx::concatenate({*cache.values, nv}, 2);
+    }
+  }
+
+  bool enabled() const { return cfg_.enabled(); }
+  int offset() const { return tiered_ ? tiered_->offset() : -1; }
+  int history_tokens() const { return tiered_ ? tiered_->history_tokens() : -1; }
+
+ private:
+  KVTierConfig cfg_;
+  std::optional<Tiered4KV> tiered_;
+};
+
+// --------------------------------------------------------------------------- //
+// MTP: a deterministic, SMALL synthetic draft head. The read-only MTP
+// primitives operate on full (unpacked, tied-embedding) weights; the real
+// checkpoint has 512 quantized routed experts and an untied lm_head, so loading
+// it into MTPWeights is not bit-faithful and would exceed the run guard. This
+// head exercises the real mtp_draft_forward + mtp_verify calls end-to-end in
+// the decode loop. Because verification is lossless, emitted tokens remain
+// those of plain greedy decoding. See the integration doc for exactly what is
+// and is not wired. The head is seeded deterministically (no real weights).
+// --------------------------------------------------------------------------- //
+mx::array mtp_sym(const mx::Shape& shape, float scale, uint32_t salt) {
+  size_t n = 1;
+  for (auto d : shape) n *= static_cast<size_t>(d);
+  std::vector<float> data(n);
+  uint32_t st = 0x9e3779b9u ^ (salt * 2654435761u);
+  for (size_t i = 0; i < n; ++i) {
+    st = st * 1664525u + 1013904223u;
+    data[i] = (static_cast<int32_t>(st >> 8) % 2001 - 1000) / 1000.0f * scale;
+  }
+  return mx::array(data.data(), shape, mx::float32);
+}
+
+MTPWeights make_synthetic_mtp_weights(const MTPConfig& c) {
+  const int H = c.hidden_size, HC = c.hc_count, LOW = 8;
+  const int HH = H * HC, V = c.vocab, D = c.head_dim;
+  const int Q = c.n_heads * D, KV = c.n_kv_heads * D, E = c.n_experts;
+  const int I = c.inter, SI = c.shared_inter;
+  auto sym = [](const mx::Shape& s, float sc, uint32_t salt) {
+    return mtp_sym(s, sc, salt);
+  };
+  return MTPWeights(
+      /*emb*/sym(mx::Shape{V, H}, 0.02f, 1),
+      /*pre_fc_norm_embedding*/sym(mx::Shape{H}, 0.05f, 2),
+      /*fc_embedding*/sym(mx::Shape{H, H}, 0.1f, 3),
+      /*pre_fc_norm_hidden*/sym(mx::Shape{HH}, 0.05f, 4),
+      /*fc_hidden*/sym(mx::Shape{H, H}, 0.1f, 5),
+      /*attn_hc_norm*/sym(mx::Shape{HH}, 0.05f, 6),
+      /*attn_down*/sym(mx::Shape{LOW, HH}, 0.1f, 7),
+      /*attn_up*/sym(mx::Shape{HH, LOW}, 0.1f, 8),
+      /*attn_inject*/sym(mx::Shape{HC, HH}, 0.1f, 9),
+      /*q_proj*/sym(mx::Shape{2 * Q, H}, 0.1f, 10),
+      /*k_proj*/sym(mx::Shape{KV, H}, 0.1f, 11),
+      /*v_proj*/sym(mx::Shape{KV, H}, 0.1f, 12),
+      /*o_proj*/sym(mx::Shape{H, Q}, 0.1f, 13),
+      /*q_norm*/sym(mx::Shape{D}, 0.05f, 14),
+      /*k_norm*/sym(mx::Shape{D}, 0.05f, 15),
+      /*mlp_hc_norm*/sym(mx::Shape{HH}, 0.05f, 16),
+      /*mlp_down*/sym(mx::Shape{LOW, HH}, 0.1f, 17),
+      /*mlp_up*/sym(mx::Shape{HH, LOW}, 0.1f, 18),
+      /*mlp_inject*/sym(mx::Shape{HC, HH}, 0.1f, 19),
+      /*gate*/sym(mx::Shape{E, H}, 0.1f, 20),
+      /*sw_gate*/sym(mx::Shape{E, I, H}, 0.1f, 21),
+      /*sw_up*/sym(mx::Shape{E, I, H}, 0.1f, 22),
+      /*sw_down*/sym(mx::Shape{E, H, I}, 0.1f, 23),
+      /*shared_gate*/sym(mx::Shape{SI, H}, 0.1f, 24),
+      /*shared_up*/sym(mx::Shape{SI, H}, 0.1f, 25),
+      /*shared_down*/sym(mx::Shape{H, SI}, 0.1f, 26),
+      /*shared_gate_logits*/sym(mx::Shape{1, H}, 0.1f, 27),
+      /*mix_hc_norm*/sym(mx::Shape{HH}, 0.05f, 28),
+      /*mix_down*/sym(mx::Shape{LOW, HH}, 0.1f, 29),
+      /*mix_up*/sym(mx::Shape{HH, LOW}, 0.1f, 30));
+}
+
+MTPConfig mtp_default_config() {
+  // Tiny, deterministic geometry; kept well within the validated fresh-cache
+  // single-token draft path (position 0, dense 1-token softmax).
+  MTPConfig c;
+  c.hidden_size = 32;
+  c.hc_count = 2;
+  c.hc_lowrank = 8;
+  c.n_heads = 2;
+  c.n_kv_heads = 1;
+  c.head_dim = 8;
+  c.n_experts = 1;
+  c.top_k = 1;
+  c.inter = 16;
+  c.shared_inter = 16;
+  c.vocab = 256;
+  c.eps = 1e-6f;
+  c.rope_base = 10000.0f;
+  c.partial_rotary_factor = 0.5f;
+  c.mrope_section = {2, 1, 1};  // sums to dim = head_dim * partial_rotary_factor
+  c.max_position_embeddings = 2048;
+  c.position = 0;  // validated path only; real draft positions are not wired
+  return c;
+}
+
+SamplingParams mtp_greedy_params() {
+  // Near-argmax verification: the acceptance test degenerates to greedy, so
+  // speculative output is token-identical to the plain greedy reference.
+  SamplingParams p;
+  p.temperature = 1e-8f;
+  p.top_p = 1.0f;
+  p.top_k = 0;
+  p.min_p = 0.0f;
+  p.presence_penalty = 0.0f;
+  return p;
+}
+
+struct MTPConfigRT {
+  bool enabled = false;
+  int depth = 1;
+  uint64_t seed = 0;
+  MTPConfig cfg;
+  MTPWeights weights;
+  SamplingParams params;
+
+  // cfg is declared before weights, so the configured geometry is available
+  // when the (unpacked, tied-embedding) synthetic head is built.
+  MTPConfigRT()
+      : cfg(mtp_default_config()),
+        weights(make_synthetic_mtp_weights(cfg)),
+        params(mtp_greedy_params()) {}
+  static MTPConfigRT from_env();
+};
+
+MTPConfigRT MTPConfigRT::from_env() {
+  MTPConfigRT rt;
+  rt.enabled = std::getenv("VEYSTRIX_CPP_MTP") != nullptr;
+  if (const char* d = std::getenv("VEYSTRIX_CPP_MTP_DEPTH")) rt.depth = std::atoi(d);
+  if (rt.depth < 1 || rt.depth > 4)
+    throw std::runtime_error("VEYSTRIX_CPP_MTP_DEPTH must be in [1,4]");
+  if (const char* s = std::getenv("VEYSTRIX_CPP_MTP_SEED"))
+    rt.seed = static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+  return rt;
+}
+
+// The synthetic head's HC*H is much smaller than the checkpoint's (2*32 vs
+// 4*2560). Take a deterministic leading slice as its hidden stream; this is a
+// shape adaptation for the wiring smoke test, NOT a real MTP projection.
+mx::array adapt_hidden(const mx::array& h, const MTPConfig& cfg) {
+  const int need = cfg.hc_count * cfg.hidden_size;
+  mx::array flat = mx::reshape(h, mx::Shape{-1});
+  if (flat.shape(0) < need)
+    throw std::runtime_error("MTP: real hidden stream shorter than synthetic HC*H");
+  return mx::reshape(
+      mx::slice(flat, mx::Shape{0}, mx::Shape{need}, mx::Shape{1}),
+      mx::Shape{1, 1, need});
+}
+
+int32_t mtp_argmax(const mx::array& logits) {
+  mx::array a = mx::astype(mx::argmax(mx::reshape(logits, mx::Shape{-1}), 0), mx::int32);
+  mx::eval(a);
+  return a.item<int32_t>();
+}
+
+}  // namespace phase1
 
 // --------------------------------------------------------------------------- //
 // Opt-in localization instrumentation (REALGEN_DEBUG_HASHES=1). Off by default.
@@ -546,7 +804,7 @@ struct RealHead {
 FullAttentionOutput full_attention_dense(
     const mx::array& x, const FullAttentionWeights& w,
     const FullAttentionConfig& cfg, FullAttentionCache& cache,
-    const mx::array& position_ids) {
+    const mx::array& position_ids, phase1::KVCacheWriter& kv_writer) {
   const int B = static_cast<int>(x.shape(0));
   const int S = static_cast<int>(x.shape(1));
   const int Hq = cfg.n_heads, Hkv = cfg.kv_heads, D = cfg.head_dim;
@@ -580,13 +838,10 @@ FullAttentionOutput full_attention_dense(
   q = rope_apply_fused(q, position_ids, cfg.rope);
   k = rope_apply_fused(k, position_ids, cfg.rope);
 
-  if (!cache.keys.has_value()) {
-    cache.keys = k;
-    cache.values = v;
-  } else {
-    cache.keys = mx::concatenate({*cache.keys, k}, 2);
-    cache.values = mx::concatenate({*cache.values, v}, 2);
-  }
+  // Opt-in KV tier: route every full-attention KV write through the validated
+  // quantize/dequantize primitives. With the feature OFF this is the original
+  // raw dense write (KVCacheWriter::append falls back to plain concatenate).
+  kv_writer.append(k, v, cache);
 
   const float scale = static_cast<float>(std::pow(static_cast<double>(D), -0.5));
   mx::array out = mx::fast::scaled_dot_product_attention(
@@ -713,7 +968,9 @@ mx::array run_step(
     const FullAttentionConfig& fa_cfg,
     const mx::array& position_ids,
     std::vector<DecoderFullLayerCache>& caches,
-    int group_size, int bits) {
+    int group_size, int bits,
+    std::vector<phase1::KVCacheWriter>& kv_writers,
+    std::optional<mx::array>* hidden_out = nullptr) {
   mx::array hidden =
       mx::tile(input_embeddings, std::vector<int>{1, 1, cfg.hc_count});
   if (const char* ed = std::getenv("REALGEN_DUMP_EMBED")) {
@@ -754,7 +1011,7 @@ mx::array run_step(
         return g.output;
       }
       return full_attention_dense(ar.mixed_input, *L.full, fa_cfg,
-                                  caches[l].full, position_ids)
+                                  caches[l].full, position_ids, kv_writers[l])
           .output;
     }();
     {
@@ -891,6 +1148,12 @@ mx::array run_step(
       mx::quantized_matmul(mixed, head.lm.w, head.lm.s, head.lm.b,
                            /*transpose=*/true, group_size, bits, "affine");
   debug_capture::get().add("final_logits", logits);
+  if (hidden_out) {
+    // Hand the last hidden stream to the MTP draft head. Materialize it so the
+    // next (draft) graph does not chase a 48-layer lazy chain.
+    *hidden_out = hidden;
+    mx::eval(**hidden_out);
+  }
   return logits;
 }
 
@@ -1198,6 +1461,18 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
   layers.reserve(n_layers);
   caches.reserve(n_layers);
 
+  // Opt-in KV tier: one writer per layer (only full-attention layers use it).
+  // Off by default; the original dense-cache write path is then unchanged.
+  const phase1::KVTierConfig kv_cfg = phase1::KVTierConfig::from_env();
+  std::vector<phase1::KVCacheWriter> kv_writers;
+  kv_writers.reserve(n_layers);
+  for (int l = 0; l < n_layers; ++l) kv_writers.emplace_back(kv_cfg);
+  if (kv_cfg.enabled())
+    std::fprintf(stderr,
+                 "[kv-tier] enabled mode=%d group_size=%d recent_tokens=%d\n",
+                 static_cast<int>(kv_cfg.mode), kv_cfg.group_size,
+                 kv_cfg.recent_tokens);
+
   const int conv_dim = 2 * dcfg.gdn.key_dim + dcfg.gdn.value_dim;
   const int ple_layer = get_int(cfg, "ple_layer_ids", 2) - 1;
   const bool use_ple = std::getenv("VEYSTRIX_CPP_NO_PLE") == nullptr &&
@@ -1387,6 +1662,10 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       logits = mx::array(static_cast<mx::bfloat16_t*>(raw), lshape, ldt, [](void* p){ std::free(p); });
     pos = static_cast<int>(prompt.size());
     prefix_hit = true;
+    // An exact restored snapshot holds dense KV arrays; prime the tier writers
+    // from them so subsequent decode writes continue the same quantization.
+    if (kv_cfg.enabled())
+      for (int l = 0; l < n_layers; ++l) kv_writers[l].prime_full(caches[l].full);
     if (std::getenv("VEYSTRIX_CPP_PREFIX_DIAG")) {
       std::vector<PLECache> dp(n_layers);
       for (int l = 0; l < n_layers; ++l) dp[l] = layers[l].ple_cache;
@@ -1587,6 +1866,10 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         dump_prefix_state(caches, plc, "save", n_layers);
       std::fprintf(stderr, "[prefix] saved post-prefill snapshot to %s\n", pdir);
     }
+    // Batched prefill wrote full KV arrays outside run_step; prime the tier
+    // writers from the finished cache so decode continues the same tiers.
+    if (kv_cfg.enabled())
+      for (int l = 0; l < n_layers; ++l) kv_writers[l].prime_full(caches[l].full);
     pos = static_cast<int>(prompt.size());
     mem_telemetry("prefill-batched");
   } else if (!prefix_hit) {
@@ -1596,7 +1879,8 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
       debug_capture::get().current_step = static_cast<int>(i);
       logits = run_step(embed_token(embed, prompt[i], group_size, bits, H),
                         static_cast<int32_t>(prompt[i]),
-                        layers, head, dcfg, fa, pos_ids, caches, group_size, bits);
+                        layers, head, dcfg, fa, pos_ids, caches, group_size, bits,
+                        kv_writers);
       mem_telemetry("prefill-step");
       if (dbg_requested) dump_gdn_states(caches, static_cast<int>(i), n_layers);
     }
@@ -1623,49 +1907,192 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     throw std::runtime_error("empty prompt: no prefill logits");
   int token = prompt.empty() ? 0 : prompt.back();
 
-  // Greedy decode steps. The prefill logits already give us step 0.
-  for (int step = 0; step < num_tokens; ++step) {
-    debug_capture::get().current_step = 100 + step;  // never collides with prefill 0..15
-    if (step > 0) {
-      std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
-      mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
-      logits = run_step(embed_token(embed, token, group_size, bits, H),
-                        static_cast<int32_t>(token), layers,
-                        head, dcfg, fa, pos_ids, caches, group_size, bits);
-      mem_telemetry("decode-step");
-    }
+  // Decode. With VEYSTRIX_CPP_MTP unset this is the original greedy loop
+  // (identical digests to gate (b)). With it set, each step calls the real
+  // mtp_draft_forward to propose a draft and mtp_verify to accept/reject it.
+  // Verification is lossless: an accepted draft is consumed through the target
+  // (advancing the KV cache), a rejected draft is replaced by mtp_verify's
+  // redraw FROM THE CURRENT target row without consuming a target step.
+  phase1::MTPConfigRT mtp = phase1::MTPConfigRT::from_env();
+  if (mtp.enabled)
+    std::fprintf(stderr,
+                 "[mtp] enabled depth=%d seed=%llu (synthetic tiny draft head; "
+                 "lossless greedy verify)\n", mtp.depth,
+                 static_cast<unsigned long long>(mtp.seed));
 
-    mx::array next = sample_greedy(*logits);
-    mx::eval(next);
-    int next_id = static_cast<int>(next.data<uint32_t>()[0]);
-
-    mx::array row = mx::reshape(mx::astype(*logits, mx::float32), mx::Shape{-1});
+  int produced = 0;
+  int mtp_proposed = 0, mtp_accepted = 0, mtp_rejected = 0;
+  bool logits_ready = true;   // prefill logits decide the first token
+  bool hidden_ready = false;  // batched prefill does not expose a hidden stream
+  std::optional<mx::array> mtp_hidden;
+  auto emit_record = [&](int in_tok, int out_tok, const mx::array& decided) {
+    mx::array row = mx::reshape(mx::astype(decided, mx::float32), mx::Shape{-1});
     mx::eval(row);
     std::string digest = sha256_hex(
         row.data<float>(), static_cast<size_t>(row.size()) * sizeof(float));
-
-    // Opt-in full fp32 logit dump (numeric comparison vs Python). No effect off.
     if (const char* df = std::getenv("REALGEN_DUMP_LOGITS")) {
       char pth[512];
-      std::snprintf(pth, sizeof(pth), "%s.step%d.f32", df, step);
+      std::snprintf(pth, sizeof(pth), "%s.step%d.f32", df, produced);
       std::FILE* f = std::fopen(pth, "wb");
-      if (f) {
-        std::fwrite(row.data<float>(), sizeof(float), row.size(), f);
-        std::fclose(f);
-      }
+      if (f) { std::fwrite(row.data<float>(), sizeof(float), row.size(), f); std::fclose(f); }
     }
+    records.push_back({produced, in_tok, out_tok, digest});
+    std::fprintf(stderr, "[step %d] in=%d out=%d sha=%s\n", produced, in_tok,
+                 out_tok, digest.c_str());
+    ++produced;
+  };
+  auto consume_target = [&](int tok) {
+    std::vector<int32_t> pd{static_cast<int32_t>(pos++)};
+    mx::array pos_ids(pd.begin(), mx::Shape{1, 1}, mx::int32);
+    logits = run_step(embed_token(embed, tok, group_size, bits, H),
+                      static_cast<int32_t>(tok), layers, head, dcfg, fa,
+                      pos_ids, caches, group_size, bits, kv_writers,
+                      mtp.enabled ? &mtp_hidden : nullptr);
+    hidden_ready = mtp.enabled;
+    logits_ready = true;
+    mem_telemetry("decode-step");
+  };
 
-    records.push_back({step, token, next_id, digest});
-    std::fprintf(stderr, "[step %d] in=%d out=%d sha=%s\n", step, token,
-                 next_id, digest.c_str());
-    token = next_id;
+  while (produced < num_tokens) {
+    debug_capture::get().current_step = 100 + produced;
+    if (!logits_ready) consume_target(token);
+
+    mx::array decided = *logits;  // target row that decides the emitted token
+    if (mtp.enabled && hidden_ready) {
+      // Propose up to `depth` drafts, verifying each against the target row
+      // that predicts it. An accept consumes a target step (and yields the row
+      // for the next draft); a reject emits the redraw and consumes no step.
+      for (int d = 0; d < mtp.depth && produced < num_tokens; ++d) {
+        std::vector<int32_t> ids{static_cast<int32_t>(token % mtp.cfg.vocab)};
+        mx::array idarr(ids.data(), mx::Shape{1, 1}, mx::int32);
+        mx::array dl = mtp_draft_forward(mtp.cfg, mtp.weights,
+                                         phase1::adapt_hidden(*mtp_hidden, mtp.cfg),
+                                         idarr);
+        int32_t draft = phase1::mtp_argmax(dl);
+        ++mtp_proposed;
+        MTPVerifyResult vr =
+            mtp_verify({decided}, {draft}, mtp.params, mtp.seed + static_cast<uint64_t>(d));
+        if (vr.accepted == 1) {
+          emit_record(token, draft, decided);
+          token = draft;
+          ++mtp_accepted;
+          if (produced >= num_tokens) break;
+          consume_target(token);  // advances KV; `decided` becomes the new row
+          decided = *logits;
+          continue;
+        }
+        // Rejected: mtp_verify redrew from `decided` with the draft masked.
+        emit_record(token, vr.next_token, decided);
+        token = vr.next_token;
+        ++mtp_rejected;
+        logits_ready = false;  // next iteration runs the target on the redraw
+        break;
+      }
+    } else {
+      mx::array next = sample_greedy(decided);
+      mx::eval(next);
+      int next_id = static_cast<int>(next.data<uint32_t>()[0]);
+      emit_record(token, next_id, decided);
+      token = next_id;
+      logits_ready = false;
+    }
   }
+  if (mtp.enabled)
+    std::fprintf(stderr,
+                 "[mtp] summary: proposed=%d accepted=%d rejected=%d "
+                 "(lossless greedy: output equals plain greedy)\n",
+                 mtp_proposed, mtp_accepted, mtp_rejected);
   return records;
 }
 
 }  // namespace
 
+// Check the KV-tier round-trip against GPU-generated Python golden vectors.
+// This path is independent of the checkpoint and exists so the integration's
+// numerics can be claimed bit-exact on the SAME device the generator uses.
+static bool kv_tier_selftest_mode(const std::string& dir) {
+  Config m = read_config(dir + "/manifest.txt");
+  const std::string mode = get_str(m, "mode");
+  const int gs = get_int(m, "group_size", 64);
+  const int bits = get_int(m, "bits", 4);
+  const int recent = get_int(m, "recent_tokens", 8192);
+  const std::vector<int> chunks = split_ints(get_str(m, "chunk_tokens"));
+
+  auto read_file = [](const std::string& path, size_t bytes) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) throw std::runtime_error("selftest: cannot open " + path);
+    std::vector<uint8_t> b(bytes);
+    size_t got = std::fread(b.data(), 1, bytes, f);
+    std::fclose(f);
+    if (got != bytes) throw std::runtime_error("selftest: short read " + path);
+    return b;
+  };
+  size_t nelem = 0;
+  for (int c : chunks) nelem += static_cast<size_t>(c) * 1 * 2 * 128;
+  std::vector<uint8_t> eb = read_file(dir + "/expected.f32", nelem * 4);
+  const float* exp = reinterpret_cast<const float*>(eb.data());
+
+  std::vector<mx::array> xs;
+  for (size_t i = 0; i < chunks.size(); ++i) {
+    auto b = read_file(dir + "/chunk" + std::to_string(i) + ".u16",
+                       static_cast<size_t>(chunks[i]) * 1 * 2 * 128 * 2);
+    // Reinterpret raw bits (mx bfloat16_t has no uint16 constructor; the
+    // iterator form would numerically convert the bit pattern instead).
+    void* raw = nullptr;
+    if (::posix_memalign(&raw, 64, b.size()) != 0)
+      throw std::runtime_error("selftest: aligned alloc failed");
+    std::memcpy(raw, b.data(), b.size());
+    xs.emplace_back(static_cast<mx::bfloat16_t*>(raw),
+                    mx::Shape{1, 2, chunks[i], 128}, mx::bfloat16,
+                    [](void* p) { std::free(p); });
+  }
+
+  std::optional<mx::array> got_arr;
+  if (mode == "tiered4") {
+    Tiered4KV t(gs, recent);
+    for (const auto& x : xs) t.append(x, x);
+    got_arr = mx::concatenate(
+        {t.dequantize_history_keys(), t.dequantize_recent_keys()}, 2);
+  } else {
+    phase1::KVTierConfig c;
+    c.mode = mode == "affine4" ? phase1::KVTierConfig::Mode::Affine4
+                               : phase1::KVTierConfig::Mode::Affine8;
+    c.group_size = gs;
+    mx::array full = xs.size() == 1 ? xs[0] : mx::concatenate(xs, 2);
+    got_arr = phase1::kv_roundtrip(full, c);
+  }
+  mx::array f = mx::reshape(mx::astype(*got_arr, mx::float32), mx::Shape{-1});
+  mx::eval(f);
+  const float* act = f.data<float>();
+  size_t diffs = 0;
+  float maxabs = 0.0f;
+  for (size_t i = 0; i < nelem; ++i) {
+    if (std::memcmp(&act[i], &exp[i], sizeof(float)) != 0) ++diffs;
+    maxabs = std::max(maxabs, std::fabs(act[i] - exp[i]));
+  }
+  std::printf("[selftest] %-8s gs=%d bits=%d elems=%zu diffs=%zu maxabs=%.3g %s\n",
+              mode.c_str(), gs, bits, nelem, diffs, maxabs,
+              diffs == 0 ? "BIT-EXACT PASS" : "FAIL");
+  return diffs == 0;
+}
+
+static int kv_tier_selftest(const std::string& root) {
+  bool ok = true;
+  for (const char* mode : {"affine4", "affine8", "tiered4"})
+    ok = kv_tier_selftest_mode(root + "/" + mode) && ok;
+  std::printf("kv_tier_selftest: %s\n", ok ? "BIT-EXACT PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
+  if (const char* d = std::getenv("VEYSTRIX_CPP_KV_TIER_SELFTEST")) {
+    try {
+      return kv_tier_selftest(d);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "kv_tier_selftest failed: %s\n", e.what());
+      return 1;
+    }
+  }
   if (argc < 4) {
     std::fprintf(stderr,
                  "usage: %s <checkpoint-dir> <reference.json> <num_tokens> "

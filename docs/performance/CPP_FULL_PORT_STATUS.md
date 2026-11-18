@@ -30,9 +30,9 @@ Branch `cpp-engine-qdense`, PR #3.
 | Non-greedy sampling (THINKING/INSTRUCT) | distribution + seeded categorical | [DONE-OFFLINE] 11-case bit-exact test; wired into native_generate opt-in | NUMERIC |
 | Prefix cache | exact snapshot/restore + SHA chain | [DONE-OFFLINE] `prefix_cache` module + synthetic test (bit-exact capture/save/load/restore, COW, fail-closed); NOT yet wired into the real generator | NON-NUMERIC |
 | Variable context window / admission | refusal above server window | [TODO] protocol-level; C++ tool currently accepts any length | NON-NUMERIC |
-| KV tiers (INT8/INT4/tiered4) | lossy KV modes | [TODO] reference gate uses bf16; C++ dense KV is bit-exact for that | NUMERIC |
-| MTP / speculative | native draft head | [TODO] | NUMERIC |
-| Continuous batching / concurrency | cooperative decode co-step | [TODO] | NON-NUMERIC |
+| KV tiers (affine4/8 + tiered4) | lossy KV modes | [DONE-OFFLINE] quantize/dequantize + tiered4 split primitives bit-exact vs Python (CPU device); full attention integration remains | NUMERIC |
+| MTP / speculative | native draft head | [DONE-OFFLINE] fuse_inputs + draft forward + 11 verify cases bit-exact; real-checkpoint/QSA/expert integration remains | NUMERIC |
+| Cooperative decode (batching foundation) | cooperative decode co-step | [DONE-OFFLINE] single-thread interleaved==solo bit-exact (4 sessions); full server integration remains | NON-NUMERIC |
 | Expert pool policies (s3fifo/etc) | LRU default + alternatives | [TODO] C++ has LRU slot pool | NON-NUMERIC |
 | **Nemotron Mamba layer** | Mamba-2 mixer decode | [DONE-OFFLINE] bit-exact output+conv+ssm state vs real Python mixer | NUMERIC |
 | **Nemotron bf16 attention** | dense bf16 KV decode | [DONE-OFFLINE] bit-exact output+q/k/v+cache vs real StreamedAttention (INT8 path still TODO) | NUMERIC |

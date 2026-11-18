@@ -365,6 +365,71 @@ StreamForwardResult StreamingMoE::forward(const mx::array& x,
   return StreamForwardResult{out, slots, step.miss_e};
 }
 
+mx::array StreamingMoE::forward_stacked(const mx::array& x,
+                                        const mx::array& route,
+                                        const mx::array& scores) {
+  Impl& s = *impl_;
+  mx::array r = mx::astype(route, mx::int32);
+  mx::eval(r);
+  const int32_t* rp = r.data<int32_t>();
+  std::vector<int32_t> flat(rp, rp + r.size());
+  if (flat.empty()) throw std::runtime_error("empty route");
+  size_t T = route.shape().size() >= 2 ? static_cast<size_t>(route.shape(0)) : 1;
+  size_t K = flat.size() / T;
+  int E = static_cast<int>(s.t[0].shape[0]);  // total experts in checkpoint
+
+  // First-occurrence distinct experts + remap to stacked-row indices.
+  std::vector<int32_t> wanted;
+  std::vector<int32_t> local(flat.size());
+  std::vector<int32_t> seen(E, -1);
+  for (size_t i = 0; i < flat.size(); ++i) {
+    int32_t e = flat[i];
+    if (e < 0) e = 0;
+    if (e >= E) e = E - 1;
+    if (seen[e] < 0) { seen[e] = (int32_t)wanted.size(); wanted.push_back(e); }
+    local[i] = seen[e];
+  }
+  int n = static_cast<int>(wanted.size());
+
+  // Read ONLY the wanted expert rows for all 9 tensors into compact buffers.
+  std::vector<std::shared_ptr<uint8_t>> bufs(Impl::kTensors);
+  std::vector<veystrix::PagerRead> reads;
+  for (int i = 0; i < Impl::kTensors; ++i) {
+    size_t bytes = static_cast<size_t>(n) * static_cast<size_t>(s.t[i].row_bytes);
+    void* raw = nullptr;
+    if (::posix_memalign(&raw, 64, bytes ? bytes : 1) != 0)
+      throw std::runtime_error("stacked: posix_memalign failed");
+    bufs[i] = std::shared_ptr<uint8_t>(static_cast<uint8_t*>(raw),
+                                       [](uint8_t* p) { std::free(p); });
+    for (int j = 0; j < n; ++j) {
+      reads.push_back({s.shard_fd, 0,
+                       s.tensor_off[i] + static_cast<int64_t>(wanted[j]) * s.t[i].row_bytes,
+                       static_cast<int64_t>(s.t[i].row_bytes),
+                       reinterpret_cast<uint64_t>(bufs[i].get() + (size_t)j * s.t[i].row_bytes)});
+    }
+  }
+  if (!reads.empty()) {
+    int err = veystrix::run_batched_reads(reads, s.read_width);
+    if (err != 0) throw std::runtime_error("stacked: pager read failed");
+  }
+
+  auto wrap = [&](int i) {
+    mx::Shape shape(s.t[i].shape.begin(), s.t[i].shape.end());
+    shape[0] = n;
+    auto keep = bufs[i];
+    mx::Dtype dt = (i % 3 == 0) ? mx::uint32 : mx::bfloat16;
+    return mx::array(bufs[i].get(), std::move(shape), dt, [keep](void*) {});
+  };
+  ExpertWeights ew(Q4Projection(wrap(0), wrap(1), wrap(2)),
+                   Q4Projection(wrap(3), wrap(4), wrap(5)),
+                   Q4Projection(wrap(6), wrap(7), wrap(8)),
+                   s.group_size, s.bits);
+  mx::array local_arr(local.data(), mx::Shape{(int)T, (int)K}, mx::int32);
+  mx::array out = moe_block_sorted(x, local_arr, scores, ew);
+  mx::eval(out);  // buffers must outlive the gather_qmm command buffers
+  return out;
+}
+
 mx::array moe_stream_forward(const std::string& checkpoint_dir, int layer,
                              const mx::array& x, const mx::array& route,
                              const mx::array& scores, int num_slots,

@@ -30,6 +30,11 @@ class CrossShardMoE {
   StreamForwardResult forward(const mx::array& x, const mx::array& route,
                               const mx::array& scores);
 
+  // Bit-exact batched prefill for cross-shard layers: first-occurrence expert
+  // stack + sorted gather_qmm. See StreamingMoE::forward_stacked.
+  mx::array forward_stacked(const mx::array& x, const mx::array& route,
+                            const mx::array& scores);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

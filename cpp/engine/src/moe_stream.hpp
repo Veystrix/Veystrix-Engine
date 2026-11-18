@@ -46,6 +46,14 @@ class StreamingMoE {
   StreamForwardResult forward(const mx::array& x, const mx::array& route,
                               const mx::array& scores);
 
+  // Bit-exact batched prefill: build a compact first-occurrence expert stack
+  // (distinct routed experts in first-occurrence order), remap routes to
+  // stacked-row indices, and run one sorted gather_qmm over the whole prompt.
+  // Matches Python SwitchGLU when indices.size >= 64. route = [tokens,k] global
+  // expert ids. Reads only the distinct expert rows (low memory).
+  mx::array forward_stacked(const mx::array& x, const mx::array& route,
+                            const mx::array& scores);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

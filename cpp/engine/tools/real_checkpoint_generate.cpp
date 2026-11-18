@@ -1360,20 +1360,23 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         // on the fly (created and destroyed within the call, so only one layer's
         // experts are resident at a time ~= 1.3 GiB), process the whole prompt
         // at once so StreamingMoE::forward picks moe_block_sorted, then eval.
-        static const bool sorted_prefill =
-            std::getenv("VEYSTRIX_CPP_PREFILL_SLOTS") != nullptr;
-        if (S > 1 && sorted_prefill && !R.split_layer) {
-          // Load the layer's FULL expert set indexed by global expert id (the
-          // same ordering Python's SwitchGLU sorts over), run one batched
-          // sorted gather_qmm, and discard. Only one layer resident at a time.
-          ExpertWeights ew = load_layer(R.expert_shard_path, R.expert_prefix,
-                                        group_size, bits);
-          mx::eval(ew.gate.weight); mx::eval(ew.gate.scales); mx::eval(ew.gate.biases);
-          mx::eval(ew.up.weight);   mx::eval(ew.up.scales);   mx::eval(ew.up.biases);
-          mx::eval(ew.down.weight); mx::eval(ew.down.scales); mx::eval(ew.down.biases);
-          mx::array pfout = moe_block_sorted(x, idx, sc, ew);
-          mx::eval(pfout);
-          return pfout;
+        // Bit-exact batched prefill uses the sorted first-occurrence expert
+        // stack by default (Python SwitchGLU behavior at indices.size>=64).
+        // Opt out with VEYSTRIX_CPP_UNSORTED_PREFILL for A/B.
+        static const bool unsorted_prefill =
+            std::getenv("VEYSTRIX_CPP_UNSORTED_PREFILL") != nullptr;
+        if (S > 1 && !unsorted_prefill) {
+          // Build a compact first-occurrence expert stack (only the distinct
+          // routed rows are read), exactly matching Python SwitchGLU's weight
+          // stack + sorted gather_qmm. Handles both single- and cross-shard.
+          if (R.split_layer) {
+            CrossShardMoE pf(ckpt, cfg, R.expert_prefix, top_k, group_size,
+                             bits, false);
+            return pf.forward_stacked(x, idx, sc);
+          }
+          StreamingMoE pf(ckpt, R.layer_idx, top_k, group_size, bits,
+                          /*read_width=*/8, R.expert_prefix);
+          return pf.forward_stacked(x, idx, sc);
         }
         if (S <= 1)
           return R.stream ? R.stream->forward(x, idx, sc).output

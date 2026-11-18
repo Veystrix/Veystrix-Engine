@@ -51,6 +51,23 @@ protocol, 12/12 tests, feasibility verdict (Nemotron plausible, Qwen byte-limite
 True end-to-end (shared pool/scheduler in C++) is explicitly Phase 1+ and was
 deferred by the owner; requires the engine full port first.
 
+## Cross-language + non-greedy + MTP gaps CLOSED 2026-11-18 [measured]
+- **Cross-language on arbitrary prompts**: reviewer premise DISPROVEN. Fresh
+  Python refs at N=16/64/256/512/1024 all bit-exact C++ vs Python (4/4 tokens
+  + digests each). N=128 strict gate fails on EOS early-stop COUNT only (Python
+  stops at EOS 248046); digests verified bit-exact. Doc:
+  `docs/engineering/xlang_parity_multilen.md`.
+- **Non-greedy real-checkpoint**: THINKING/INSTRUCT opt-in sampling matches
+  Python 8/8 sampled tokens + 8/8 digests e2e; 11/11 isolated sampler cases.
+  Keyless default-key draw required. Doc: `docs/engineering/nongreedy_real_parity.md`.
+- **MTP full**: nonzero draft positions (7, 11) with prepopulated QSA KV cache
+  bit-exact vs Python (0/248320 diff elements, SHA match); position-0 regression
+  passes. Remaining: sparse indexer >=2048, fused-RoPE production path (~1 ULP).
+  Doc: `docs/engineering/mtp_full_parity.md`.
+- **Multi-session end-to-end re-verified on fully integrated tree**: N=3, all
+  sessions bit-identical to solo (12 digests), guard clean. Artifact:
+  `results/flashnext/ms-real-parity-integrated-final/verdict.json`.
+
 ## Blocking decisions / owner inputs
 - [BLOCKED] Dropping Python: will do only after the full matrix above is validated.
 - [BLOCKED] Nemotron config.json fields (head dims, ssm_state_size, time_step_limit,

@@ -1,0 +1,69 @@
+{
+  "generator": "gen_shared_expert_pool_vectors.py",
+  "note": "CPU-only synthetic LCG bytes; no checkpoint, no benchmark",
+  "records_bin": "records.bin",
+  "records_bytes": 4096,
+  "records_sha256": "f2fcfc939175330150872a4290440eb73a6cd83cd213ddc4cd1d1b8a6b9370f5",
+  "record_bytes": 256,
+  "layers": 2,
+  "experts": 8,
+  "lcg": {
+    "seed": "0x9e3779b97f4a7c15",
+    "mul": 6364136223846793005,
+    "add": 1442695040888963407,
+    "byte": "(state >> 33) & 0xff"
+  },
+  "union_layer": 0,
+  "union_experts": [
+    0,
+    1,
+    0,
+    2,
+    1,
+    3,
+    2
+  ],
+  "union_distinct": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "union_gather_sha256": "49295551fc6112ec5ea1b16581d7ba388788698de5ee33e3b9ab89adfbe057b6",
+  "record_offset": {
+    "0:0": 0,
+    "0:1": 256,
+    "0:2": 512,
+    "0:3": 768,
+    "0:4": 1024,
+    "0:5": 1280,
+    "0:6": 1536,
+    "0:7": 1792,
+    "1:0": 2048,
+    "1:1": 2304,
+    "1:2": 2560,
+    "1:3": 2816,
+    "1:4": 3072,
+    "1:5": 3328,
+    "1:6": 3584,
+    "1:7": 3840
+  },
+  "record_sha256": {
+    "0:0": "eb69cd1b96b656098d43fba080a9cd5d22f2f5b4068f929ba1d92d698a252456",
+    "0:1": "933bcd268581fa3d0163640285cb88160c5a992bf9638b21ca316a8f9bce15aa",
+    "0:2": "2824c2a7c8663e21e9299129308fdba7a5611ce481e42d73dc877b54e0306866",
+    "0:3": "9c10ea73c1fa1815999742ed40275e13d9c37940a21c23c879f98624ea64796b",
+    "0:4": "60df027c126739cec8f665ddb0cf0fffa99fcf141a210bfba65d46e007a0e6d8",
+    "0:5": "f0b4820748de8662f62a116853bdee674208c1081f53b909271479c269226a0c",
+    "0:6": "8f59d2987c86757e3f789c6660febbe12a8b059c8bcdb60e28dd43e87465035c",
+    "0:7": "902d41ee6b6fd91a9d899b844361f9a4b05e8f98e1e5a2200262ce1893f5a3a2",
+    "1:0": "096c663fd147096c3917ccee511d69ef49866ade47cc79f0ba1b79e1a45e203b",
+    "1:1": "bd4fb493ae77ba7cd6e6647d95c8658d5cfd3e7524dedf920aff37ee48335073",
+    "1:2": "64701477c82639a33375854c35e4750cff9705c341c61af27ff529984c5856b6",
+    "1:3": "1b6d8bd4535c4defab7b56107b377732c87c60f3b9ef2f35282c1ac252177f58",
+    "1:4": "da6294b819612c6f4efb5bbba879696c0fabed54d4a099e5f918475ed058ace7",
+    "1:5": "17ccbf214d4aadc7416559c5c8618fe6b79845aa4122aef135e9229ce2f1b12f",
+    "1:6": "32039b4a66110413b1bcba05e86642bf1f9c064fa0b4e047f47504a5e2cd34bc",
+    "1:7": "51d63a50e0eb99e725751a17290e883d4c1cdfd0bcedf7f55b53c83f9a7bb53f"
+  }
+}

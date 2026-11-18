@@ -215,11 +215,6 @@ set_target_properties(test_final_head PROPERTIES
 add_executable(test_cooperative_decode tests/test_cooperative_decode.cpp)
 target_include_directories(test_cooperative_decode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME cooperative_decode COMMAND test_cooperative_decode)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_shared_expert_pool/manifest.json")
-  add_test(NAME shared_expert_pool COMMAND test_shared_expert_pool
-           "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_shared_expert_pool")
-endif()
-
 # Phase 1 SharedExpertPool: CPU-only synthetic fixtures (no checkpoint, no MLX
 # headers). Optional golden dir is produced by gen_shared_expert_pool_vectors.py.
 add_executable(test_shared_expert_pool tests/test_shared_expert_pool.cpp)
@@ -227,6 +222,8 @@ target_include_directories(test_shared_expert_pool PRIVATE ${CMAKE_CURRENT_SOURC
 target_link_libraries(test_shared_expert_pool PRIVATE veystrix_engine)
 set_target_properties(test_shared_expert_pool PROPERTIES
   BUILD_RPATH "${MLX_ROOT}/lib" INSTALL_RPATH "${MLX_ROOT}/lib")
+add_test(NAME shared_expert_pool COMMAND test_shared_expert_pool
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors_shared_expert_pool")
 
 # Multi-session Phase 1 runtime: CPU-only fixtures, no MLX / checkpoint / SSD.
 # Compiled from the three new .cpp files directly so the test needs no engine

@@ -44,6 +44,7 @@
 //   step=<i> in=<token_in> out=<token_out> sha256=<64 hex>
 #include "decoder_full.hpp"
 #include "expert_store.hpp"
+#include "sampling.hpp"   // opt-in non-greedy decode (VEYSTRIX_CPP_SAMPLING)
 #include "moe_stream.hpp"
 #include "prefix_cache.hpp"
 #include "cross_shard_moe.hpp"
@@ -2115,6 +2116,46 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
     throw std::runtime_error("empty prompt: no prefill logits");
   int token = prompt.empty() ? 0 : prompt.back();
 
+  // ---------------------------------------------------------------------------
+  // Opt-in NON-GREEDY decode for sampler parity. Off by default: with
+  // VEYSTRIX_CPP_SAMPLING unset the loop below is the original greedy path.
+  // When set, seed the process-wide MLX default key ONCE from
+  // VEYSTRIX_CPP_SAMPLING_SEED and call sample_non_greedy() each step. This
+  // mirrors Python's mx.random.seed(seed) + Sampler.__call__, which calls
+  // mx.random.categorical(masked) with no explicit key; the default key
+  // advances identically on both sides. Passing random::key(seed) as an
+  // explicit key on every step would repeat the same draw and is NOT correct.
+  // See docs/engineering/nongreedy_real_parity.md.
+  // ---------------------------------------------------------------------------
+  bool use_sampling = false;
+  SamplingParams sampling_params;
+  std::vector<int32_t> seen_tokens;
+  if (const char* mode = std::getenv("VEYSTRIX_CPP_SAMPLING"); mode && *mode) {
+    const std::string m(mode);
+    if (m == "thinking") {
+      sampling_params = SamplingParams{1.0f, 0.95f, 20, 0.0f, 0.0f};
+    } else if (m == "instruct") {
+      sampling_params = SamplingParams{0.7f, 0.80f, 20, 0.0f, 1.5f};
+    } else {
+      throw std::runtime_error(
+          "VEYSTRIX_CPP_SAMPLING must be 'thinking' or 'instruct'");
+    }
+    const char* seed_s = std::getenv("VEYSTRIX_CPP_SAMPLING_SEED");
+    if (!seed_s || !*seed_s)
+      throw std::runtime_error(
+          "VEYSTRIX_CPP_SAMPLING_SEED is required when VEYSTRIX_CPP_SAMPLING is set");
+    const uint64_t seed = std::strtoull(seed_s, nullptr, 10);
+    mx::random::seed(seed);
+    use_sampling = true;
+    std::fprintf(stderr,
+                 "[sampling] non-greedy mode=%s seed=%llu temp=%.3g "
+                 "top_p=%.3g top_k=%d min_p=%.3g presence=%.3g\n",
+                 m.c_str(), static_cast<unsigned long long>(seed),
+                 sampling_params.temperature, sampling_params.top_p,
+                 sampling_params.top_k, sampling_params.min_p,
+                 sampling_params.presence_penalty);
+  }
+
   // Decode. With VEYSTRIX_CPP_MTP unset this is the original greedy loop
   // (identical digests to gate (b)). With it set, each step calls the REAL
   // shard-22 mtp_draft_forward_real to propose a draft and mtp_verify to
@@ -2202,9 +2243,17 @@ std::vector<StepRecord> run_generation(const std::string& ckpt,
         break;
       }
     } else {
-      mx::array next = sample_greedy(decided);
+      mx::array next = use_sampling
+                           ? sample_non_greedy(decided, sampling_params, seen_tokens)
+                           : sample_greedy(decided);
       mx::eval(next);
       int next_id = static_cast<int>(next.data<uint32_t>()[0]);
+      if (use_sampling && sampling_params.presence_penalty != 0.0f) {
+        // Mirror Sampler._note_sampled in veystrix/sampling.py: record the
+        // sampled token at the sampling boundary so its first repetition is
+        // penalized too. Harmless for THINKING (presence penalty is zero).
+        seen_tokens.push_back(static_cast<int32_t>(next_id));
+      }
       emit_record(token, next_id, decided);
       token = next_id;
       logits_ready = false;

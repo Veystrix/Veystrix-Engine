@@ -25,6 +25,7 @@
 // truth produced by gen_native_generate_vectors.py):
 //   step=<i> in=<token_in> out=<token_out> sha256=<64 hex>
 #include "../src/decoder.hpp"
+#include "../src/sampling.hpp"
 
 #include <mlx/mlx.h>
 
@@ -35,6 +36,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -245,6 +247,23 @@ std::vector<StepRecord> run_generation(const std::string& wdir,
   }
 
   std::vector<StepRecord> records;
+  // Opt-in non-greedy sampling (production THINKING/INSTRUCT presets). The
+  // default stays greedy so native_generate's golden-vector test is unchanged.
+  // VEYSTRIX_CPP_SAMPLING=thinking | instruct
+  SamplingParams sampling_params;
+  bool use_sampling = false;
+  if (const char* sm = std::getenv("VEYSTRIX_CPP_SAMPLING")) {
+    std::string mode(sm);
+    if (mode == "thinking") {
+      sampling_params = SamplingParams{1.0f, 0.95f, 20, 0.0f, 0.0f};
+      use_sampling = true;
+    } else if (mode == "instruct") {
+      sampling_params = SamplingParams{0.7f, 0.80f, 20, 0.0f, 1.5f};
+      use_sampling = true;
+    }
+  }
+  std::vector<int32_t> seen_tokens;  // presence-penalty history
+
   int token = prompt_token;
   for (int step = 0; step < num_tokens; ++step) {
     std::vector<int32_t> tok_data{static_cast<int32_t>(token)};
@@ -252,10 +271,18 @@ std::vector<StepRecord> run_generation(const std::string& wdir,
     mx::array logits = run_decoder_step_from_tokens(
         tokens, embed_w, layers, head, dcfg, caches);
 
-    // sample_greedy: argmax over the flattened logits -> uint32 token id.
-    mx::array next = sample_greedy(logits);
+    std::optional<mx::array> next_opt;
+    if (use_sampling) {
+      next_opt = sample_non_greedy(logits, sampling_params, seen_tokens, std::nullopt);
+    } else {
+      // sample_greedy: argmax over the flattened logits -> uint32 token id.
+      next_opt = sample_greedy(logits);
+    }
+    mx::array next = *next_opt;
     mx::eval(next);
     uint32_t next_id = next.data<uint32_t>()[0];
+    if (use_sampling)
+      seen_tokens.push_back(static_cast<int32_t>(next_id));
 
     // Digest over the full logit row, cast to float32 little-endian (matches
     // logit_reference.py / logit_sha256 in the generator).

@@ -128,6 +128,13 @@ struct ModelSpec {
   QSAConfig qsa;                    // valid for the QSA full-attention family
   bool use_qsa_indexer = false;     // true only for sparse-QSA (Qwen) attention
   GDNConfig gdn;                    // valid for LINEAR_ATTN_GDN layers
+  // Nemotron Mamba-2 geometry (declared here to avoid a header dependency on
+  // mamba_layer.hpp; fields mirror MambaConfig one-for-one). Valid for
+  // MAMBA_SSM layers. Populated by the extended from_nemotron_config overload.
+  int mamba_num_heads = 0, mamba_head_dim = 0, mamba_n_groups = 0;
+  int mamba_ssm_state_size = 0, mamba_conv_kernel = 0;
+  int mamba_intermediate_size = 0, mamba_conv_dim = 0;
+  float mamba_time_step_min = 0.001f, mamba_time_step_max = 100.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +166,20 @@ ModelSpec from_nemotron_config(
     int n_experts, int top_k, int group_size, int moe_intermediate,
     float norm_eps);
 
+// Full overload: additionally carries Mamba-2 geometry and time-step limits
+// read from the checkpoint config.json (owner inputs). Calls the base builder
+// then fills the mamba_* fields.
+ModelSpec from_nemotron_config(
+    int hidden_size,
+    int n_layers,
+    const std::vector<std::string>& layer_block_types,
+    int n_experts, int top_k, int group_size, int moe_intermediate,
+    float norm_eps,
+    int mamba_num_heads, int mamba_head_dim, int mamba_n_groups,
+    int mamba_ssm_state_size, int mamba_conv_kernel,
+    int mamba_intermediate_size, int mamba_conv_dim,
+    float mamba_time_step_min, float mamba_time_step_max);
+
 // Extension point for future models: the caller has already decided the layer
 // kinds, the MoE mask and the exact expert/qsa/gdn configs; fill them on the
 // returned spec before use.
@@ -178,10 +199,15 @@ struct LayerDispatch {
   LayerKind kind = LayerKind::MOE;
   bool use_gdn = false;      // gdn_* / gated_delta_step_kernel / rms_norm_gated
   bool use_qsa = false;      // qsa_indexer_pre_rope + qsa_rms_norm + attention
-  bool use_mamba = false;    // Mamba/SSM scan (future primitive)
+  bool use_mamba = false;    // Mamba/SSM scan (mamba_layer.hpp primitive)
   bool use_moe = false;      // router + q4_projection + activation + combine
   QSAConfig qsa;             // valid when use_qsa
   GDNConfig gdn;             // valid when use_gdn
+  // Mamba geometry (mirrors ModelSpec mamba_* fields) for MAMBA_SSM layers.
+  int mamba_num_heads = 0, mamba_head_dim = 0, mamba_n_groups = 0;
+  int mamba_ssm_state_size = 0, mamba_conv_kernel = 0;
+  int mamba_intermediate_size = 0, mamba_conv_dim = 0;
+  float mamba_time_step_min = 0.001f, mamba_time_step_max = 100.0f;
   ExpertConfig expert;       // valid when use_moe
   float norm_eps = 0.f;
   HyperConnectionConfig hc;

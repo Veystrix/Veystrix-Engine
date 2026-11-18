@@ -156,6 +156,30 @@ ModelSpec from_nemotron_config(
   return s;
 }
 
+ModelSpec from_nemotron_config(
+    int hidden_size, int n_layers,
+    const std::vector<std::string>& layer_block_types,
+    int n_experts, int top_k, int group_size, int moe_intermediate,
+    float norm_eps,
+    int mamba_num_heads, int mamba_head_dim, int mamba_n_groups,
+    int mamba_ssm_state_size, int mamba_conv_kernel,
+    int mamba_intermediate_size, int mamba_conv_dim,
+    float mamba_time_step_min, float mamba_time_step_max) {
+  ModelSpec s = from_nemotron_config(hidden_size, n_layers, layer_block_types,
+                                     n_experts, top_k, group_size,
+                                     moe_intermediate, norm_eps);
+  s.mamba_num_heads = mamba_num_heads;
+  s.mamba_head_dim = mamba_head_dim;
+  s.mamba_n_groups = mamba_n_groups;
+  s.mamba_ssm_state_size = mamba_ssm_state_size;
+  s.mamba_conv_kernel = mamba_conv_kernel;
+  s.mamba_intermediate_size = mamba_intermediate_size;
+  s.mamba_conv_dim = mamba_conv_dim;
+  s.mamba_time_step_min = mamba_time_step_min;
+  s.mamba_time_step_max = mamba_time_step_max;
+  return s;
+}
+
 ModelSpec from_generic_config(int hidden_size, int n_layers,
                               const std::vector<LayerKind>& layer_kinds,
                               const std::vector<bool>& has_moe) {
@@ -193,7 +217,16 @@ LayerDispatch dispatch_layer(const ModelSpec& spec, int layer_index) {
       d.qsa = spec.qsa;
       break;
     case LayerKind::MAMBA_SSM:
-      d.use_mamba = true;  // primitive not ported yet (see integration plan)
+      d.use_mamba = true;  // mamba_layer.hpp primitive (bit-exact at S=1)
+      d.mamba_num_heads = spec.mamba_num_heads;
+      d.mamba_head_dim = spec.mamba_head_dim;
+      d.mamba_n_groups = spec.mamba_n_groups;
+      d.mamba_ssm_state_size = spec.mamba_ssm_state_size;
+      d.mamba_conv_kernel = spec.mamba_conv_kernel;
+      d.mamba_intermediate_size = spec.mamba_intermediate_size;
+      d.mamba_conv_dim = spec.mamba_conv_dim;
+      d.mamba_time_step_min = spec.mamba_time_step_min;
+      d.mamba_time_step_max = spec.mamba_time_step_max;
       break;
     case LayerKind::MOE:
       break;

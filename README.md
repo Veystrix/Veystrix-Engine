@@ -18,12 +18,12 @@
 ### 1. Install via Homebrew (Recommended)
 
 ```sh
-brew install joyboyreturns/veystrix/veystrix
+brew install veystrix/veystrix/veystrix
 ```
 
 *Or via the official direct install script:*
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Veystrix/veystrix-engine/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Veystrix/Veystrix-Engine/main/install.sh | bash
 ```
 
 ### 2. Launch the Interactive Coding Agent

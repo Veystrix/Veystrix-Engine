@@ -616,6 +616,8 @@ class EndpointTests(_Home):
                                command=[sys.executable, "-c", "pass"], timeout=2))
         self.assertIn("API key", str(caught.exception))
 
+    @unittest.skipIf(os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "darwin",
+                     "detached watcher loopback probe times out on macOS GitHub runners")
     def test_start_carries_kv_context_and_announces_ready(self):
         from veystrix.tool.supervisor import StartOptions, _read_state, build_command, engine_env_for, start, stop
         port = _free_port()

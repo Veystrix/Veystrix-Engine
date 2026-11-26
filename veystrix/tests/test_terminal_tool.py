@@ -103,7 +103,7 @@ class TerminalToolTests(unittest.TestCase):
     def test_cli_cpp_refuses_cleanly(self):
         result = subprocess.run([sys.executable, "-m", "veystrix", "start", "--engine", "cpp",
                                  "--port", str(_free_port())], cwd=ROOT, env=self.env,
-                                capture_output=True, text=True, timeout=30)
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cpp", result.stderr.lower())
         self.assertIn("python", result.stderr.lower())

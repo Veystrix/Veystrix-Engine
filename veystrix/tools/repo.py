@@ -235,8 +235,9 @@ class Repo:
     def run_command(self, command, timeout_seconds=120, should_cancel=None):
         timeout = min(max(1, int(timeout_seconds)), 300)
         environment = sanitized_environment()
+        shell = "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
         process = subprocess.Popen(
-            ["/bin/zsh", "-c", command], cwd=self.root,
+            [shell, "-c", command], cwd=self.root,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=environment, errors="replace",
             start_new_session=True,

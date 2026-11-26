@@ -338,9 +338,10 @@ class SelectorAndAbiTest(unittest.TestCase):
             self.assertEqual(environ, {})
 
     def test_default_lib_path_prefers_installed_bundle_binary(self):
+        suffix = ".dylib" if os.name == "posix" and os.uname().sysname == "Darwin" else ".so"
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            lib = home / ".veystrix" / "engine" / "libveystrix_c.dylib"
+            lib = home / ".veystrix" / "engine" / f"libveystrix_c{suffix}"
             lib.parent.mkdir(parents=True)
             lib.write_bytes(b"fake")
             with patch.dict(os.environ, {"VEYSTRIX_HOME": str(home)}):
@@ -348,9 +349,10 @@ class SelectorAndAbiTest(unittest.TestCase):
                 self.assertEqual(resolve_lib_path(), lib)
 
     def test_default_lib_path_finds_legacy_nested_layout(self):
+        suffix = ".dylib" if os.name == "posix" and os.uname().sysname == "Darwin" else ".so"
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            lib = home / ".veystrix" / "engine" / "engine" / "libveystrix_c.dylib"
+            lib = home / ".veystrix" / "engine" / "engine" / f"libveystrix_c{suffix}"
             lib.parent.mkdir(parents=True)
             lib.write_bytes(b"fake")
             with patch.dict(os.environ, {"VEYSTRIX_HOME": str(home)}):

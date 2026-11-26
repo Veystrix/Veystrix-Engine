@@ -187,3 +187,11 @@ def installed_inkling2_mini(root: Path | None = None) -> list[Path]:
 
 def resolve_inkling2_mini(requested: str | os.PathLike[str] | None = None) -> Path:
     return resolve_for_family("inkling2-mini", requested)
+
+
+def resolve_flashnext(requested: str | os.PathLike[str] | None = None) -> Path:
+    return resolve_for_family("flashnext", requested)
+
+
+def resolve_nemotron35(requested: str | os.PathLike[str] | None = None) -> Path:
+    return resolve_for_family("nemotron35-lightning", requested)

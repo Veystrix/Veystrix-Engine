@@ -281,7 +281,12 @@ class Agentic4kOfflineTests(unittest.TestCase):
     # 9. Exact cache-state compatibility
     # --------------------------------------------------------------------------
     def test_09_exact_cache_state_compatibility(self):
-        from models.flashnext.prefix_cache import PrefixCache
+        try:
+            from models.flashnext.prefix_cache import PrefixCache
+        except ModuleNotFoundError as exc:
+            if (exc.name or "").split(".")[0] == "mlx":
+                self.skipTest("requires mlx")
+            raise
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fp = "engine_fingerprint_v1"
@@ -296,8 +301,13 @@ class Agentic4kOfflineTests(unittest.TestCase):
     def test_10_deadlock_regression(self):
         from models.flashnext import gpu_sync
         # Verify barrier and drain functions execute cleanly without holding GIL
-        gpu_sync.barrier()
-        gpu_sync.drain()
+        try:
+            gpu_sync.barrier()
+            gpu_sync.drain()
+        except ModuleNotFoundError as exc:
+            if (exc.name or "").split(".")[0] == "mlx":
+                self.skipTest("requires mlx")
+            raise
 
     # --------------------------------------------------------------------------
     # 11. GPU buffer lifetime

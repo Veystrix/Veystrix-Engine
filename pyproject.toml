@@ -14,7 +14,6 @@ authors = [{ name = "Veystrix" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: MacOS X",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS :: MacOS X",
   "Programming Language :: Python :: 3.12",
 ]

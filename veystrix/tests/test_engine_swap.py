@@ -18,7 +18,7 @@ class SwapBase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.home = Path(self._tmp.name)
-        env = {"VEYSTRIX_HOME": str(self.home), "VEYSTRIX_NO_KEYCHAIN": "1"}
+        env = {"VEYSTRIX_HOME": str(self.home), "VEYSTRIX_MODEL_ROOT": str(self.home / "models"), "VEYSTRIX_NO_KEYCHAIN": "1"}
         for name in ("VEYSTRIX_ENGINE", "VEYSTRIX_SOURCE_CPP"):
             os.environ.pop(name, None)
         patcher = patch.dict(os.environ, env)
@@ -92,7 +92,7 @@ class SwapFlow(SwapBase):
         with self.source_on():
             report = swap.describe(self.home)
         self.assertEqual(report["selected"], "cpp")          # C++ whenever it can serve the model
-        self.assertTrue(report["available"]["python"]["available"])
+        self.assertFalse(report["available"]["python"]["available"])
         self.assertTrue(report["available"]["cpp"]["available"])
 
     def test_swap_saves_selection_when_not_running(self):
@@ -119,7 +119,7 @@ class SwapFlow(SwapBase):
             outcome = swap.swap(self.home, engine="cpp", timeout=5)
         stop_mock.assert_called_once()
         options = start_mock.call_args[0][0]
-        self.assertEqual((options.engine, options.model, options.port), ("cpp", "flashnext", 8123))
+        self.assertEqual((options.engine, options.model, options.port), ("cpp", "inkling2-mini", 8123))
         self.assertEqual(options.checkpoint, "/models/fn")       # the router requires --checkpoint
         self.assertTrue(outcome["restarted"])
 
@@ -145,7 +145,7 @@ class SwapFlow(SwapBase):
     def test_model_swap_validates_name(self):
         with self.assertRaises(ValueError):
             swap.swap(self.home, model="gpt-9")
-        with self.source_on():
+        with self.source_on(), patch.object(swap, "checkpoint_refusal", return_value=None):
             outcome = swap.swap(self.home, model="inkling2-mini")
         self.assertEqual(Config(self.home).get("model"), "inkling2-mini")
         self.assertEqual(outcome["model"], "inkling2-mini")

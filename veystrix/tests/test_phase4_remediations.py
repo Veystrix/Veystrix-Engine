@@ -28,7 +28,12 @@ class TestPhase4Remediations(unittest.TestCase):
 
         # In CRITICAL pressure state
         with mock.patch.object(reclaimer, "evaluate_state", return_value=auto_reclaim.PressureState.CRITICAL):
-            report = reclaimer.post_request_cleanup(store=None, prefix_store=broken_prefix_store)
+            try:
+                report = reclaimer.post_request_cleanup(store=None, prefix_store=broken_prefix_store)
+            except ModuleNotFoundError as exc:
+                if (exc.name or "").split(".")[0] == "mlx":
+                    self.skipTest("requires mlx")
+                raise
             self.assertIsNotNone(report)
             self.assertTrue(any("failed" in r for r in report.reasons))
 

@@ -10,6 +10,7 @@ from models.flashnext import memory_policy
 
 
 class SwapCeilingTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "real_run_guard is macOS-only")
     def test_guard_exposes_absolute_swap_ceiling_default_5gib(self):
         root = Path(__file__).resolve().parents[2]
         out = subprocess.run(

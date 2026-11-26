@@ -52,7 +52,7 @@ class CooperativeBackend(FakeBackend):
 
     @staticmethod
     def batch_stats(**fields):
-        from veystrix.backends.flashnext import Stats
+        from veystrix.backends.cpp_engine import Stats
 
         return Stats(**fields)
 

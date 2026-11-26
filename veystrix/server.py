@@ -1403,7 +1403,8 @@ class ModelService:
         cold prompt into chunks: chunking (2,048 tokens) happens only inside an admitted prefill."""
         session = getattr(self, "session", None)
         backend = getattr(session, "backend", None) if session else None
-        family = getattr(backend, "family", None) or (session.preferences.get("model") if session else "")
+        prefs = getattr(session, "preferences", None) if session else None
+        family = getattr(backend, "family", None) or (prefs.get("model") if isinstance(prefs, dict) else "")
         is_generic = family == "inkling2-mini"
 
         if incremental:

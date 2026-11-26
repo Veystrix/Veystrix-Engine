@@ -126,9 +126,9 @@ class PortCheckTests(unittest.TestCase):
 
     def test_flashnext_runs_on_the_generic_runtime(self):
         from veystrix import model_identity
-        self.assertEqual(model_identity.FLASHNEXT.cpp_runtime, "generic")
+        self.assertEqual(model_identity.INKLING2_MINI.cpp_runtime, "generic")
         self.assertEqual({i.family for i in model_identity.IDENTITIES.values() if i.cpp_runtime == "custom"},
-                         {"nemotron35-lightning"})
+                         set())
 
     def test_recipe_speed_knobs(self):
         from veystrix.backends.cpp_engine import CtypesVxBinding

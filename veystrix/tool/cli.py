@@ -360,6 +360,10 @@ def dispatch_tool(argv: list[str]) -> int:
         from veystrix.tool.swap import resolve_model_and_checkpoint
         model = args.model or config.get("model")
         checkpoint = args.checkpoint
+        engine = _start_engine(args, config, model)
+        engine_profile = getattr(args, "engine_profile", engine_mod.CPP_DEFAULT_PROFILE)
+        if getattr(args, "engine", None):
+            engine_mod.check_engine(engine, home, model, engine_profile)
         if not args.command:
             model, checkpoint = resolve_model_and_checkpoint(
                 model,
@@ -369,8 +373,7 @@ def dispatch_tool(argv: list[str]) -> int:
                 echo=lambda m: print(f"veystrix: {m}", file=sys.stderr),
                 resolver_fn=_default_checkpoint,
             )
-        engine = _start_engine(args, config, model)
-        engine_profile = getattr(args, "engine_profile", engine_mod.CPP_DEFAULT_PROFILE)
+            engine = _start_engine(args, config, model)
         engine_mod.check_engine(engine, home, model, engine_profile)
         port = args.port or config.get("port")
         foreground = bool(args.foreground or (not args.background and not args.json and sys.stdin.isatty()))

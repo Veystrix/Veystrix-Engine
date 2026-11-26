@@ -399,6 +399,9 @@ class SwapSafetyTests(unittest.TestCase):
             cpp_engine._CPP_PREFIX_CACHE.clear()
 
     def test_strict_probe_native_mach_readings_match_schema(self):
+        import sys
+        if sys.platform != "darwin":
+            self.skipTest("vm_stat is macOS-only")
         from models.flashnext import chat_guard
 
         probe = chat_guard.StrictProbe()

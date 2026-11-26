@@ -82,8 +82,9 @@ class TestPhase4Remediations(unittest.TestCase):
         """R3-01: ./chat.sh --server defaults to AGENTIC mode so supervision.check passes."""
         with mock.patch("sys.stdin.isatty", return_value=False):
             with mock.patch("veystrix.cli.installed_checkpoints", return_value=[("flashnext", Path("/models/oq4"))]):
-                chat_args, env = cli.command(["--server"])
-                self.assertEqual(env.get("VEYSTRIX_MODE"), "agentic")
+                with mock.patch("veystrix.cli._interpreter", return_value="/usr/bin/python3"):
+                    chat_args, env = cli.command(["--server"])
+                    self.assertEqual(env.get("VEYSTRIX_MODE"), "agentic")
 
     def test_r3_02_chat_guard_allows_desktop_mac_without_battery(self):
         """R3-02: ChatGuard allows desktop Macs running on AC power where battery_percent is None."""
@@ -114,9 +115,10 @@ class TestPhase4Remediations(unittest.TestCase):
         """R3-03: Launcher marks default profile ephemeral so saved profile is preserved."""
         with mock.patch("sys.stdin.isatty", return_value=False):
             with mock.patch("veystrix.cli.installed_checkpoints", return_value=[("flashnext", Path("/models/oq4"))]):
-                chat_args, env = cli.command([])
-                self.assertIn("--profile", chat_args)
-                self.assertEqual(env.get("VEYSTRIX_PROFILE_EPHEMERAL"), "1")
+                with mock.patch("veystrix.cli._interpreter", return_value="/usr/bin/python3"):
+                    chat_args, env = cli.command([])
+                    self.assertIn("--profile", chat_args)
+                    self.assertEqual(env.get("VEYSTRIX_PROFILE_EPHEMERAL"), "1")
 
     def test_r3_04_chat_mode_refuses_layer_major(self):
         """R3-04: plan_mode refuses layer-major under CHAT mode."""

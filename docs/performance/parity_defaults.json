@@ -1,0 +1,19 @@
+{
+ "flashnext": {
+  "generic_speed": {
+   "pipe": 1,
+   "keepwarm": 1,
+   "spec_top": 4,
+   "tensor_rows": 1,
+   "gate_tail": 3,
+   "prefill_pipe": 0
+  },
+  "parity_log": "results/cpp/qwen-generic/parity4.out",
+  "result": "generic vs custom 6/6 tokens + float32 logit digests identical (solo 16/64/256/1024, step_batch N=2, two turns) at the generic default (parity4, 21 Nov); the custom reference was identical to parity3, so it was frozen into veystrix/parity_refs/ before the custom runtime was deleted; later runs compare against that file",
+  "guard": "results/cpp/qwen-generic/guard-parity4.jsonl (stopped null, swap flat 1076 MiB)",
+  "date": "2026-11-21",
+  "build": "cpp/engine/build at commit 55d1ca57 (lib sha256 34031f5bb3dc...)",
+  "frozen_reference": "veystrix/parity_refs/qwen4_exp-flashnext-custom-2026-11-21.json",
+  "post_deletion_log": "results/cpp/qwen-generic/parity5-frozen.out (7/7 vs the frozen reference, build without the custom runtime)"
+ }
+}

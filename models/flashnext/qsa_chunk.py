@@ -1,0 +1,642 @@
+"""Bound Qwen Sparse Attention masks without chunking the whole model."""
+from __future__ import annotations
+
+import math
+import os
+
+import mlx.core as mx
+
+
+QSA_CHUNK_THRESHOLD = int(
+    os.environ.get("FLASHNEXT_QSA_CHUNK_THRESHOLD", "2048")
+)
+QSA_QUERY_CHUNK = int(os.environ.get("FLASHNEXT_QSA_QUERY_CHUNK", "2048"))
+# Upstream builds a dense block-selection mask with this shape:
+# (batch, query, block_topk, key). Route to our sparse mask before that
+# temporary crosses the allocator budget, even when query is below the old
+# length-only threshold.
+QSA_DENSE_MASK_MAX_BYTES = int(os.environ.get(
+    "FLASHNEXT_QSA_DENSE_MASK_MAX_BYTES", str(512 * 1024 * 1024)
+))
+
+QSA_CACHE_POOLED_KEYS = os.environ.get("FLASHNEXT_QSA_CACHE_POOLED_KEYS", "0") == "1"
+QSA_SCATTER_DECODE = os.environ.get("FLASHNEXT_QSA_SCATTER_DECODE", "0") == "1"
+FLAG_KERNEL = "FLASHNEXT_QSA_KERNEL"
+FLAG_GATHER_TILE = "FLASHNEXT_QSA_GATHER_TILE"
+FLAG_PREFILL_TILE_EVAL = "FLASHNEXT_QSA_PREFILL_TILE_EVAL"
+FLAG_INDEX_RESERVE = "FLASHNEXT_QSA_INDEX_RESERVE"
+FLAG_DENSE_PREFIX = "FLASHNEXT_QSA_DENSE_PREFIX"             # opt-in: queries that see every causal token use one causal SDPA
+FLAG_MASKED_SPARSE = "FLASHNEXT_QSA_MASKED_SPARSE"           # opt-in: sparse queries use one masked SDPA per query tile over the dequantized history
+FLAG_SHARED_DENSE = "FLASHNEXT_QSA_SHARED_DENSE_KV"           # opt-in: leading dense queries share one gathered K/V instead of one copy per query
+FLAG_TILE_PIPELINE = "FLASHNEXT_QSA_TILE_PIPELINE"             # opt-in: queue the next query tile while the previous one runs (bounded, same operations)
+FLAG_MASKED_MAX_KEYS = "FLASHNEXT_QSA_MASKED_MAX_KEYS"         # longest history that path handles (longer keeps the per-query gather)
+FLAG_MASKED_TILE = "FLASHNEXT_QSA_MASKED_TILE"                 # queries per masked tile
+SPECIAL_MIN_QUERIES = 16                                       # decode and speculative-verify calls (a few rows) keep the per-query gather
+INDEX_RESERVE_TOKENS = 4096
+
+_ORIGINAL_CALL = None
+_ORIGINAL_INDEXER_CALL = None
+
+
+def _append_index_array(storage, previous, incoming, axis, offset):
+    """Append into a reserved array and return the valid, unpadded view."""
+    count = incoming.shape[axis]
+    end = offset + count
+    if storage is None or storage.shape[axis] < end:
+        shape = list(incoming.shape)
+        shape[axis] = (end + INDEX_RESERVE_TOKENS - 1) // INDEX_RESERVE_TOKENS * INDEX_RESERVE_TOKENS
+        storage = mx.zeros(shape, dtype=incoming.dtype)
+        if previous is not None:
+            selection = [slice(None)] * incoming.ndim
+            selection[axis] = slice(0, offset)
+            storage[tuple(selection)] = previous
+    selection = [slice(None)] * incoming.ndim
+    selection[axis] = slice(offset, end)
+    storage[tuple(selection)] = incoming
+    selection[axis] = slice(0, end)
+    return storage, storage[tuple(selection)]
+
+
+def _reserve_index_update(original):
+    def update(cache, keys, positions):
+        if os.environ.get(FLAG_INDEX_RESERVE) != "1":
+            if hasattr(cache, "_flashnext_index_reserve"):
+                cache._flashnext_index_reserve = None
+            return original(cache, keys, positions)
+        old_keys, old_positions = cache.index_keys, cache.index_position_ids
+        if old_keys is not None and (old_positions.ndim != positions.ndim
+                                     or old_positions.dtype != positions.dtype
+                                     or old_keys.dtype != keys.dtype):
+            cache._flashnext_index_reserve = None
+            return original(cache, keys, positions)
+        offset = old_keys.shape[1] if old_keys is not None else 0
+        saved = getattr(cache, "_flashnext_index_reserve", None)
+        # Restore, trim, and batch filtering replace these public views.
+        # Treat them as a new source rather than writing to an old backing array.
+        key_store, pos_store = (saved[2:] if saved is not None and saved[0] is old_keys
+                               and saved[1] is old_positions else (None, None))
+        key_store, cache.index_keys = _append_index_array(key_store, old_keys, keys, 1, offset)
+        pos_store, cache.index_position_ids = _append_index_array(pos_store, old_positions, positions, -1, offset)
+        cache._flashnext_index_reserve = (cache.index_keys, cache.index_position_ids, key_store, pos_store)
+        return cache.index_keys, cache.index_position_ids
+
+    return update
+
+
+def kernel_mode():
+    mode = os.environ.get(FLAG_KERNEL, "reference").strip().lower()
+    if mode not in ("reference", "gather"):
+        raise ValueError("FLASHNEXT_QSA_KERNEL must be reference or gather")
+    return mode
+
+
+def masked_sparse_enabled():
+    value = os.environ.get(FLAG_MASKED_SPARSE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_MASKED_SPARSE} must be 0 or 1")
+    return value == "1"
+
+
+def masked_limits():
+    keys = int(os.environ.get(FLAG_MASKED_MAX_KEYS, "16384"))
+    tile = int(os.environ.get(FLAG_MASKED_TILE, "256"))
+    if keys < 1 or not 1 <= tile <= 2048:
+        raise ValueError(f"{FLAG_MASKED_MAX_KEYS} must be positive and {FLAG_MASKED_TILE} between 1 and 2048")
+    return keys, tile
+
+
+def tile_pipeline_enabled():
+    value = os.environ.get(FLAG_TILE_PIPELINE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_TILE_PIPELINE} must be 0 or 1")
+    return value == "1"
+
+
+def shared_dense_enabled():
+    value = os.environ.get(FLAG_SHARED_DENSE, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_SHARED_DENSE} must be 0 or 1")
+    return value == "1"
+
+
+def dense_prefix_enabled():
+    value = os.environ.get(FLAG_DENSE_PREFIX, "0") or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{FLAG_DENSE_PREFIX} must be 0 or 1")
+    return value == "1"
+
+
+def dense_queries(indexer, past, length, pooled):
+    """How many leading queries of a chunk select every causal token (the rest select a sparse set).
+
+    A query whose causal length ``past + i + 1`` has at most ``block_topk`` complete blocks takes all causal tokens
+    (``_selected_indices``: ``counts > topk`` is false), so for those the gathered keys are simply the first ``past + i + 1``
+    cache rows."""
+    if pooled is None:
+        return length
+    first_sparse = (indexer.block_topk + 1) * indexer.compress_ratio - 1 - past
+    return max(0, min(length, first_sparse))
+
+
+def gather_tile():
+    value = int(os.environ.get(FLAG_GATHER_TILE, "8"))
+    if not 1 <= value <= 32:
+        raise ValueError("FLASHNEXT_QSA_GATHER_TILE must be between 1 and 32")
+    return value
+
+
+def fingerprint_parts():
+    parts = {"qsa_prefill_tile_eval": 1} if os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" else {}
+    if dense_prefix_enabled():
+        parts["qsa_dense_prefix"] = 1
+    if masked_sparse_enabled():
+        parts["qsa_masked_sparse"] = masked_limits()
+    if kernel_mode() == "gather":
+        parts.update(qsa_kernel="gather-v1", qsa_gather_tile=gather_tile(),
+                     qsa_pooled_indexer=QSA_CACHE_POOLED_KEYS)
+    return parts
+
+
+def _selected_blocks(indexer, query, pooled_keys, past_len, blocks, start, end):
+    # Keep the upstream reduction and argpartition, including its tie policy.
+    scores = query[:, :, start:end] @ pooled_keys.transpose(0, 1, 3, 2)
+    scores = mx.sum(mx.maximum(scores.astype(mx.float32), 0), axis=1)
+    scores = scores / math.sqrt(indexer.head_dim)
+    ends = past_len + mx.arange(start, end) + 1
+    counts = ends // indexer.compress_ratio
+    valid = mx.arange(blocks)[None, None, :] < counts[None, :, None]
+    scores = mx.where(valid, scores, -mx.inf)
+    return mx.argpartition(scores, kth=-indexer.block_topk, axis=-1)[
+        ..., -indexer.block_topk:
+    ]
+
+
+def _selected_indices(indexer, query, pooled_keys, key_len, past_len, blocks, start, end):
+    """Bounded token indices and validity; no [query, history] token mask.
+
+    Sort the selected set into original token order before SDPA. Invalid tail
+    slots remain masked, rather than duplicating a token's softmax mass.
+    """
+    ratio, topk = indexer.compress_ratio, indexer.block_topk
+    ends = past_len + mx.arange(start, end) + 1
+    counts = ends // ratio
+    slots = min(key_len, (topk + 1) * ratio)
+    dense = mx.broadcast_to(mx.arange(slots)[None, None, :],
+                            (query.shape[0], end - start, slots))
+    if pooled_keys is None:
+        return dense, dense < ends[None, :, None]
+    selected = _selected_blocks(indexer, query, pooled_keys, past_len, blocks, start, end)
+    selected = (selected[..., None] * ratio + mx.arange(ratio)).reshape(
+        query.shape[0], end - start, -1)
+    tail = mx.broadcast_to(counts[None, :, None] * ratio + mx.arange(ratio),
+                           (query.shape[0], end - start, ratio))
+    indices = mx.concatenate((selected, tail), axis=-1)
+    sparse = counts > topk
+    valid = indices < ends[None, :, None]
+    # Early queries see ALL causal tokens, even when later queries are sparse.
+    indices = mx.where(sparse[None, :, None], indices, dense)
+    valid = mx.where(sparse[None, :, None], valid, dense < ends[None, :, None])
+    indices = mx.sort(mx.where(valid, indices, key_len), axis=-1)
+    valid = indices < key_len
+    return mx.minimum(indices, key_len - 1), valid
+
+
+def _gather_rows(array, indices):
+    """[B,H,N,D] -> [B*T,H,S,D], broadcasting without copying history."""
+    batch, tile, selected = indices.shape
+    rows = mx.take_along_axis(array[:, None], indices[:, :, None, :, None], axis=3)
+    return rows.reshape(batch * tile, array.shape[1], selected, array.shape[-1])
+
+
+def _gather_kv(keys, values, cache, indices):
+    if hasattr(cache, "gather_selected"):
+        return cache.gather_selected(indices)
+    if isinstance(keys, tuple):
+        def dequantize(parts):
+            return mx.dequantize(*[mx.contiguous(_gather_rows(p, indices)) for p in parts],
+                                 group_size=cache.group_size, bits=cache.bits)
+        return dequantize(keys), dequantize(values)
+    return _gather_rows(keys, indices), _gather_rows(values, indices)
+
+
+def _gathered_call(self, x, mask, cache, position_ids, position_embeddings):
+    index_query, pooled, key_len, past, blocks = _prepare_indexer(
+        self.indexer, x, cache, position_ids)
+    queries, keys, values, gate, _ = self._prepare_projected_qkv(
+        self.q_proj(x), self.k_proj(x), self.v_proj(x), cache,
+        position_ids, position_embeddings, mask)
+    batch, heads, length, dim = queries.shape
+    outputs = []
+    tile_size = gather_tile()
+    slots = min(key_len, (self.indexer.block_topk + 1) * self.indexer.compress_ratio)
+    cache._flashnext_qsa_workspace = {
+        "max_queries": min(length, tile_size), "pooled_blocks": blocks,
+        "selected_slots": slots,
+        "selected_float_kv_pair_bytes": batch * min(length, tile_size) * slots
+        * self.num_key_value_heads * dim * queries.dtype.size * 2,
+        "largest_indexer_score_tensor_bytes": batch * self.indexer.n_heads * min(length, tile_size)
+        * (blocks if pooled is not None else 0) * max(index_query.dtype.size, 4),
+        "full_history_token_mask": False,
+    }
+    first = 0
+    if dense_prefix_enabled() and batch == 1 and length >= SPECIAL_MIN_QUERIES:
+        first = dense_queries(self.indexer, past, length, pooled)
+    if first:
+        # One causal SDPA over the dequantized cache rows the per-query path would gather (same rows, same dequantization).
+        rows = past + first
+        at = mx.broadcast_to(mx.arange(rows)[None, None, :], (batch, 1, rows))
+        k, v = _gather_kv(keys, values, cache, at)
+        out = mx.fast.scaled_dot_product_attention(queries[:, :, :first], k, v, scale=self.scale, mask="causal")
+        if hasattr(cache, "gather_selected"):
+            mx.eval(out, cache.state)
+        else:
+            mx.eval(out)
+        outputs.append(out.transpose(0, 2, 1, 3))
+    if not first and batch == 1 and length >= SPECIAL_MIN_QUERIES and shared_dense_enabled():
+        lead = dense_queries(self.indexer, past, length, pooled)
+        if lead >= SPECIAL_MIN_QUERIES:
+            # Queries that select every causal token all read the same first ``slots`` cache rows, each with its own validity
+            # mask. The per-query path gathers (and dequantizes) a private copy of those rows for every query; this gathers
+            # them once and gives every query of a tile a broadcast view of them. Same SDPA call per query, same rows, same
+            # order, same mask (padding slots are masked in both, so their contents never enter a sum).
+            at = mx.broadcast_to(mx.arange(slots)[None, None, :], (batch, 1, slots))
+            shared_k, shared_v = _gather_kv(keys, values, cache, at)
+            for start in range(0, lead, tile_size):
+                end = min(start + tile_size, lead)
+                count = end - start
+                ends = past + mx.arange(start, end) + 1
+                valid = mx.arange(slots)[None, :] < ends[:, None]
+                q = queries[:, :, start:end].transpose(0, 2, 1, 3).reshape(batch * count, heads, 1, dim)
+                k = mx.broadcast_to(shared_k, (count,) + shared_k.shape[1:])
+                v = mx.broadcast_to(shared_v, (count,) + shared_v.shape[1:])
+                out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=valid.reshape(count, 1, 1, slots))
+                if start == 0 and hasattr(cache, "gather_selected"):
+                    mx.eval(out, cache.state)
+                else:
+                    mx.eval(out)
+                outputs.append(out.reshape(batch, count, heads, -1))
+            first = lead
+    if (pooled is not None and length - first >= SPECIAL_MIN_QUERIES and batch == 1 and masked_sparse_enabled()
+            and key_len <= masked_limits()[0]):
+        # The same selection as the per-query gather (``_chunk_mask`` is pinned to ``_selected_indices`` by the tests), applied
+        # as a boolean mask over the dequantized history: the history is read once per tile instead of once per query.
+        at = mx.broadcast_to(mx.arange(key_len)[None, None, :], (batch, 1, key_len))
+        k, v = _gather_kv(keys, values, cache, at)
+        tile = masked_limits()[1]
+        for start in range(first, length, tile):
+            end = min(start + tile, length)
+            mask = _chunk_mask(self.indexer, index_query, pooled, key_len, past, blocks, start, end)
+            out = mx.fast.scaled_dot_product_attention(queries[:, :, start:end], k, v, scale=self.scale, mask=mask)
+            if start == first and not first and hasattr(cache, "gather_selected"):
+                mx.eval(out, cache.state)
+            else:
+                mx.eval(out)
+            outputs.append(out.transpose(0, 2, 1, 3))
+        first = length
+    pipeline = tile_pipeline_enabled()
+    in_flight = []
+    for start in range(first, length, tile_size):
+        end = min(start + tile_size, length)
+        indices, valid = _selected_indices(self.indexer, index_query, pooled,
+                                           key_len, past, blocks, start, end)
+        q = queries[:, :, start:end].transpose(0, 2, 1, 3).reshape(
+            batch * (end - start), heads, 1, dim)
+        valid = valid.reshape(batch * (end - start), 1, 1, -1)
+        out = None
+        if hasattr(cache, "gather_selected"):
+            from .mixed_kv import fused_sdpa_selected
+            # One kernel that gathers, dequantizes and attends (opt-in; bit-identical to the two steps below).
+            out = fused_sdpa_selected(cache, q, indices, valid, self.scale)
+        if out is None:
+            k, v = _gather_kv(keys, values, cache, indices)
+            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=valid)
+        # Realize each tile now. A lazy graph over all tiles retains every
+        # gathered KV and indexer score allocation until the final evaluation.
+        if start == first and not first and hasattr(cache, "gather_selected"):
+            # At short prefixes attention reads only INT8. Materialize the
+            # direct INT4 writes too so their lazy graph cannot retain BF16
+            # inputs until the first recent row ages out.
+            mx.eval(out, cache.state)
+        elif pipeline:
+            # Queue this tile and wait for the one before the previous: at most two tiles' gathered K/V are alive, and the
+            # host builds the next tile's graph while the device runs this one. The operations are unchanged.
+            mx.async_eval(out)
+            in_flight.append(out)
+            if len(in_flight) > 2:
+                mx.eval(in_flight.pop(0))
+        else:
+            mx.eval(out)
+        outputs.append(out.reshape(batch, end - start, heads, -1))
+    if in_flight:
+        mx.eval(*in_flight)
+    output = mx.concatenate(outputs, axis=1).reshape(batch, length, -1)
+    return self.o_proj(output * mx.sigmoid(gate))
+
+
+def _dense_mask_bytes(batch, query, past, block_topk) -> int:
+    """Estimate upstream QSA's dense block-selection mask allocation."""
+    return int(batch) * int(query) * int(block_topk) * (int(past) + int(query))
+
+
+def _pool_keys(indexer, raw_keys, position_ids, start, end):
+    pooled_keys = raw_keys[
+        :, start * indexer.compress_ratio : end * indexer.compress_ratio
+    ].reshape(raw_keys.shape[0], end - start, indexer.compress_ratio, indexer.head_dim)
+    pooled_keys = mx.expand_dims(
+        indexer.k_layernorm(
+            mx.mean(pooled_keys.astype(mx.float32), axis=2).astype(raw_keys.dtype)
+        ),
+        axis=1,
+    )
+    block_starts = mx.arange(start, end) * indexer.compress_ratio
+    return indexer._apply_rope(pooled_keys, position_ids[..., block_starts])
+
+
+def _reusable_pool(indexer, cache):
+    from mlx_vlm.models.qwen4_exp.language import QSAKVCache, QSAQuantizedKVCache
+
+    if not isinstance(cache, (QSAKVCache, QSAQuantizedKVCache)):
+        return None
+    saved = getattr(cache, "_flashnext_pooled_keys", None)
+    if saved is None:
+        return None
+    owner, keys, positions, ratio, pooled = saved
+    if (
+        owner is indexer
+        and keys is cache.index_keys
+        and positions is cache.index_position_ids
+        and ratio == indexer.compress_ratio
+        and cache.offset == keys.shape[1]
+    ):
+        return pooled
+    return None
+
+
+def _prepare_indexer(indexer, hidden_states, cache, position_ids):
+    batch, seq_len, _ = hidden_states.shape
+    past_len = int(cache.offset) if cache is not None else 0
+    pooled_keys = None
+    if QSA_CACHE_POOLED_KEYS:
+        pooled_keys = _reusable_pool(indexer, cache)
+    if position_ids is None:
+        position_ids = indexer._default_position_ids(batch, past_len, seq_len)
+
+    qk = indexer.index_qk_proj(hidden_states).reshape(
+        batch,
+        seq_len,
+        indexer.n_heads + indexer.kv_heads,
+        indexer.head_dim,
+    )
+    query = qk[:, :, : indexer.n_heads]
+    raw_keys = qk[:, :, indexer.n_heads :].squeeze(2)
+    query = indexer.q_layernorm(query).transpose(0, 2, 1, 3)
+    if cache is not None:
+        raw_keys, full_position_ids = cache.update_indexer(raw_keys, position_ids)
+    else:
+        full_position_ids = position_ids
+
+    key_len = int(raw_keys.shape[1])
+    max_complete_blocks = key_len // indexer.compress_ratio
+    if max_complete_blocks <= indexer.block_topk:
+        return query, None, key_len, past_len, max_complete_blocks
+    query = indexer._apply_rope(query, position_ids)
+    completed = 0 if pooled_keys is None else pooled_keys.shape[2]
+    if completed < max_complete_blocks:
+        new_keys = _pool_keys(
+            indexer, raw_keys, full_position_ids, completed, max_complete_blocks
+        )
+        pooled_keys = (
+            new_keys if pooled_keys is None
+            else mx.concatenate([pooled_keys, new_keys], axis=2)
+        )
+    if QSA_CACHE_POOLED_KEYS and cache is not None:
+        cache._flashnext_pooled_keys = (
+            indexer, raw_keys, full_position_ids, indexer.compress_ratio, pooled_keys
+        )
+    return query, pooled_keys, key_len, past_len, max_complete_blocks
+
+
+def _chunk_mask(
+    indexer,
+    query,
+    pooled_keys,
+    key_len: int,
+    past_len: int,
+    max_complete_blocks: int,
+    start: int,
+    end: int,
+    scatter: bool = True,
+):
+    query_chunk = query[:, :, start:end]
+    scores = query_chunk @ pooled_keys.transpose(0, 1, 3, 2)
+    scores = mx.sum(mx.maximum(scores.astype(mx.float32), 0), axis=1)
+    scores = scores / math.sqrt(indexer.head_dim)
+
+    query_ends = past_len + mx.arange(start, end) + 1
+    complete_counts = query_ends // indexer.compress_ratio
+    valid_blocks = (
+        mx.arange(max_complete_blocks)[None, None, :]
+        < complete_counts[None, :, None]
+    )
+    scores = mx.where(valid_blocks, scores, -mx.inf)
+    selected_blocks = mx.argpartition(
+        scores,
+        kth=-indexer.block_topk,
+        axis=-1,
+    )[..., -indexer.block_topk :]
+
+    if not scatter:
+        token_indices = mx.arange(key_len)
+        token_blocks = token_indices // indexer.compress_ratio
+        selected_tokens = mx.any(
+            token_blocks[None, None, None, :] == selected_blocks[..., None], axis=2
+        )
+        tail_starts = complete_counts * indexer.compress_ratio
+        tail = (token_indices[None, None, :] >= tail_starts[None, :, None]) & (
+            token_indices[None, None, :] < query_ends[None, :, None]
+        )
+        causal = token_indices[None, None, :] < query_ends[None, :, None]
+        use_sparse = complete_counts > indexer.block_topk
+        return mx.where(
+            use_sparse[None, :, None], selected_tokens | tail, causal
+        )[:, None]
+
+    offsets = mx.arange(indexer.compress_ratio)
+    selected_indices = (
+        selected_blocks[..., None] * indexer.compress_ratio + offsets
+    ).reshape(*selected_blocks.shape[:-1], -1)
+    selected_tokens = mx.zeros(
+        (*selected_indices.shape[:-1], key_len),
+        dtype=mx.bool_,
+    )
+    selected_tokens = mx.put_along_axis(
+        selected_tokens,
+        selected_indices,
+        mx.ones(selected_indices.shape, dtype=mx.bool_),
+        axis=-1,
+    )
+
+    tail_starts = complete_counts * indexer.compress_ratio
+    tail_indices = tail_starts[None, :, None] + offsets[None, None, :]
+    tail_valid = tail_indices < query_ends[None, :, None]
+    fallback = selected_indices[..., :1]
+    tail_indices = mx.where(tail_valid, tail_indices, fallback)
+    selected_tokens = mx.put_along_axis(
+        selected_tokens,
+        tail_indices,
+        mx.ones(tail_indices.shape, dtype=mx.bool_),
+        axis=-1,
+    )
+
+    sparse_start = (indexer.block_topk + 1) * indexer.compress_ratio
+    first_query_end = past_len + start + 1
+    last_query_end = past_len + end
+    if first_query_end >= sparse_start:
+        return selected_tokens[:, None]
+
+    token_indices = mx.arange(key_len)
+    causal = token_indices[None, None, :] < query_ends[None, :, None]
+    if last_query_end < sparse_start:
+        return causal[:, None]
+    use_sparse = complete_counts > indexer.block_topk
+    return mx.where(
+        use_sparse[None, :, None],
+        selected_tokens,
+        causal,
+    )[:, None]
+
+
+def _indexer_call(self, hidden_states, cache, position_ids):
+    if not (QSA_CACHE_POOLED_KEYS or QSA_SCATTER_DECODE):
+        return _ORIGINAL_INDEXER_CALL(self, hidden_states, cache, position_ids)
+    if (
+        (not QSA_CACHE_POOLED_KEYS and hidden_states.shape[1] != 1)
+        or (cache is not None and not isinstance(cache.offset, int))
+    ):
+        return _ORIGINAL_INDEXER_CALL(self, hidden_states, cache, position_ids)
+    query, pooled_keys, key_len, past_len, complete_blocks = _prepare_indexer(
+        self, hidden_states, cache, position_ids
+    )
+    if complete_blocks <= self.block_topk:
+        return None
+    return _chunk_mask(
+        self, query, pooled_keys, key_len, past_len, complete_blocks,
+        0, hidden_states.shape[1],
+        scatter=QSA_SCATTER_DECODE and hidden_states.shape[1] == 1,
+    )
+
+
+def _chunked_call(
+    self,
+    x,
+    mask=None,
+    cache=None,
+    position_ids=None,
+    position_embeddings=None,
+):
+    length = int(x.shape[1])
+    supported_mask = mask is None or (
+        isinstance(mask, str) and mask == "causal"
+    )
+    past_len = getattr(cache, "offset", None)
+    if kernel_mode() == "gather" and cache is not None and isinstance(past_len, int) and supported_mask:
+        return _gathered_call(self, x, mask, cache, position_ids, position_embeddings)
+    if hasattr(cache, "gather_selected"):
+        # A compressed tier cache must NEVER reach upstream dense attention.
+        raise ValueError("mixed/tiered KV requires gather QSA with scalar offsets and a causal mask")
+    dense_mask_bytes = (
+        _dense_mask_bytes(x.shape[0], length, past_len, self.indexer.block_topk)
+        if isinstance(past_len, int)
+        else 0
+    )
+    if (
+        (length <= QSA_CHUNK_THRESHOLD and dense_mask_bytes <= QSA_DENSE_MASK_MAX_BYTES)
+        or not supported_mask
+        or cache is None
+        or not isinstance(past_len, int)
+        or (past_len + length) // self.indexer.compress_ratio
+        <= self.indexer.block_topk
+    ):
+        return _ORIGINAL_CALL(
+            self,
+            x,
+            mask=mask,
+            cache=cache,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+        )
+
+    (
+        index_query,
+        pooled_keys,
+        key_len,
+        saved_past_len,
+        max_complete_blocks,
+    ) = _prepare_indexer(self.indexer, x, cache, position_ids)
+
+    q_proj_output, keys, values = (
+        self.q_proj(x),
+        self.k_proj(x),
+        self.v_proj(x),
+    )
+    queries, keys, values, gate, _ = self._prepare_projected_qkv(
+        q_proj_output,
+        keys,
+        values,
+        cache,
+        position_ids,
+        position_embeddings,
+        mask,
+    )
+
+    from mlx_vlm.models.qwen3_5.language import scaled_dot_product_attention
+
+    outputs = []
+    materialize = os.environ.get(FLAG_PREFILL_TILE_EVAL) == "1" and length > QSA_QUERY_CHUNK
+    for start in range(0, length, QSA_QUERY_CHUNK):
+        end = min(start + QSA_QUERY_CHUNK, length)
+        qsa_mask = _chunk_mask(
+            self.indexer,
+            index_query,
+            pooled_keys,
+            key_len,
+            saved_past_len,
+            max_complete_blocks,
+            start,
+            end,
+        )
+        tile = scaled_dot_product_attention(
+            queries[:, :, start:end], keys, values, cache=cache,
+            scale=self.scale, mask=qsa_mask,
+        )
+        if materialize:
+            # Keep the reference query tile and reduction order. Evaluating
+            # one tile at a time bounds the live mask and score graph.
+            mx.eval(tile)
+        outputs.append(tile)
+    output = mx.concatenate(outputs, axis=2)
+    output = output.transpose(0, 2, 1, 3).reshape(x.shape[0], length, -1)
+    return self.o_proj(output * mx.sigmoid(gate))
+
+
+def apply() -> bool:
+    """Patch only QSA calls whose dense mask would approach Metal limits."""
+    global _ORIGINAL_CALL, _ORIGINAL_INDEXER_CALL
+    from mlx_vlm.models.qwen4_exp.language import (
+        QSAKVCache, QSAQuantizedKVCache, Qwen4ExpAttention, Qwen4ExpQSAIndexer,
+    )
+
+    if getattr(Qwen4ExpAttention, "_flashnext_chunked_qsa", False):
+        return False
+    if QSA_QUERY_CHUNK < 1 or QSA_CHUNK_THRESHOLD < 1:
+        raise ValueError("QSA chunk sizes must be positive")
+    if QSA_DENSE_MASK_MAX_BYTES < 1:
+        raise ValueError("QSA dense mask byte budget must be positive")
+    _ORIGINAL_CALL = Qwen4ExpAttention.__call__
+    _ORIGINAL_INDEXER_CALL = Qwen4ExpQSAIndexer.__call__
+    for cache_type in (QSAKVCache, QSAQuantizedKVCache):
+        cache_type.update_indexer = _reserve_index_update(cache_type.update_indexer)
+    Qwen4ExpQSAIndexer.__call__ = _indexer_call
+    Qwen4ExpAttention.__call__ = _chunked_call
+    Qwen4ExpAttention._flashnext_chunked_qsa = True
+    return True

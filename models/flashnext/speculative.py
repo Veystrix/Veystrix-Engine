@@ -1,0 +1,1286 @@
+"""Exact greedy Lightning MTP decoding for the streamed Qwen4 model."""
+from __future__ import annotations
+
+import gc
+import os
+import time
+from dataclasses import dataclass, field
+from typing import Iterable
+
+from veystrix.bench.telemetry import current as benchmark_trace
+from models.shared.spec_depth import DepthController
+
+import mlx.core as mx
+
+from . import mtp
+from .qsa_chunk import QSA_CHUNK_THRESHOLD
+
+# A large prefill leaves several GB in the MLX allocator; holding it through
+# decode starves the page cache the expert bank depends on. Target prefills
+# use the shared helper below. Draft-specific releases remain local.
+from .prefill import prefill_target
+from .routing import DEFAULT_READ_MODE
+
+
+UNLIMITED_GENERATION_HORIZON = (1 << 31) - 1
+
+
+def _normalize_max_tokens(max_tokens: int | None) -> int:
+    if max_tokens is None or int(max_tokens) < 0:
+        return UNLIMITED_GENERATION_HORIZON
+    return int(max_tokens)
+
+
+def _copy_state(value):
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return tuple(value)
+    return value
+
+
+def snapshot_cache(cache):
+    return [
+        (_copy_state(entry.state), entry.meta_state)
+        for entry in cache
+    ]
+
+
+def restore_cache(cache, snapshot) -> None:
+    for entry, (state, meta_state) in zip(cache, snapshot):
+        entry.state = _copy_state(state)
+        entry.meta_state = meta_state
+
+
+def trim_cache(cache, offset: int) -> None:
+    for entry in cache:
+        current = int(getattr(entry, "offset", 0))
+        if current > offset:
+            entry.trim(current - offset)
+
+
+def rollback_verified(
+    language,
+    target_cache,
+    snapshot,
+    verify_out,
+    block_size,
+    keep_count,
+    materialize=False,
+):
+    """Keep an exact prefix of a verified block without replaying it.
+
+    ``verify_out`` is the output of a ``speculative_verify=True`` forward
+    over ``block_size`` tokens, whose ``gdn_states`` hold the intermediate
+    recurrent states. ``keep_count`` leading tokens stay committed; zero
+    restores ``snapshot``. The recurrent states left in the cache are slices
+    of the verifier's intermediate buffers and stay lazy unless
+    ``materialize`` is true, which evaluates them so the caller may drop the
+    verifier output.
+    """
+    if keep_count <= 0:
+        restore_cache(target_cache, snapshot)
+        return
+    language.rollback_speculative_cache(
+        target_cache,
+        verify_out.gdn_states,
+        keep_count - 1,
+        block_size,
+    )
+    ssm_caches = [
+        entry
+        for entry in target_cache
+        if entry is not None
+        and not entry.is_trimmable()
+        and not hasattr(entry, "zero_row_tail")
+    ]
+    restored = []
+    for entry, state in zip(ssm_caches, verify_out.gdn_states):
+        if len(state) <= 12 or state[12] is None:
+            continue
+        token_history, context_len, conv_input, conv_state_len = state[12]
+        entry[3] = mx.contiguous(
+            token_history[:, keep_count : keep_count + context_len]
+        )
+        entry[2] = mx.contiguous(
+            conv_input[:, keep_count : keep_count + conv_state_len]
+        )
+        restored.extend((entry[2], entry[3]))
+    if materialize:
+        for entry in ssm_caches:
+            restored.extend(
+                value for value in entry.state if isinstance(value, mx.array)
+            )
+    if restored:
+        mx.eval(*restored)
+
+
+@dataclass
+class MTPStats:
+    cycles: int = 0
+    drafted: int = 0
+    accepted: int = 0
+    replayed: int = 0
+    # Tokens kept by the exact rollback instead of a replay (FLASHNEXT_MTP_ROLLBACK).
+    rolled_back: int = 0
+    draft_seconds: float = 0.0
+    verify_seconds: float = 0.0
+    repair_seconds: float = 0.0
+    rollback_seconds: float = 0.0
+    fold_seconds: float = 0.0
+    # Cycles run at each draft depth.
+    depth_counts: dict = field(default_factory=dict)
+    # DepthController.stats() when adaptive depth is on, else None.
+    adaptive: dict | None = None
+
+    @property
+    def acceptance(self) -> float:
+        return self.accepted / self.drafted if self.drafted else 0.0
+
+
+@dataclass
+class FastDraftStats:
+    cycles: int = 0
+    drafted: int = 0
+    accepted: int = 0
+    replayed: int = 0
+    draft_seconds: float = 0.0
+    verify_seconds: float = 0.0
+    rollback_seconds: float = 0.0
+    release_seconds: float = 0.0
+
+    @property
+    def acceptance(self) -> float:
+        return self.accepted / self.drafted if self.drafted else 0.0
+
+
+class FastDraftGreedy:
+    """Use fast routing for drafts and exact routing for every committed token."""
+
+    def __init__(
+        self,
+        language,
+        store,
+        depth: int = 4,
+        draft_language=None,
+        fallback_on_reject: bool = False,
+        release_draft_before_verify: bool = False,
+        draft_min_margin: float | None = None,
+        draft_min_block: int = 1,
+        draft_margin_tokens: int | None = None,
+    ):
+        from mlx_vlm.models.qwen3_5 import language as qwen35_language
+
+        from .qwen4_verifier import Qwen4ExactSpeculativeVerifier
+
+        self.language = language
+        self.draft_language = draft_language or language
+        self.external_draft = draft_language is not None
+        self.fallback_on_reject = bool(fallback_on_reject)
+        self.release_draft_before_verify = bool(
+            release_draft_before_verify
+        )
+        self.depth = max(1, int(depth))
+        self.draft_min_block = max(1, int(draft_min_block))
+        self.draft_margin_tokens = (
+            self.depth
+            if draft_margin_tokens is None
+            else max(0, int(draft_margin_tokens))
+        )
+        self.draft_disabled = False
+        self.store = store
+        self.target_cache = language.make_cache()
+        self.draft_cache = self.draft_language.make_cache()
+        self.next_main = None
+        self.draft_next = None
+        self.route_observer = None
+        self.stats = FastDraftStats()
+        self.draft_min_margin = (
+            float(os.environ.get("FLASHNEXT_DRAFT_MIN_MARGIN", "0"))
+            if draft_min_margin is None
+            else float(draft_min_margin)
+        )
+        self.draft_fused_argmax = (
+            os.environ.get("FLASHNEXT_DRAFT_FUSED_ARGMAX", "0") == "1"
+        )
+        self.verifier = Qwen4ExactSpeculativeVerifier()
+        qwen35_language._EXACT_SPECULATIVE_VERIFIER = self.verifier
+
+    def reset(self) -> None:
+        self.target_cache = self.language.make_cache()
+        self.draft_cache = (
+            self.draft_language.make_cache()
+            if self.draft_language is not None
+            else None
+        )
+        self.next_main = None
+        self.draft_next = None
+        self.route_observer = None
+        self.stats = FastDraftStats()
+        self.draft_disabled = self.external_draft and self.draft_language is None
+        if self.external_draft and self.draft_language is not None:
+            self.draft_language._position_ids = None
+            self.draft_language._rope_deltas = None
+
+    def load_cache(self, cache, token_ids=None) -> None:
+        self.target_cache = cache
+        self.draft_cache = (
+            self.draft_language.make_cache()
+            if self.draft_language is not None
+            else None
+        )
+        self.next_main = None
+        self.draft_next = None
+        self.draft_disabled = self.external_draft and self.draft_language is None
+        if self.external_draft and self.draft_language is not None:
+            self.draft_language._position_ids = None
+            self.draft_language._rope_deltas = None
+            if token_ids:
+                ids = mx.array(token_ids, dtype=mx.uint32).reshape(1, -1)
+                out = self.draft_language(ids, cache=self.draft_cache)
+                self.draft_next = mx.argmax(
+                    out.logits[:, -1, :], axis=-1
+                ).astype(mx.uint32)
+                mx.eval(self.draft_next)
+
+    def _release_transient_draft(self) -> None:
+        """Release a one-shot external draft exactly once."""
+        if (
+            self.draft_disabled
+            and self.draft_language is None
+            and self.draft_cache is None
+            and self.draft_next is None
+        ):
+            return
+        release_started = time.perf_counter()
+        self.draft_next = None
+        self.draft_cache = None
+        self.draft_language = None
+        self.draft_disabled = True
+        gc.collect()
+        mx.clear_cache()
+        self.stats.release_seconds += time.perf_counter() - release_started
+
+    def set_route_observer(self, observer) -> None:
+        self.route_observer = observer
+
+    def _exact_profile(self) -> None:
+        from .adaptive_topk import (
+            set_layer_thresholds,
+            set_renorm_blend,
+            set_resident_experts,
+            set_route_observer,
+            set_threshold,
+        )
+
+        # Take the store's configured default, exactly as RoutingProfile
+        # does. Hardcoding "pread" here made FLASHNEXT_READ silently useless
+        # on the fused path.
+        self.store._read_mode = DEFAULT_READ_MODE
+        set_resident_experts(None)
+        set_route_observer(self.route_observer)
+        # Verification must use all target experts. The old 0.85 target was
+        # only exact relative to a mass-pruned target, not the checkpoint.
+        set_threshold(1.0)
+        set_layer_thresholds({})
+        set_renorm_blend(1.0)
+
+    def _fast_profile(self) -> None:
+        from .adaptive_topk import (
+            FAST_LAYERS,
+            set_layer_thresholds,
+            set_renorm_blend,
+            set_resident_experts,
+            set_route_observer,
+            set_threshold,
+        )
+
+        self.store._read_mode = "shared_mmap"
+        set_resident_experts(None)
+        set_route_observer(None)
+        set_threshold(0.20)
+        set_layer_thresholds({layer: 0.40 for layer in FAST_LAYERS})
+        set_renorm_blend(0.0)
+
+    def append(self, ids) -> None:
+        """Append prompt tokens with the exact target profile."""
+        long_prefill = int(ids.shape[1]) > QSA_CHUNK_THRESHOLD
+        if self.external_draft and not self.draft_disabled and long_prefill:
+            self._release_transient_draft()
+        self._exact_profile()
+        _logits, _hidden, self.next_main = prefill_target(
+            self.language, ids, self.target_cache
+        )
+        if self.external_draft and not self.draft_disabled:
+            draft_out = self.draft_language(ids, cache=self.draft_cache)
+            self.draft_next = mx.argmax(
+                draft_out.logits[:, -1, :], axis=-1
+            ).astype(mx.uint32)
+            mx.eval(self.draft_next)
+
+    def _replay(self, snapshot, values):
+        restore_cache(self.target_cache, snapshot)
+        if not values:
+            return None
+        ids = mx.array(values, dtype=mx.uint32).reshape(1, -1)
+        out = self.language(
+            ids,
+            cache=self.target_cache,
+            speculative_verify=True,
+            return_hidden=True,
+            skip_logits=True,
+        )
+        token = self.language.speculative_argmax_from_hidden(
+            out.hidden_states[-1][:, -1:]
+        ).reshape(-1).astype(mx.uint32)
+        mx.eval(token)
+        self.stats.replayed += len(values)
+        return token
+
+    def _rollback_verified(self, snapshot, verify_out, block_size, keep_count):
+        """Keep an exact prefix of a verified block without replaying it."""
+        rollback_verified(
+            self.language,
+            self.target_cache,
+            snapshot,
+            verify_out,
+            block_size,
+            keep_count,
+        )
+
+    def _external_replay(self, snapshot, next_snapshot, values):
+        restore_cache(self.draft_cache, snapshot)
+        if not values:
+            self.draft_next = next_snapshot
+            return
+        ids = mx.array(values, dtype=mx.uint32).reshape(1, -1)
+        out = self.draft_language(ids, cache=self.draft_cache)
+        self.draft_next = mx.argmax(
+            out.logits[:, -1, :], axis=-1
+        ).astype(mx.uint32)
+        mx.eval(self.draft_next)
+
+    def _align_external_full_block(self, last_value: int) -> None:
+        token = mx.array([[last_value]], dtype=mx.uint32)
+        out = self.draft_language(token, cache=self.draft_cache)
+        self.draft_next = mx.argmax(
+            out.logits[:, -1, :], axis=-1
+        ).astype(mx.uint32)
+        mx.eval(self.draft_next)
+
+    def _generate_exact_tail(
+        self,
+        max_tokens: int,
+        stops: set[int],
+        produced: int,
+    ):
+        trace = benchmark_trace.get()
+        while produced < max_tokens and self.next_main is not None:
+            value = int(self.next_main.item())
+            if value in stops:
+                self.next_main = None
+                return
+            yield value
+            started = trace.clock() if trace is not None else None
+            token = mx.array([[value]], dtype=mx.uint32)
+            output = self.language(token, cache=self.target_cache)
+            self.next_main = mx.argmax(
+                output.logits[:, -1, :], axis=-1
+            ).astype(mx.uint32)
+            mx.eval(self.next_main)
+            if trace is not None:
+                trace.end_round("target_round", started, positions=1)
+            produced += 1
+
+    def _generate_external(self, max_tokens: int, stops: set[int]):
+        produced = 0
+        while (
+            produced < max_tokens
+            and self.next_main is not None
+            and self.draft_next is not None
+        ):
+            first = int(self.next_main.item())
+            if first in stops:
+                self.next_main = None
+                return
+            target_snapshot = snapshot_cache(self.target_cache)
+            draft_snapshot = snapshot_cache(self.draft_cache)
+            draft_next_snapshot = self.draft_next
+
+            # Anchor every target block with the exact token already known.
+            # The draft predicts only later positions. A rejected draft then
+            # becomes the next anchor instead of requiring a one-token replay.
+            candidates = [first]
+            draft_margins = []
+            draft_cache_has_last = False
+            token = self.next_main
+            room = min(self.depth, max_tokens - produced)
+            trace = benchmark_trace.get()
+            draft_ns = trace.clock() if trace is not None else None
+            draft_started = time.perf_counter()
+            trace_draft = os.environ.get("FLASHNEXT_SPEC_TRACE") == "1"
+            draft_token_arrays = []
+            for draft_index in range(1, room):
+                check_margin = (
+                    self.draft_min_margin > 0
+                    and draft_index <= self.draft_margin_tokens
+                )
+                defer_draft_sync = not check_margin and not trace_draft
+                input_token = token
+                out = None
+                logits = None
+                sampled = None
+                if (
+                    self.draft_fused_argmax
+                    and not check_margin
+                    and not trace_draft
+                ):
+                    sampled = self.draft_language.fused_greedy_decode(
+                        input_token.reshape(1, 1),
+                        cache=self.draft_cache,
+                    )
+                if sampled is None:
+                    out = self.draft_language(
+                        input_token.reshape(1, 1), cache=self.draft_cache
+                    )
+                    logits = out.logits[:, -1, :]
+                    token = mx.argmax(logits, axis=-1).astype(mx.uint32)
+                else:
+                    token = sampled.reshape(-1).astype(mx.uint32)
+                margin = None
+                if defer_draft_sync:
+                    mx.async_eval(
+                        token,
+                        [entry.state for entry in self.draft_cache],
+                    )
+                    draft_token_arrays.append(token)
+                else:
+                    top = mx.topk(logits, k=2, axis=-1)
+                    mx.eval(token, top)
+                    pair = sorted(float(value) for value in top[0].tolist())
+                    margin = pair[1] - pair[0]
+                    draft_margins.append(margin)
+                if (
+                    margin is not None
+                    and self.draft_min_margin > 0
+                    and margin < self.draft_min_margin
+                ):
+                    draft_cache_has_last = True
+                    break
+                if not defer_draft_sync:
+                    candidates.append(int(token.item()))
+            if draft_token_arrays:
+                mx.eval(
+                    draft_token_arrays,
+                    [entry.state for entry in self.draft_cache],
+                )
+                candidates.extend(
+                    int(value.item()) for value in draft_token_arrays
+                )
+            self.stats.draft_seconds += time.perf_counter() - draft_started
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(candidates) - 1)
+
+            if self.release_draft_before_verify:
+                out = None
+                logits = None
+                token = None
+                input_token = None
+                sampled = None
+                top = None
+                draft_snapshot = None
+                draft_next_snapshot = None
+                draft_token_arrays = None
+                self._release_transient_draft()
+
+            self.stats.cycles += 1
+            self.stats.drafted += len(candidates) - 1
+            if (
+                self.release_draft_before_verify
+                and len(candidates) < self.draft_min_block
+            ):
+                target_snapshot = None
+                draft_snapshot = None
+                draft_next_snapshot = None
+                gc.collect()
+                mx.clear_cache()
+                self._exact_profile()
+                yield from self._generate_exact_tail(
+                    max_tokens,
+                    stops,
+                    produced,
+                )
+                return
+            block_ids = mx.array(candidates, dtype=mx.uint32).reshape(1, -1)
+            self._exact_profile()
+            verify_ns = trace.clock() if trace is not None else None
+            verify_started = time.perf_counter()
+            out = self.language(
+                block_ids,
+                cache=self.target_cache,
+                speculative_verify=True,
+                return_hidden=True,
+                skip_logits=True,
+            )
+            target_ids = self.language.speculative_argmax_from_hidden(
+                out.hidden_states[-1]
+            )[0].astype(mx.uint32)
+            mx.eval(target_ids)
+            self.stats.verify_seconds += time.perf_counter() - verify_started
+            host_targets = [int(value) for value in target_ids.tolist()]
+
+            accepted = 0
+            for index, proposed in enumerate(candidates[1:]):
+                if host_targets[index] != proposed:
+                    break
+                accepted += 1
+            self.stats.accepted += accepted
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(candidates),
+                                verification=True, accepted=accepted)
+            all_accepted = accepted == len(candidates) - 1
+            if all_accepted:
+                committed = candidates
+                following = mx.array([host_targets[-1]], dtype=mx.uint32)
+            else:
+                correction = host_targets[accepted]
+                committed = candidates[: accepted + 1]
+                following = mx.array([correction], dtype=mx.uint32)
+            if os.environ.get("FLASHNEXT_SPEC_TRACE") == "1":
+                print(
+                    f"spec block={candidates} target={host_targets} "
+                    f"margins={[round(x, 3) for x in draft_margins]} "
+                    f"accepted={accepted} committed={committed}",
+                    flush=True,
+                )
+
+            stop_at = next(
+                (index for index, value in enumerate(committed) if value in stops),
+                None,
+            )
+            remaining = max_tokens - produced
+            keep = len(committed) if stop_at is None else stop_at
+            keep = min(keep, remaining)
+            finishing = (
+                stop_at is not None or keep < len(committed) or keep == remaining
+            )
+
+            verified_prefix = accepted + 1
+            full_block_committed = all_accepted and keep == len(candidates)
+            if full_block_committed:
+                if not self.draft_disabled and not draft_cache_has_last:
+                    self._align_external_full_block(candidates[-1])
+            else:
+                kept_verified = min(keep, verified_prefix)
+                rollback_started = time.perf_counter()
+                self._rollback_verified(
+                    target_snapshot,
+                    out,
+                    len(candidates),
+                    kept_verified,
+                )
+                self.stats.rollback_seconds += (
+                    time.perf_counter() - rollback_started
+                )
+                if not self.draft_disabled and not (
+                    self.fallback_on_reject and not all_accepted
+                ):
+                    self._external_replay(
+                        draft_snapshot,
+                        draft_next_snapshot,
+                        committed[:kept_verified],
+                    )
+            if self.draft_disabled:
+                mx.eval([entry.state for entry in self.target_cache])
+                out = None
+                target_ids = None
+                host_targets = None
+                block_ids = None
+                target_snapshot = None
+                draft_snapshot = None
+                draft_next_snapshot = None
+                draft_margins = None
+                gc.collect()
+                mx.clear_cache()
+            if finishing:
+                self.next_main = None
+                for value in committed[:keep]:
+                    produced += 1
+                    yield value
+                return
+
+            self.next_main = following
+            mx.eval(self.next_main)
+            for value in committed:
+                produced += 1
+                yield value
+            if self.draft_disabled or (
+                self.fallback_on_reject and not all_accepted
+            ):
+                self.draft_disabled = True
+                yield from self._generate_exact_tail(
+                    max_tokens,
+                    stops,
+                    produced,
+                )
+                return
+
+    def _draft(self, snapshot):
+        restore_cache(self.draft_cache, snapshot)
+        self._fast_profile()
+        token = self.next_main
+        drafts = []
+        for _ in range(self.depth):
+            out = self.language(token.reshape(1, 1), cache=self.draft_cache)
+            token = mx.argmax(out.logits[:, -1, :], axis=-1).astype(mx.uint32)
+            mx.eval(token)
+            drafts.append(int(token.item()))
+        return drafts
+
+    def generate(self, max_tokens: int, stops: Iterable[int]):
+        """Yield the same greedy tokens as exact routing."""
+        max_tokens = _normalize_max_tokens(max_tokens)
+        stops = set(stops)
+        if self.external_draft:
+            try:
+                if self.draft_disabled:
+                    yield from self._generate_exact_tail(max_tokens, stops, 0)
+                else:
+                    yield from self._generate_external(max_tokens, stops)
+            finally:
+                if self.release_draft_before_verify:
+                    self._release_transient_draft()
+                self._exact_profile()
+                self.route_observer = None
+            return
+        produced = 0
+        trace = benchmark_trace.get()
+        try:
+            while produced < max_tokens and self.next_main is not None:
+                first = int(self.next_main.item())
+                if first in stops:
+                    self.next_main = None
+                    return
+
+                snapshot = snapshot_cache(self.target_cache)
+                draft_ns = trace.clock() if trace is not None else None
+                drafts = self._draft(snapshot)
+                if trace is not None:
+                    trace.end_round("draft_round", draft_ns, proposed=len(drafts))
+                self.stats.cycles += 1
+                self.stats.drafted += len(drafts)
+
+                block = [first, *drafts]
+                block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
+                self._exact_profile()
+                verify_ns = trace.clock() if trace is not None else None
+                out = self.language(
+                    block_ids,
+                    cache=self.target_cache,
+                    speculative_verify=True,
+                    return_hidden=True,
+                    skip_logits=True,
+                )
+                target_ids = self.language.speculative_argmax_from_hidden(
+                    out.hidden_states[-1]
+                )[0].astype(mx.uint32)
+                mx.eval(target_ids)
+                host_targets = target_ids.tolist()
+
+                accepted = 0
+                for expected, proposed in zip(host_targets, drafts):
+                    if int(expected) != proposed:
+                        break
+                    accepted += 1
+                self.stats.accepted += accepted
+                if trace is not None:
+                    trace.end_round("target_round", verify_ns, positions=len(block),
+                                    verification=True, accepted=accepted)
+                exact = block[: accepted + 1]
+
+                stop_at = next(
+                    (index for index, value in enumerate(exact) if value in stops),
+                    None,
+                )
+                room = max_tokens - produced
+                keep = len(exact) if stop_at is None else stop_at
+                keep = min(keep, room)
+                finishing = stop_at is not None or keep < len(exact) or keep == room
+
+                if finishing:
+                    block_is_committed = (
+                        accepted == len(drafts) and keep == len(block)
+                    )
+                    if not block_is_committed:
+                        self._replay(snapshot, exact[:keep])
+                    self.next_main = None
+                    for value in exact[:keep]:
+                        produced += 1
+                        yield value
+                    return
+
+                if accepted < len(drafts):
+                    self._replay(snapshot, exact)
+                    self.next_main = mx.array(
+                        [int(host_targets[accepted])], dtype=mx.uint32
+                    )
+                else:
+                    self.next_main = mx.array(
+                        [int(host_targets[-1])], dtype=mx.uint32
+                    )
+                mx.eval(self.next_main)
+
+                for value in exact:
+                    produced += 1
+                    yield value
+        finally:
+            self._exact_profile()
+            self.route_observer = None
+
+
+class MTPGreedy:
+    """Maintain exact target and MTP caches across appended chat turns."""
+
+    def __init__(self, language, depth: int = 4):
+        from mlx_vlm.models.qwen3_5 import language as qwen35_language
+
+        from .qwen4_verifier import Qwen4ExactSpeculativeVerifier
+
+        self.language = language
+        self.depth = max(1, int(depth))
+        self.target_cache = language.make_cache()
+        self.mtp_cache = mtp.make_cache(language)
+        self.anchor = None
+        self.next_main = None
+        self.draft_logits = None
+        self.draft_hidden = None
+        self.hist_offset = 0
+        self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
+        self._depth_controller = None
+        self._depth_controller_max = None
+        # Same exact verifier FastDraftGreedy installs. MTPGreedy must
+        # not assume another decoder already installed it.
+        self.verifier = Qwen4ExactSpeculativeVerifier()
+        qwen35_language._EXACT_SPECULATIVE_VERIFIER = self.verifier
+        # Backend contract: generate() installs and clears a routing
+        # observer around decoding. Stored only; MTP verification runs
+        # under the ambient exact routing profile.
+        self.route_observer = None
+
+    def set_route_observer(self, observer) -> None:
+        self.route_observer = observer
+
+    def reset(self) -> None:
+        self.target_cache = self.language.make_cache()
+        self.mtp_cache = mtp.make_cache(self.language)
+        self.anchor = None
+        self.next_main = None
+        self.draft_logits = None
+        self.draft_hidden = None
+        self.hist_offset = 0
+        self.stats = MTPStats()
+        self._adaptive = self._adaptive_enabled()
+        self._rollback = self._rollback_enabled()
+        self._verify_out = None
+        self._depth_controller = None
+        self._depth_controller_max = None
+        self.route_observer = None
+
+    @staticmethod
+    def _adaptive_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ADAPTIVE", "0") == "1"
+
+    @staticmethod
+    def _rollback_enabled() -> bool:
+        return os.environ.get("FLASHNEXT_MTP_ROLLBACK", "0") == "1"
+
+    @staticmethod
+    def _cache_limit_mb() -> int:
+        """Allocator cache cap for decode, in MB; 0 means no cap."""
+        raw = os.environ.get("FLASHNEXT_MTP_CACHE_LIMIT_MB", "512").strip()
+        return int(raw) if raw else 512
+
+    def _controller(self) -> DepthController:
+        """Depth controller for this conversation, capped at the configured depth.
+
+        The cap is the width the memory planner reserved verifier workspace
+        for, so a changed ``depth`` builds a fresh controller.
+        """
+        if self._depth_controller is None or self._depth_controller_max != self.depth:
+            self._depth_controller = DepthController(max_depth=self.depth)
+            self._depth_controller_max = self.depth
+        return self._depth_controller
+
+    def _target_capture(self, ids):
+        logits, hidden_states, _token = prefill_target(
+            self.language,
+            ids,
+            self.target_cache,
+            want_logits=True,
+            want_hidden=True,
+        )
+        hidden = hidden_states[0]
+        expected = self.language.args.hidden_size * self.language.args.hc_count
+        if hidden.shape[-1] != expected:
+            raise RuntimeError(
+                f"MTP hidden width is {hidden.shape[-1]}, expected {expected}"
+            )
+        return logits, hidden
+
+    def _target_verify(self, ids):
+        """Verify one draft block with the exact speculative verifier.
+
+        Ordinary cached multi-token forwards do not reproduce singleton
+        numerics/state transitions, so block verification must go through
+        Qwen4ExactSpeculativeVerifier like FastDraftGreedy does. Returns
+        singleton-equivalent target predictions plus the matching exact
+        pre-final-mixer backbone states that advance the MTP draft chain.
+        """
+        out = self.language(
+            ids,
+            cache=self.target_cache,
+            speculative_verify=True,
+            return_hidden=True,
+            skip_logits=True,
+            capture_layer_ids=[],
+        )
+        hc_hidden = out.hidden_states[0]
+        final_hidden = out.hidden_states[-1]
+        expected_hc = (
+            self.language.args.hidden_size * self.language.args.hc_count
+        )
+        if hc_hidden.shape[-1] != expected_hc:
+            raise RuntimeError(
+                f"MTP hidden width is {hc_hidden.shape[-1]}, "
+                f"expected {expected_hc}"
+            )
+        target_ids = self.language.speculative_argmax_from_hidden(
+            final_hidden
+        )[0].astype(mx.uint32)
+        mx.eval(target_ids, hc_hidden)
+        # Only the rollback path needs the intermediate states; _generate
+        # takes and clears this within the same cycle.
+        self._verify_out = out if self._rollback else None
+        return target_ids, hc_hidden
+
+    def _target_replay(self, snapshot, ids) -> None:
+        # Replay token-by-token through the ordinary singleton path.
+        # A batched forward predicts the same tokens but leaves
+        # singleton-different recurrent states (proven up to 1.77 abs
+        # on Vontra layer 17), which compounds across cycles until
+        # argmax flips. The singleton loop is exactly production decode.
+        restore_cache(self.target_cache, snapshot)
+        width = int(ids.shape[1])
+        for position in range(width):
+            out = self.language(
+                ids[:, position : position + 1], cache=self.target_cache
+            )
+            mx.eval(out.logits)
+            self.stats.replayed += 1
+
+    def _fold(self, hidden_rows, tokens):
+        logits, head_hidden = mtp.forward(
+            self.language,
+            hidden_rows,
+            tokens,
+            self.mtp_cache,
+            return_hidden=True,
+        )
+        self.hist_offset += int(tokens.shape[1])
+        return logits, head_hidden
+
+    def append(self, ids) -> None:
+        """Append prompt tokens and seed the next MTP verify cycle."""
+        from .prefill_memory import cache_cap
+
+        with cache_cap(512):
+            self._append(ids)
+
+    def _append(self, ids) -> None:
+        from .prefill import chunk_tokens
+
+        width = min(1024, chunk_tokens() or 1024)
+        if ids.shape[1] > width:
+            self._append_bounded(ids, width)
+            return
+        logits, hidden = self._target_capture(ids)
+        mx.eval(logits, hidden)
+
+        if self.anchor is None:
+            pair_hidden = hidden[:, :-1]
+            pair_tokens = ids[:, 1:]
+        else:
+            pair_hidden = mx.concatenate([self.anchor, hidden[:, :-1]], axis=1)
+            pair_tokens = ids
+        if pair_tokens.shape[1]:
+            folded, _ = self._fold(pair_hidden, pair_tokens)
+            mx.eval(folded)
+
+        self.anchor = hidden[:, -1:]
+        self.next_main = mx.argmax(logits[:, -1, :], axis=-1).astype(mx.uint32)
+        mx.eval(self.next_main)
+        self.draft_logits, self.draft_hidden = self._fold(
+            self.anchor,
+            self.next_main.reshape(1, 1),
+        )
+        mx.eval(self.draft_logits, self.draft_hidden)
+
+    def _append_bounded(self, ids, width):
+        """Advance target and draft histories in bounded windows without full vocabulary matrices."""
+        from .prefill import _chunk_completed
+
+        total = int(ids.shape[1])
+        for start in range(0, total, width):
+            part = ids[:, start:start + width]
+            _, captured, token = prefill_target(
+                self.language, part, self.target_cache, want_hidden=True,
+                sampler=lambda row: mx.argmax(row, axis=-1).reshape(-1),
+            )
+            hidden = captured[0]
+            expected = self.language.args.hidden_size * self.language.args.hc_count
+            if hidden.shape[-1] != expected:
+                raise RuntimeError(f"MTP hidden width is {hidden.shape[-1]}, expected {expected}")
+            if self.anchor is None:
+                hidden_rows, pair_tokens = hidden[:, :-1], part[:, 1:]
+            else:
+                hidden_rows = mx.concatenate((self.anchor, hidden[:, :-1]), axis=1)
+                pair_tokens = part
+            if pair_tokens.shape[1]:
+                warm = mtp.forward(self.language, hidden_rows, pair_tokens, self.mtp_cache, skip_logits=True)
+                mx.eval(warm, [entry.state for entry in self.mtp_cache])
+                self.hist_offset += int(pair_tokens.shape[1])
+            self.anchor = hidden[:, -1:]
+            mx.eval(self.anchor)
+            _chunk_completed(start + int(part.shape[1]), total)
+        self.next_main = token
+        self.draft_logits, self.draft_hidden = self._fold(self.anchor, self.next_main.reshape(1, 1))
+        mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
+
+    def _draft_chain(self, depth=None):
+        """Draft ``depth`` tokens (the configured depth by default)."""
+        depth = self.depth if depth is None else depth
+        drafts = []
+        if depth <= 0:
+            return drafts
+        logits = self.draft_logits
+        hidden = self.draft_hidden[:, -1:]
+        for index in range(depth):
+            token = mx.argmax(logits[:, -1, :], axis=-1).astype(mx.uint32)
+            value = int(token.item())
+            drafts.append(value)
+            if index + 1 < depth:
+                logits, hidden = mtp.forward(
+                    self.language,
+                    hidden,
+                    token.reshape(1, 1),
+                    self.mtp_cache,
+                    return_hidden=True,
+                )
+        return drafts
+
+    def _rollback_target(self, snapshot, verify_out, block_size, keep_count) -> float:
+        """Keep ``keep_count`` verified tokens by rollback; return the seconds taken."""
+        started = time.perf_counter()
+        rollback_verified(
+            self.language,
+            self.target_cache,
+            snapshot,
+            verify_out,
+            block_size,
+            keep_count,
+            materialize=True,
+        )
+        seconds = time.perf_counter() - started
+        self.stats.rollback_seconds += seconds
+        self.stats.rolled_back += keep_count
+        return seconds
+
+    def _finish_prefix(
+        self, snapshot, verify_hidden, keep_ids, base_hist,
+        verify_out=None, block_size=0,
+    ) -> None:
+        if verify_out is None:
+            ids = mx.array(keep_ids, dtype=mx.uint32).reshape(1, -1)
+            self._target_replay(snapshot, ids)
+        elif len(keep_ids) < block_size:
+            self._rollback_target(snapshot, verify_out, block_size, len(keep_ids))
+        # else: the verifier state already covers exactly these tokens.
+        trim_cache(self.mtp_cache, base_hist)
+
+        # next_main already occupies the last committed MTP history slot.
+        extra = keep_ids[1:]
+        if extra:
+            hidden_rows = verify_hidden[:, : len(extra)]
+            tokens = mx.array(extra, dtype=mx.uint32).reshape(1, -1)
+            folded, _ = self._fold(hidden_rows, tokens)
+            mx.eval(folded)
+        self.anchor = verify_hidden[:, len(keep_ids) - 1 : len(keep_ids)]
+        self.next_main = None
+
+    def generate(self, max_tokens: int, stops: Iterable[int]):
+        """Yield exact greedy tokens. The target cache always trails no output."""
+        from .prefill_memory import cache_cap
+
+        # Verification and rollback allocate temporary Metal buffers on every cycle.
+        # Bound their reuse cache while leaving live model state and the expert pool alone.
+        with cache_cap(self._cache_limit_mb()):
+            yield from self._generate(max_tokens, stops)
+
+    def _generate(self, max_tokens: int, stops: Iterable[int]):
+        max_tokens = _normalize_max_tokens(max_tokens)
+        stops = set(stops)
+        produced = 0
+        trace = benchmark_trace.get()
+        while produced < max_tokens and self.next_main is not None:
+            if int(self.next_main.item()) in stops:
+                trim_cache(self.mtp_cache, self.hist_offset - 1)
+                self.hist_offset -= 1
+                self.next_main = None
+                return
+
+            target_snapshot = snapshot_cache(self.target_cache)
+            base_hist = self.hist_offset
+            controller = self._controller() if self._adaptive else None
+            depth = controller.choose() if controller is not None else self.depth
+            draft_ns = trace.clock() if trace is not None else None
+            draft_start = time.perf_counter()
+            drafts = self._draft_chain(depth)
+            draft_seconds = time.perf_counter() - draft_start
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
+            self.stats.cycles += 1
+            self.stats.drafted += len(drafts)
+            self.stats.draft_seconds += draft_seconds
+            self.stats.depth_counts[depth] = (
+                self.stats.depth_counts.get(depth, 0) + 1
+            )
+
+            block = [int(self.next_main.item()), *drafts]
+            block_ids = mx.array(block, dtype=mx.uint32).reshape(1, -1)
+            verify_ns = trace.clock() if trace is not None else None
+            verify_start = time.perf_counter()
+            target_ids, hidden = self._target_verify(block_ids)
+            verify_out, self._verify_out = self._verify_out, None
+            host_targets = target_ids.tolist()
+            verify_seconds = time.perf_counter() - verify_start
+            self.stats.verify_seconds += verify_seconds
+
+            accepted = 0
+            for expected, proposed in zip(host_targets, drafts):
+                if int(expected) != proposed:
+                    break
+                accepted += 1
+            self.stats.accepted += accepted
+
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(block),
+                                verification=True, accepted=accepted)
+            processed = block[: accepted + 1]
+            stop_at = next(
+                (i for i, token in enumerate(processed) if token in stops),
+                None,
+            )
+            room = max_tokens - produced
+            keep = len(processed) if stop_at is None else stop_at
+            keep = min(keep, room)
+            finishing = stop_at is not None or keep < len(processed) or keep == room
+
+            if finishing:
+                if keep:
+                    self._finish_prefix(
+                        target_snapshot,
+                        hidden,
+                        processed[:keep],
+                        base_hist,
+                        verify_out=verify_out,
+                        block_size=len(block),
+                    )
+                    verify_out = None
+                    for token in processed[:keep]:
+                        produced += 1
+                        yield token
+                else:
+                    restore_cache(self.target_cache, target_snapshot)
+                    trim_cache(self.mtp_cache, base_hist - 1)
+                    self.hist_offset = base_hist - 1
+                    self.next_main = None
+                if controller is not None:
+                    # The prefix replay here is not the partial-rejection
+                    # repair the model prices, so report none.
+                    controller.observe(
+                        depth, accepted,
+                        draft_seconds=draft_seconds,
+                        verify_seconds=verify_seconds,
+                    )
+                    self.stats.adaptive = controller.stats()
+                return
+
+            repair_seconds = 0.0
+            if accepted < len(drafts):
+                if verify_out is not None:
+                    repair_seconds = self._rollback_target(
+                        target_snapshot, verify_out, len(block), accepted + 1
+                    )
+                else:
+                    repair_start = time.perf_counter()
+                    self._target_replay(
+                        target_snapshot, block_ids[:, : accepted + 1]
+                    )
+                    repair_seconds = time.perf_counter() - repair_start
+                    self.stats.repair_seconds += repair_seconds
+            verify_out = None
+            fold_start = time.perf_counter()
+            trim_cache(self.mtp_cache, base_hist)
+
+            correction = int(host_targets[accepted])
+            committed = [*drafts[:accepted], correction]
+            fold_hidden = hidden[:, : accepted + 1]
+            fold_tokens = mx.array(committed, dtype=mx.uint32).reshape(1, -1)
+            self.draft_logits, self.draft_hidden = self._fold(
+                fold_hidden,
+                fold_tokens,
+            )
+            self.anchor = hidden[:, accepted : accepted + 1]
+            self.next_main = mx.array([correction], dtype=mx.uint32)
+            mx.eval(self.draft_logits, self.draft_hidden, self.next_main)
+            fold_seconds = time.perf_counter() - fold_start
+            self.stats.fold_seconds += fold_seconds
+            if controller is not None:
+                # The MTP fold is paid every cycle at any depth, so the model
+                # sees it as part of the fixed per-cycle verify cost.
+                controller.observe(
+                    depth, accepted,
+                    draft_seconds=draft_seconds,
+                    verify_seconds=verify_seconds + fold_seconds,
+                    repair_seconds=repair_seconds,
+                )
+                self.stats.adaptive = controller.stats()
+
+            for token in processed:
+                produced += 1
+                yield token
+
+
+def lookup_rollback_enabled():
+    """FLASHNEXT_LOOKUP_ROLLBACK=1: keep the verified prefix from the verifier's intermediate GDN states instead of
+    restoring the snapshot and replaying it. The states match singleton decoding to about 1e-6 rather than bit for bit."""
+    return os.environ.get("FLASHNEXT_LOOKUP_ROLLBACK", "0") == "1"
+
+
+def prompt_lookup_tokens(language, cache, history, first, horizon, stops, check_cancel, sampler=None, stats=None):
+    """Flash-Next decode that drafts from the context and verifies with the singleton-equivalent verifier.
+
+    Greedy when ``sampler`` is None or greedy. With a sampling ``sampler`` the verify is lossless speculative sampling
+    against point-mass drafts (``Sampler.verify_point_mass``): the tokens follow the distribution of one-at-a-time
+    sampling. ``stats`` (a dict) receives the gate's counters when the generator ends.
+    """
+    from mlx_vlm.models.qwen3_5 import language as qwen35_language
+
+    from models.shared.prompt_lookup import make_gate, make_lookup
+    from . import memory_controller
+    from .qwen4_verifier import Qwen4ExactSpeculativeVerifier
+
+    qwen35_language._EXACT_SPECULATIVE_VERIFIER = Qwen4ExactSpeculativeVerifier()
+    # The verification workspace holds 8 rows (one token plus up to 7 drafts); see veystrix/backends/flashnext.py.
+    lookup, gate = make_lookup(history), make_gate(7)
+    sampled = sampler is not None and not sampler.settings.greedy
+    use_rollback = lookup_rollback_enabled()
+    produced = 0
+    value = int(first.item())
+
+    trace = benchmark_trace.get()
+
+    def pick(row):
+        return int(sampler(row).item()) if sampled else int(mx.argmax(row).item())
+
+    def singleton(current, want_logits=True):
+        started = trace.clock() if trace is not None else None
+        ids = mx.array([[current]], dtype=mx.uint32)
+        out = language(ids, cache=cache, skip_logits=not want_logits)
+        if not want_logits:
+            mx.eval([entry.state for entry in cache])
+            result = None
+        else:
+            result = pick(out.logits[0, -1])
+        if trace is not None:
+            trace.end_round("target_round", started, positions=1, cache_commit_only=not want_logits)
+        return result
+
+    try:
+        while produced < horizon and value not in stops:
+            check_cancel()
+            began = time.perf_counter()
+            draft_ns = trace.clock() if trace is not None else None
+            lookup.append(value)
+            if sampled:
+                sampler.observe(value)
+            drafts = (
+                lookup.propose(min(gate.depth, horizon - produced - 1))
+                if gate.allow() and not memory_controller.forbid_optional() else []
+            )
+            # Stop delimiters never enter the cache or the emitted token tape.
+            for index, draft in enumerate(drafts):
+                if draft in stops:
+                    drafts = drafts[:index]
+                    break
+            if trace is not None:
+                trace.end_round("draft_round", draft_ns, proposed=len(drafts))
+            if not drafts:
+                yield value
+                produced += 1
+                began = time.perf_counter()
+                value = singleton(value, want_logits=produced < horizon)
+                gate.observe(False, 1, time.perf_counter() - began)
+                continue
+
+            snapshot = snapshot_cache(cache)
+            ids = mx.array([[value, *drafts]], dtype=mx.uint32)
+            verify_ns = trace.clock() if trace is not None else None
+            out = language(ids, cache=cache, speculative_verify=True, return_hidden=True, skip_logits=True)
+            if sampled:
+                rows = language.speculative_logits_from_hidden(out.hidden_states[-1])[0]
+                kept, following = sampler.verify_point_mass(rows, drafts)
+            else:
+                predictions = language.speculative_argmax_from_hidden(out.hidden_states[-1])[0].tolist()
+                kept = 0
+                for predicted, draft in zip(predictions, drafts):
+                    if predicted != draft:
+                        break
+                    kept += 1
+                following = predictions[kept]
+            committed = [value, *drafts[:kept]]
+            if trace is not None:
+                trace.end_round("target_round", verify_ns, positions=len(drafts) + 1,
+                                verification=True, accepted=kept)
+            if kept < len(drafts):
+                if use_rollback:
+                    rollback_verified(language, cache, snapshot, out, len(drafts) + 1, kept + 1, materialize=True)
+                else:
+                    restore_cache(cache, snapshot)
+                    if sampled:
+                        # The redraw is already chosen; the cache only has to hold the kept tokens, one at a time.
+                        for current in committed:
+                            singleton(current, want_logits=False)
+                    else:
+                        # Greedy: the singleton replay also re-derives the next token, as before.
+                        following = singleton(value)
+                        committed = [value]
+                        for draft in drafts:
+                            if draft != following or draft in stops:
+                                break
+                            committed.append(draft)
+                            following = singleton(draft, want_logits=produced + len(committed) < horizon)
+            value = following
+            gate.observe(True, len(committed), time.perf_counter() - began, proposed=len(drafts))
+            for current in committed:
+                check_cancel()
+                produced += 1
+                yield current
+            for current in committed[1:]:
+                lookup.append(current)
+    finally:
+        if stats is not None:
+            stats.update(gate.stats())

@@ -1,0 +1,1404 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Veystrix runtime SBOM",
+  "documentNamespace": "https://github.com/joyboyreturns/Veystrix/sbom/0.1.0/2026-11-26",
+  "creationInfo": {
+    "created": "2026-11-26T00:00:00Z",
+    "creators": [
+      "Tool: veystrix-generate-legal"
+    ]
+  },
+  "hasExtractedLicensingInfos": [
+    {
+      "licenseId": "LicenseRef-Veystrix",
+      "name": "Veystrix Commercial and Personal Use License v1.0",
+      "extractedText": "VEYSTRIX COMMERCIAL AND PERSONAL USE LICENSE v1.0\n\nCopyright (c) 2026 Vardhanapu Kiran Vincent.\n\nVeystrix is proprietary software, not open-source software as a whole. It is\nlicensed in two tiers: a free tier for personal, non-commercial use (including\nbenchmarking and research) and a paid tier for business and commercial use.\nParts of it are third-party or earlier open-source works that keep their own\nlicenses (see section 6 and THIRD_PARTY_NOTICES.md).\n\n1. DEFINITIONS\n\n\"Licensor\" means the copyright holder named above, the owner of the Veystrix\ncomponents that the Licensor authored, as described in section 6.\n\n\"Software\" means the Veystrix macOS application and the Veystrix inference\nengine helper bundled inside it, in the unmodified form published by the\nLicensor as an \"Official Build\" at\nhttps://github.com/joyboyreturns/Veystrix/releases, including any update the\nLicensor publishes through the application's update feed.\n\n\"Official Build\" means a file published by the Licensor at the address above\nwhose SHA-256 checksum matches the checksum the Licensor published for it. When\nthe release notes state that a build is signed with the Licensor's Developer ID\nand notarized by Apple, its code signature must also verify. A build that the\nrelease notes describe as \"free build, not notarized\" is signed ad hoc and is an\nOfficial Build on the strength of its checksum alone; macOS will warn when you\nfirst open it.\n\n\"Model Checkpoint\" means a machine-learning model, weights or tokenizer that you\nobtain from anyone other than the Licensor. Model Checkpoints are not part of\nthe Software.\n\n\"You\" means the individual or organization that installs or uses the Software.\n\n\"Personal Use\" means use of the Software by an individual for their own private,\nnon-commercial purposes, on a computer they own or control, and expressly\nincludes benchmarking, performance testing, research, evaluation, education and\npersonal experimentation, and use of the text the Software generates for those\npurposes.\n\n\"Business Use\" means any use of the Software by or on behalf of a company,\ncorporation, partnership, sole trader, non-profit organization, government\nbody, university department, or other organization.\n\n\"Commercial Use\" means any use of the Software that is not Personal Use,\nincluding any use:\n(a) on equipment, an account, a network or time paid for or provided by an\n    employer, client or other organization, or during working hours for an\n    organization;\n(b) as part of, or in support of, a product, service, subscription, offering or\n    internal business process;\n(c) for or in connection with consulting, contract work, or a client or customer\n    engagement, or any work billed or charged to a third party;\n(d) that generates revenue or other commercial benefit, or reduces costs, for\n    an individual or organization; or\n(e) where the Software or its output is sold, licensed or made available to a\n    third party for consideration.\nBusiness Use and Commercial Use overlap; either one requires the paid commercial\nlicense described in section 3.\n\n2. FREE PERSONAL LICENSE\n\nSubject to this License, the Licensor grants you a worldwide, non-exclusive,\nnon-transferable, perpetual (unless terminated under section 11), royalty-free\nlicense to download, install and run Official Builds of the Software on computers\nyou own or control for Personal Use. Personal Use expressly includes\nbenchmarking, performance testing, research and evaluation. No payment, account,\nregistration or network activation is required for Personal Use, and the Software\nis designed to run fully offline once installed.\n\n3. COMMERCIAL LICENSE (PAID)\n\nAny Business Use or Commercial Use requires a separate paid commercial license\nfrom the Licensor. No commercial license is granted by section 2 or by this\nLicense. To obtain one, open an issue at\nhttps://github.com/joyboyreturns/Veystrix/issues with the subject\n\"Commercial license\" and describe your intended use; the Licensor will reply\nthere with the fees, scope and terms of the commercial license agreement.\nCommercial licensing fees are not specified in this License and are agreed\nseparately.\n\n4. REDISTRIBUTION\n\nYou may share an Official Build with others only if ALL of the following hold:\n(a) the file is unmodified, byte for byte, and its checksum (and, for builds\n    described as Developer ID signed, its code signature) still verifies;\n(b) You provide it free of charge, with no fee, subscription, advertising,\n    bundle, donation wall or other consideration tied to it; and\n(c) You keep this License and THIRD_PARTY_NOTICES.md with it, and tell the\n    recipient that the official source is the Releases page named in section 1.\nYou may always link to the official Releases page. Redistribution as part of\nBusiness Use or Commercial Use requires a commercial license under section 3.\n\n5. WHAT YOU MAY NOT DO\n\nUnless the Licensor gives You separate written permission or a commercial\nlicense under section 3, You may not:\n(a) modify, translate, adapt or create derivative works of the Software, or\n    repackage it, or distribute any modified or repackaged version;\n(b) rename, rebrand or present a modified build as Veystrix, use the name\n    \"Veystrix\", its logo or its icons in a way that suggests a build is official\n    or endorsed, or publish a build that could reasonably be mistaken for an\n    Official Build;\n(c) sell, rent, lease, sublicense or charge for the Software, an Official Build,\n    or access to either, or include the Software in a paid product or paid\n    collection;\n(d) remove or alter copyright, license, attribution or update-signature\n    notices;\n(e) disable, bypass or forge the checksum, code-signature or update-signature\n    checks in order to distribute or install an altered build; or\n(f) distribute the Software in a manner that violates export-control or other\n    laws that apply to You.\n\n6. OWNERSHIP; THIRD-PARTY COMPONENTS; SOURCE CODE\n\nSubject to the rest of this section, the Licensor owns the Software. This\nLicense grants a license, not a sale.\n\nThe Software contains or links to third-party components published under\nopen-source licenses (for example MIT, BSD, Apache-2.0 and MPL-2.0). Those\ncomponents remain under their own license terms, and the copyright notices and\nlicense texts in THIRD_PARTY_NOTICES.md must be preserved. This License does\nnot apply to those third-party components and does not reduce any right You\nhave under their licenses.\n\n7. MODEL CHECKPOINTS\n\nThe Software does not include model weights and does not download them without\nYour explicit action. A Model Checkpoint is licensed by its publisher, not by\nthe Licensor. You are responsible for reading and following the license of any\ncheckpoint You use.\n\n8. PRIVACY\n\nThe Software does not require an account and does not send Your prompts,\nfiles, repositories, sessions or model data to the Licensor or any third party.\nThe only network access the Software makes by itself is the optional update\ncheck, which You can turn off in Settings; it requests the public update feed\nfrom github.com and sends no information about Your prompts or files. Your\nInternet provider and GitHub can see ordinary connection metadata (such as Your\nIP address) when You check for updates, as with any web request. Network\nfeatures of tools You connect to the local server (for example coding agents)\nare controlled by those tools, not by the Software.\n\n9. NO WARRANTY, SAFETY AND LIMITATION OF LIABILITY\n\nThe Software streams very large model files from Your SSD and can use most of\nthe memory of Your computer. This reads many gigabytes per request, can increase\nSSD wear, and can slow or interrupt other applications. The Software includes\nmemory and swap protections, but they are estimates and cannot guarantee that\nYour computer will not become slow or unresponsive. Keep Your computer on AC\npower during long sessions and keep backups of important data.\n\nOutput generated by language models can be wrong, unsafe or offensive. You are\nresponsible for checking it before You rely on it.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND \"AS AVAILABLE\", WITHOUT WARRANTY OF ANY\nKIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE, NON-INFRINGEMENT, AVAILABILITY OR ACCURACY. TO THE MAXIMUM\nEXTENT PERMITTED BY LAW, THE LICENSOR IS NOT LIABLE FOR ANY INDIRECT, INCIDENTAL,\nSPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS OR\nHARDWARE LIFE, ARISING FROM USE OF OR INABILITY TO USE THE SOFTWARE, AND THE\nLICENSOR'S TOTAL LIABILITY FOR ANY CLAIM IS LIMITED TO THE AMOUNT YOU PAID FOR\nTHE SOFTWARE UNDER THIS LICENSE, WHICH IS ZERO FOR THE FREE PERSONAL TIER. Some\njurisdictions do not allow these limits; in that case they apply only as far as\nthe law permits. Nothing here limits liability that cannot be limited by law\n(for example for death or personal injury caused by negligence, or for fraud).\n\n10. NO TRADEMARK OR PATENT GRANT; RIGHTS THAT CANNOT BE WAIVED\n\nThis License does not grant You any right to use the \"Veystrix\" name, trademarks,\nlogos or icons (no trademark registration is claimed), or any patent rights of\nthe Licensor or any third party. Section 5(b) governs use of the name and\nbranding.\n\nNothing in this License limits any right that the law of Your country gives You\nand that cannot be removed by contract. In particular, and to the extent\napplicable law gives them to You, nothing here prevents You from: making a\nbackup copy needed to use the Software; observing, studying, benchmarking and\ntesting how the Software functions while You use it as permitted; decompiling\nor reverse engineering it to the extent permitted by law for interoperability\nwith independently created software (for example under Article 6 of EU Directive\n2009/24/EC); or exercising rights granted by a third-party license to a\nthird-party component.\n\n11. TERM AND TERMINATION\n\nThis License lasts until terminated. The free personal license is perpetual\nunless You materially breach this License, in which case it ends automatically\nand You must stop using and delete the Software. Sections 5, 6, 9 and 10 survive\ntermination. Termination does not affect any right You hold under a third-party\nlicense.\n\n12. GENERAL\n\nThe Licensor may publish a new version of this License with a new release of the\nSoftware; a new version applies to that release and later releases, and does not\nchange the terms of a release You already installed unless You choose to update.\nIf a provision is unenforceable, the rest stays in force. This License is the\nwhole agreement about the Software between You and the Licensor. It is governed\nby the laws of the State of California, United States, except that\nmandatory consumer-protection rules of Your country of residence continue to\napply to You. Contact: https://github.com/joyboyreturns/Veystrix/issues.\n\n13. THIRD-PARTY NOTICES\n\nSee legal/THIRD_PARTY_NOTICES.md for third-party component copyright notices\nand license texts.\n"
+    }
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Veystrix",
+      "name": "Veystrix",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-Veystrix",
+      "copyrightText": "Copyright (c) 2026 Vardhanapu Kiran Vincent",
+      "comment": "Veystrix Commercial and Personal Use License v1.0: free for personal use incl. benchmarking; paid commercial license required for business use."
+    },
+    {
+      "SPDXID": "SPDXRef-py-0-annotated-doc",
+      "name": "annotated-doc",
+      "versionInfo": "0.0.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/annotated-doc@0.0.5"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-1-annotated-types",
+      "name": "annotated-types",
+      "versionInfo": "0.8.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/annotated-types@0.8.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-2-anyio",
+      "name": "anyio",
+      "versionInfo": "4.16.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/anyio@4.16.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-3-certifi",
+      "name": "certifi",
+      "versionInfo": "2026.10.23",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/certifi@2026.10.23"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-4-cffi",
+      "name": "cffi",
+      "versionInfo": "2.1.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT-0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/cffi@2.1.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-5-charset-normalizer",
+      "name": "charset-normalizer",
+      "versionInfo": "3.5.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/charset-normalizer@3.5.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-6-click",
+      "name": "click",
+      "versionInfo": "8.5.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/click@8.5.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-7-Cython",
+      "name": "Cython",
+      "versionInfo": "3.0.12",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/cython@3.0.12"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-8-fastapi",
+      "name": "fastapi",
+      "versionInfo": "0.162.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/fastapi@0.162.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-9-filelock",
+      "name": "filelock",
+      "versionInfo": "4.2.9",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/filelock@4.2.9"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-10-fsspec",
+      "name": "fsspec",
+      "versionInfo": "2026.9.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/fsspec@2026.9.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-11-h11",
+      "name": "h11",
+      "versionInfo": "0.16.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/h11@0.16.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-12-hf-xet",
+      "name": "hf-xet",
+      "versionInfo": "1.8.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/hf-xet@1.8.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-13-httpcore",
+      "name": "httpcore",
+      "versionInfo": "1.0.9",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/httpcore@1.0.9"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-14-httpx",
+      "name": "httpx",
+      "versionInfo": "0.28.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/httpx@0.28.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-15-huggingface-hub",
+      "name": "huggingface_hub",
+      "versionInfo": "1.29.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/huggingface-hub@1.29.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-16-idna",
+      "name": "idna",
+      "versionInfo": "3.20",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/idna@3.20"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-17-iniconfig",
+      "name": "iniconfig",
+      "versionInfo": "2.3.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/iniconfig@2.3.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-18-Jinja2",
+      "name": "Jinja2",
+      "versionInfo": "3.1.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/jinja2@3.1.6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-19-llguidance",
+      "name": "llguidance",
+      "versionInfo": "1.9.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/llguidance@1.9.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-20-markdown-it-py",
+      "name": "markdown-it-py",
+      "versionInfo": "4.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/markdown-it-py@4.2.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-21-MarkupSafe",
+      "name": "MarkupSafe",
+      "versionInfo": "3.0.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/markupsafe@3.0.4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-22-mdurl",
+      "name": "mdurl",
+      "versionInfo": "0.1.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mdurl@0.1.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-23-miniaudio",
+      "name": "miniaudio",
+      "versionInfo": "1.72",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/miniaudio@1.72"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-24-mlx",
+      "name": "mlx",
+      "versionInfo": "0.32.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mlx@0.32.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-25-mlx-audio",
+      "name": "mlx-audio",
+      "versionInfo": "0.5.9",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mlx-audio@0.5.9"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-26-mlx-lm",
+      "name": "mlx-lm",
+      "versionInfo": "0.31.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mlx-lm@0.31.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-27-mlx-metal",
+      "name": "mlx-metal",
+      "versionInfo": "0.32.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mlx-metal@0.32.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-28-mlx-vlm",
+      "name": "mlx-vlm",
+      "versionInfo": "0.6.17",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mlx-vlm@0.6.17"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-29-numpy",
+      "name": "numpy",
+      "versionInfo": "2.5.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/numpy@2.5.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-30-opencv-python",
+      "name": "opencv-python",
+      "versionInfo": "5.0.0.93",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/opencv-python@5.0.0.93"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-31-opentelemetry-api",
+      "name": "opentelemetry-api",
+      "versionInfo": "1.45.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/opentelemetry-api@1.45.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-32-packaging",
+      "name": "packaging",
+      "versionInfo": "26.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/packaging@26.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-33-pillow",
+      "name": "pillow",
+      "versionInfo": "13.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT-CMU",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pillow@13.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-34-pluggy",
+      "name": "pluggy",
+      "versionInfo": "1.7.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pluggy@1.7.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-35-protobuf",
+      "name": "protobuf",
+      "versionInfo": "7.36.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/protobuf@7.36.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-36-pycparser",
+      "name": "pycparser",
+      "versionInfo": "3.12",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pycparser@3.12"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-37-pydantic",
+      "name": "pydantic",
+      "versionInfo": "2.14.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pydantic@2.14.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-38-pydantic-core",
+      "name": "pydantic_core",
+      "versionInfo": "2.50.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pydantic-core@2.50.4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-39-Pygments",
+      "name": "Pygments",
+      "versionInfo": "2.21.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pygments@2.21.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-40-pytest",
+      "name": "pytest",
+      "versionInfo": "9.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest@9.2.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-41-python-multipart",
+      "name": "python-multipart",
+      "versionInfo": "0.0.33",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/python-multipart@0.0.33"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-42-PyYAML",
+      "name": "PyYAML",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pyyaml@6.0.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-43-regex",
+      "name": "regex",
+      "versionInfo": "2026.11.7",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 AND CNRI-Python",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/regex@2026.11.7"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-44-requests",
+      "name": "requests",
+      "versionInfo": "2.34.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/requests@2.34.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-45-rich",
+      "name": "rich",
+      "versionInfo": "15.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/rich@15.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-46-safetensors",
+      "name": "safetensors",
+      "versionInfo": "0.8.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/safetensors@0.8.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-47-scipy",
+      "name": "scipy",
+      "versionInfo": "1.18.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/scipy@1.18.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-48-sentencepiece",
+      "name": "sentencepiece",
+      "versionInfo": "0.2.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/sentencepiece@0.2.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-49-shellingham",
+      "name": "shellingham",
+      "versionInfo": "1.5.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/shellingham@1.5.4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-50-sounddevice",
+      "name": "sounddevice",
+      "versionInfo": "0.5.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/sounddevice@0.5.6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-51-starlette",
+      "name": "starlette",
+      "versionInfo": "1.10.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/starlette@1.10.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-52-tokenizers",
+      "name": "tokenizers",
+      "versionInfo": "0.23.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tokenizers@0.23.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-53-tomlkit",
+      "name": "tomlkit",
+      "versionInfo": "0.15.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tomlkit@0.15.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-54-tqdm",
+      "name": "tqdm",
+      "versionInfo": "4.70.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0 AND MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tqdm@4.70.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-55-transformers",
+      "name": "transformers",
+      "versionInfo": "5.16.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/transformers@5.16.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-56-typer",
+      "name": "typer",
+      "versionInfo": "0.28.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/typer@0.28.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-57-typing-inspection",
+      "name": "typing-inspection",
+      "versionInfo": "0.4.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/typing-inspection@0.4.5"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-58-typing-extensions",
+      "name": "typing_extensions",
+      "versionInfo": "4.16.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "PSF-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/typing-extensions@4.16.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-59-urllib3",
+      "name": "urllib3",
+      "versionInfo": "2.8.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/urllib3@2.8.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-60-uvicorn",
+      "name": "uvicorn",
+      "versionInfo": "0.54.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/uvicorn@0.54.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-py-61-websockets",
+      "name": "websockets",
+      "versionInfo": "17.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/websockets@17.4"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Veystrix"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-0-annotated-doc"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-1-annotated-types"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-2-anyio"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-3-certifi"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-4-cffi"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-5-charset-normalizer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-6-click"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-7-Cython"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-8-fastapi"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-9-filelock"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-10-fsspec"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-11-h11"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-12-hf-xet"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-13-httpcore"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-14-httpx"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-15-huggingface-hub"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-16-idna"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-17-iniconfig"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-18-Jinja2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-19-llguidance"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-20-markdown-it-py"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-21-MarkupSafe"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-22-mdurl"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-23-miniaudio"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-24-mlx"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-25-mlx-audio"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-26-mlx-lm"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-27-mlx-metal"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-28-mlx-vlm"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-29-numpy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-30-opencv-python"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-31-opentelemetry-api"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-32-packaging"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-33-pillow"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-34-pluggy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-35-protobuf"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-36-pycparser"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-37-pydantic"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-38-pydantic-core"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-39-Pygments"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-40-pytest"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-41-python-multipart"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-42-PyYAML"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-43-regex"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-44-requests"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-45-rich"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-46-safetensors"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-47-scipy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-48-sentencepiece"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-49-shellingham"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-50-sounddevice"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-51-starlette"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-52-tokenizers"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-53-tomlkit"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-54-tqdm"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-55-transformers"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-56-typer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-57-typing-inspection"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-58-typing-extensions"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-59-urllib3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-60-uvicorn"
+    },
+    {
+      "spdxElementId": "SPDXRef-Veystrix",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-py-61-websockets"
+    }
+  ]
+}

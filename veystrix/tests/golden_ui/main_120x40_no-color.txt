@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+                             ██╗   ██╗███████╗██╗   ██╗███████╗████████╗██████╗ ██╗██╗  ██╗
+                             ██║   ██║██╔════╝╚██╗ ██╔╝██╔════╝╚══██╔══╝██╔══██╗██║╚██╗██╔╝
+                             ██║   ██║█████╗   ╚████╔╝ ███████╗   ██║   ██████╔╝██║ ╚███╔╝
+                             ╚██╗ ██╔╝██╔══╝    ╚██╔╝  ╚════██║   ██║   ██╔══██╗██║ ██╔██╗
+                              ╚████╔╝ ███████╗   ██║   ███████║   ██║   ██║  ██║██║██╔╝ ██╗
+                               ╚═══╝  ╚══════╝   ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
+                                    local coding agent  ·  your models, your machine
+
+  ┃ ❯ fix the bug in app.py
+  ◇ Checking the failing test first. Let me read app.py
+  ◇ then patch the off-by-one.
+  ▸ read  path=app.py  ✓
+         1 │ def total(xs):
+         2 │     return sum(xs[:-1])
+  ▸ edit  path=app.py  ✓
+    --- a/app.py
+    +++ b/app.py
+  @ @@ -1,2 +1,2 @@
+     def total(xs):
+  -     return sum(xs[:-1])
+  +     return sum(xs)
+
+  The bug was an off-by-one: `total` dropped the last element. I changed it to sum every item; please re-run the
+  tests.
+ ╭─ ● ready ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ❯ █                                                                                                                │
+ ╰─ ? help · Ctrl-K palette · /settings · /model · Tab complete · Shift+Enter newline ─────────────────────── ctx 4% ─╯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+◆ VEYSTRIX · flashnext · ░░░░░░░░░░ 1.3k/32k · effort medium · ↺ cached · 7.2 tok/s · TTFT 0.0s · thermal 0

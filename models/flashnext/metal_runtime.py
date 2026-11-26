@@ -1,0 +1,1409 @@
+"""Bounded Level-1 Metal MoE experiment for FlashNext Q4/G32 experts.
+
+This module is opt-in and does not change the production loader. It accepts
+flattened decode inputs and runs the three routed projections. It loads the
+Q4/G32 vector helpers from the active MLX wheel so the supported production
+shapes use the same reduction order and return bit-identical output.
+
+The experiment is deliberately bounded.  It supports at most eight tokens,
+ten routed slots, 512 experts, and 16,384 projection outputs per call.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+import os
+from pathlib import Path
+import re
+import sys
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+
+from veystrix.bench.telemetry import current as benchmark_trace
+
+from .boundary_profiler import BoundaryProfiler
+
+
+MAX_TOKENS = 8
+MAX_EXPERTS = 512
+MAX_TOP_K = 10
+MAX_WIDTH = 16_384
+GROUP_SIZE = 32
+SUPPORTED_GROUP_SIZES = (32, 64)
+# Full-model digest gate passed after the MLX score-combine correction on
+# 20260908. The 20260917 paired comparison measured +13.4% decode speed with
+# identical digests, so FLASHNEXT_METAL_G64 defaults to on.
+G64_RUNTIME_READY = True
+BITS = 4
+# Block (row-batched) kernels: pairs routed to one expert share one walk of
+# its weights. Unused pair slots of a group hold BLOCK_EMPTY.
+BLOCK_EMPTY = 0xFFFFFFFF
+BLOCK_ROWS = (2, 4, 8)
+
+
+@dataclass(frozen=True)
+class Q4G32Projection:
+    """Packed expert rows consumed by one gate, up, or down projection."""
+
+    weight: Any
+    scales: Any
+    biases: Any
+
+
+@dataclass(frozen=True)
+class MetalCapabilities:
+    """Backend probe result exposed as attributes and mapping-like keys."""
+
+    available: bool
+    supports_custom_moe: bool
+    backend: str
+    reason: str
+
+    @property
+    def custom_metal(self) -> bool:
+        return self.supports_custom_moe
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+
+def probe_capabilities(backend: Any = None) -> MetalCapabilities:
+    """Return capability flags without compiling or allocating a kernel.
+
+    ``backend`` may be ``"metal"``, ``"reference"``, or an object exposing
+    ``metal_kernel``.  The object form makes the experiment testable without
+    requiring an Apple GPU.
+    """
+    if backend == "reference":
+        return MetalCapabilities(False, False, "reference", "reference backend requested")
+    if backend is not None and hasattr(backend, "available"):
+        available = bool(getattr(backend, "available"))
+        supports = bool(getattr(backend, "supports_custom_moe", False))
+        reason = "injected backend capability"
+        if not available:
+            reason = "injected backend is unavailable"
+        elif not supports:
+            reason = "backend does not provide custom MoE"
+        return MetalCapabilities(available and supports, supports, "injected", reason)
+    if hasattr(backend, "metal_kernel"):
+        return MetalCapabilities(True, True, "injected", "injected backend provides metal_kernel")
+    if backend not in (None, "metal"):
+        return MetalCapabilities(False, False, str(backend), "unknown backend")
+    if sys.platform != "darwin":
+        return MetalCapabilities(False, False, "metal", "custom Metal requires macOS")
+    try:
+        import mlx.core as mx
+
+        if mx.default_device().type != mx.DeviceType.gpu:
+            return MetalCapabilities(False, False, "metal", "MLX is not using a GPU device")
+        return MetalCapabilities(True, True, "metal", "MLX GPU device detected")
+    except Exception as exc:  # pragma: no cover - platform dependent
+        return MetalCapabilities(False, False, "metal", f"MLX unavailable: {exc}")
+
+
+def _as_projection(value: Any) -> Q4G32Projection:
+    if isinstance(value, Q4G32Projection):
+        return value
+    if isinstance(value, Mapping):
+        return Q4G32Projection(value["weight"], value["scales"], value["biases"])
+    if isinstance(value, Sequence) and len(value) == 3:
+        return Q4G32Projection(value[0], value[1], value[2])
+    raise TypeError("projection must be (weight, scales, biases)")
+
+
+def _shape(value: Any) -> tuple[int, ...]:
+    return tuple(int(item) for item in value.shape)
+
+
+def _slab_layout_constants(group_size: int, header_size: int = 4096) -> tuple[int, int]:
+    from .slab_pack import get_slab_layout
+
+    return header_size, get_slab_layout(group_size).record_stride
+
+
+def _validate_projection(
+    projection: Q4G32Projection,
+    expert_count: int | None,
+    input_width: int,
+    output_width: int,
+    group_size: int = GROUP_SIZE,
+) -> None:
+    weight_shape = _shape(projection.weight)
+    scale_shape = _shape(projection.scales)
+    bias_shape = _shape(projection.biases)
+    count = weight_shape[0] if expert_count is None else expert_count
+    expected_weight = (count, output_width, input_width // 8)
+    expected_meta = (count, output_width, input_width // group_size)
+    if weight_shape != expected_weight:
+        raise ValueError(f"weight shape {weight_shape} != {expected_weight}")
+    if scale_shape != expected_meta or bias_shape != expected_meta:
+        raise ValueError(
+            f"Q4/G{group_size} scales and biases have an invalid shape"
+        )
+    dtype = getattr(projection.weight, "dtype", None)
+    if str(dtype) not in ("mlx.core.uint32", "uint32", "<class 'numpy.uint32'>"):
+        # MLX prints ``mlx.core.uint32``; NumPy prints ``uint32``.
+        if np.dtype(dtype) != np.dtype(np.uint32):
+            raise TypeError("Q4 weights must use uint32 packed values")
+
+
+def block_plan(routes: Any, rows: int) -> tuple[np.ndarray, np.ndarray]:
+    """Group (token, slot) pairs by route for the block kernels.
+
+    ``routes`` holds the raw route values in pair order (``token * slots +
+    slot``). Groups follow first appearance, the pairs of a group keep
+    increasing order, a group longer than ``rows`` splits into consecutive
+    chunks, and a short group is padded with ``BLOCK_EMPTY``. Returns
+    ``(group_routes[G], group_pairs[G, rows])`` as uint32 arrays.
+    """
+    if rows not in BLOCK_ROWS:
+        raise ValueError(f"rows must be one of {BLOCK_ROWS}")
+    values = np.asarray(routes).reshape(-1).tolist()
+    if not values:
+        raise ValueError("routes must not be empty")
+    pairs_of: dict[int, list[int]] = {}
+    for pair, value in enumerate(values):
+        pairs_of.setdefault(int(value), []).append(pair)
+    group_routes: list[int] = []
+    group_pairs: list[list[int]] = []
+    for value, pairs in pairs_of.items():
+        for start in range(0, len(pairs), rows):
+            chunk = pairs[start:start + rows]
+            group_routes.append(value)
+            group_pairs.append(chunk + [BLOCK_EMPTY] * (rows - len(chunk)))
+    return (
+        np.array(group_routes, dtype=np.uint32),
+        np.array(group_pairs, dtype=np.uint32).reshape(len(group_routes), rows),
+    )
+
+
+def weighted_combine(expert_outputs: Any, routes: Any, scores: Any) -> Any:
+    """Combine routed expert outputs using the router scores.
+
+    The normal form is ``expert_outputs[..., slots, hidden]``.  If outputs
+    instead contain every expert in ``[..., experts, hidden]``, ``routes``
+    selects the slots first.  The route values do not affect the normal form,
+    but this function validates their slot shape and range when possible.
+    """
+    output_shape = _shape(expert_outputs)
+    route_shape = _shape(routes)
+    score_shape = _shape(scores)
+    if len(output_shape) < 2 or len(route_shape) == 0:
+        raise ValueError("expert_outputs and routes need at least one dimension")
+    if score_shape != route_shape:
+        raise ValueError("routes and scores must have identical shapes")
+    slots = route_shape[-1]
+    if output_shape[:-1] == route_shape:
+        selected = expert_outputs
+    elif len(output_shape) == len(route_shape) + 1 and output_shape[-2] >= slots:
+        try:
+            route_values = np.asarray(routes)
+            if route_values.size and (
+                route_values.min() < 0 or route_values.max() >= output_shape[-2]
+            ):
+                raise ValueError("routes contain an expert outside expert_outputs")
+        except TypeError:
+            pass
+        try:
+            import mlx.core as mx
+
+            selected = mx.take_along_axis(
+                expert_outputs,
+                mx.expand_dims(routes, -1),
+                axis=-2,
+            )
+        except (ImportError, TypeError):
+            selected = np.take_along_axis(
+                np.asarray(expert_outputs), np.expand_dims(routes, -1), axis=-2
+            )
+    else:
+        raise ValueError(
+            f"expert_outputs shape {output_shape} does not match routes {route_shape}"
+        )
+    if _shape(selected)[:-1] != route_shape:
+        raise ValueError("selected expert outputs do not match route slots")
+    weights = scores[..., None]
+    return (selected * weights).sum(axis=-2)
+
+
+# Expert row pointers. A packed slab route sets bit 31 and addresses the
+# expert-major record in the slab pack (or the expert pool, which shares its
+# layout); anything else indexes the streamed
+# weight arrays, or the expert-major stream pack when it is enabled.
+_POINTERS = r"""
+#if SLAB_PACK_ENABLED
+bool in_slab = ((raw_expert & 0x80000000u) != 0);
+uint expert = in_slab ? (raw_expert & 0x7FFFFFFFu) : raw_expert;
+#if STREAM_PACK_ENABLED
+const device char* record_base = in_slab
+    ? ((const device char*)slab_pack) + SLAB_HEADER_SIZE + (ulong)expert * SLAB_RECORD_STRIDE
+    : ((const device char*)stream_pack) + (ulong)expert * SLAB_RECORD_STRIDE;
+decltype(weight) w_ptr = (decltype(weight))(record_base + W_OFFSET);
+decltype(scales) s_ptr = (decltype(scales))(record_base + S_OFFSET);
+decltype(biases) b_ptr = (decltype(biases))(record_base + B_OFFSET);
+#else
+// 64-bit: an expert pool can exceed 4 GiB of records.
+ulong expert_offset = SLAB_HEADER_SIZE + (ulong)expert * SLAB_RECORD_STRIDE;
+decltype(weight) w_ptr = in_slab
+    ? (decltype(weight))(((const device char*)slab_pack) + expert_offset + W_OFFSET)
+    : (weight + expert * OUT_WIDTH * (IN_WIDTH / 8));
+decltype(scales) s_ptr = in_slab
+    ? (decltype(scales))(((const device char*)slab_pack) + expert_offset + S_OFFSET)
+    : (scales + expert * OUT_WIDTH * (IN_WIDTH / GROUP_SIZE));
+decltype(biases) b_ptr = in_slab
+    ? (decltype(biases))(((const device char*)slab_pack) + expert_offset + B_OFFSET)
+    : (biases + expert * OUT_WIDTH * (IN_WIDTH / GROUP_SIZE));
+#endif
+#else
+uint expert = raw_expert;
+decltype(weight) w_ptr = weight + expert * OUT_WIDTH * (IN_WIDTH / 8);
+decltype(scales) s_ptr = scales + expert * OUT_WIDTH * (IN_WIDTH / GROUP_SIZE);
+decltype(biases) b_ptr = biases + expert * OUT_WIDTH * (IN_WIDTH / GROUP_SIZE);
+#endif
+"""
+
+
+_PROJECTION_BODY = r"""
+uint pair = threadgroup_position_in_grid.z;
+uint token = pair / SLOTS;
+uint slot = pair % SLOTS;
+uint raw_expert = routes[pair];
+const int in_size = IN_WIDTH;
+const int out_size = OUT_WIDTH;
+const device T* input = x +
+    ((SLOT_INPUT != 0) ? pair * IN_WIDTH : token * IN_WIDTH);
+device T* output = out + pair * OUT_WIDTH;
+uint3 tid = uint3(0, threadgroup_position_in_grid.y, pair);
+""" + _POINTERS + r"""
+    QMV_MIXED_IMPL<T, GROUP_SIZE, 4>(
+    w_ptr, s_ptr, b_ptr,
+    input, output, in_size, out_size, tid,
+    simdgroup_index_in_threadgroup, thread_index_in_simdgroup);
+"""
+
+
+_FUSED_UP_SWIGLU_BODY = r"""
+uint pair = threadgroup_position_in_grid.z;
+uint token = pair / SLOTS;
+uint slot = pair % SLOTS;
+uint raw_expert = routes[pair];
+const int in_size = IN_WIDTH;
+const int out_size = OUT_WIDTH;
+const device T* input = x + token * IN_WIDTH;
+device T* output = out + pair * OUT_WIDTH;
+const device T* gate_values = gate_out + pair * OUT_WIDTH;
+uint3 tid = uint3(0, threadgroup_position_in_grid.y, pair);
+""" + _POINTERS + r"""
+    QMV_MIXED_IMPL<T, GROUP_SIZE, 4>(
+    w_ptr, s_ptr, b_ptr,
+    input, output, in_size, out_size, tid,
+    simdgroup_index_in_threadgroup, thread_index_in_simdgroup);
+
+// MLX's bfloat16 sigmoid helper uses this stable, rounded sequence.
+uint out_base = threadgroup_position_in_grid.y * 8 +
+    simdgroup_index_in_threadgroup * 4;
+if (thread_index_in_simdgroup == 0) {
+#pragma unroll
+    for (uint row = 0; row < 4; ++row) {
+        uint col = out_base + row;
+        if (col < OUT_WIDTH) {
+            uint index = pair * OUT_WIDTH + col;
+            T gate_value = gate_values[col];
+            T up_value = output[col];
+            T magnitude = metal::abs(gate_value);
+            T exponent = metal::exp(magnitude);
+            T denominator = T(1) + exponent;
+            T small_sigmoid = T(1) / denominator;
+            T sigmoid = (gate_value < T(0)) ? small_sigmoid :
+                T(1) - small_sigmoid;
+            output[col] = (gate_value * sigmoid) * up_value;
+        }
+    }
+}
+"""
+
+
+_FUSED_DOWN_COMBINE_BODY = r"""
+#pragma clang fp contract(off)
+uint3 group = threadgroup_position_in_grid;
+uint simd_lid = thread_index_in_simdgroup;
+uint simd_gid = simdgroup_index_in_threadgroup;
+uint token = group.z;
+uint out_base = group.x * 8 + simd_gid * 4;
+if (token >= TOKENS || out_base >= OUT_WIDTH) return;
+float combined[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+for (uint slot = 0; slot < SLOTS; ++slot) {
+    uint raw_expert = routes[token * SLOTS + slot];
+    float slot_score = float(scores[token * SLOTS + slot]);
+    const int in_size = IN_WIDTH;
+    const int out_size = OUT_WIDTH;
+    uint3 tid = uint3(0, group.x, token);
+""" + _POINTERS + r"""
+    QMV_ACCUMULATE_IMPL<T, GROUP_SIZE, 4>(
+        w_ptr, s_ptr, b_ptr,
+        x + (token * SLOTS + slot) * IN_WIDTH,
+        combined, slot_score, in_size, out_size, tid,
+        simd_gid, simd_lid);
+}
+
+if (simd_lid == 0) {
+#pragma unroll
+    for (uint row = 0; row < 4; ++row) {
+        uint col = out_base + row;
+        if (col < OUT_WIDTH) {
+            uint idx = token * OUT_WIDTH + col;
+            T routed = static_cast<T>(combined[row]);
+#if HAS_SHARED_PARTS
+            T shared_component = static_cast<T>(
+                float(shared[idx]) * float(shared_gate[token]));
+            float final_value = float(routed) + float(shared_component);
+            out[idx] = static_cast<T>(final_value);
+#elif HAS_SHARED_Y
+            float final_value = float(routed) + float(shared_y[idx]);
+            out[idx] = static_cast<T>(final_value);
+#else
+            out[idx] = routed;
+#endif
+        }
+    }
+}
+"""
+
+# Row-batched variants of the gate/up projection and the up+SwiGLU kind. One
+# threadgroup serves one expert (``group_routes[group]``) and up to
+# BLOCK_ROWS_N pairs routed to it (``group_pairs``). Each k-block of weights is
+# read once and applied to every live pair in turn. Per pair and output row the
+# arithmetic is that of qmv_fast_impl (``packs_per_thread`` 2) or qmv_impl
+# (``packs_per_thread`` 1, with the ``remaining`` tail and the moved-back last
+# tile): ``result += qdot(...)`` over increasing k, then ``simd_sum``, then
+# one cast, so every pair equals the per-pair kernels' output bit for bit.
+_BLOCK_BODY = r"""
+uint group = threadgroup_position_in_grid.z;
+uint simd_gid = simdgroup_index_in_threadgroup;
+uint simd_lid = thread_index_in_simdgroup;
+uint raw_expert = group_routes[group];
+""" + _POINTERS + r"""
+constexpr int num_simdgroups = 2;
+constexpr int results_per_simdgroup = 4;
+#if BLOCK_FAST
+constexpr int packs_per_thread = 2;
+#else
+constexpr int packs_per_thread = 1;
+#endif
+constexpr int pack_factor = get_pack_factor<4, 32>();
+constexpr int bytes_per_pack = get_bytes_per_pack<4, 32>();
+constexpr int values_per_thread = pack_factor * packs_per_thread;
+constexpr int block_size = values_per_thread * SIMD_SIZE;
+constexpr int scale_step_per_thread = GROUP_SIZE / values_per_thread;
+constexpr int in_vec_size_w = IN_WIDTH * bytes_per_pack / pack_factor;
+constexpr int in_vec_size_g = IN_WIDTH / GROUP_SIZE;
+const int out_row = threadgroup_position_in_grid.y *
+    (num_simdgroups * results_per_simdgroup) +
+    simd_gid * results_per_simdgroup;
+#if BLOCK_FAST
+const int row_base = out_row;
+const int live_rows = results_per_simdgroup;
+#else
+if (out_row >= OUT_WIDTH) {
+    return;
+}
+#if OUT_WIDTH < 8
+// Fewer outputs than one tile: guard every row.
+const int row_base = out_row;
+const int live_rows = min(results_per_simdgroup, OUT_WIDTH - out_row);
+#else
+// The last tile moves back and redoes some output rows.
+const int row_base = min(OUT_WIDTH - results_per_simdgroup, out_row);
+const int live_rows = results_per_simdgroup;
+#endif
+#endif
+
+const device uint8_t* ws = (const device uint8_t*)w_ptr;
+decltype(scales) sc = s_ptr;
+decltype(biases) bs = b_ptr;
+ws += row_base * in_vec_size_w + simd_lid * packs_per_thread * bytes_per_pack;
+sc += row_base * in_vec_size_g + simd_lid / scale_step_per_thread;
+bs += row_base * in_vec_size_g + simd_lid / scale_step_per_thread;
+
+uint pairs[BLOCK_ROWS_N];
+const device T* xs[BLOCK_ROWS_N];
+thread float x_thread[values_per_thread];
+thread float result[BLOCK_ROWS_N][results_per_simdgroup];
+#pragma unroll
+for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+    pairs[j] = group_pairs[group * BLOCK_ROWS_N + j];
+    xs[j] = x;
+    if (pairs[j] != BLOCK_EMPTY) {
+        xs[j] = x + ((SLOT_INPUT != 0) ? pairs[j] : pairs[j] / SLOTS) * IN_WIDTH +
+            simd_lid * values_per_thread;
+    }
+#pragma unroll
+    for (int row = 0; row < results_per_simdgroup; ++row) {
+        result[j][row] = 0;
+    }
+}
+
+#if BLOCK_FAST
+const int main_end = IN_WIDTH;
+#else
+const int main_end = IN_WIDTH - block_size;
+#endif
+int k = 0;
+for (; k < main_end; k += block_size) {
+#pragma unroll
+    for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+        if (pairs[j] == BLOCK_EMPTY) {
+            continue;
+        }
+        float sum = load_vector<T, float, values_per_thread, 4>(xs[j], x_thread);
+        for (int row = 0; row < live_rows; ++row) {
+            auto wl = (const device uint8_t*)(ws + row * in_vec_size_w);
+            decltype(sc) sl = sc + row * in_vec_size_g;
+            decltype(bs) bl = bs + row * in_vec_size_g;
+            float s = sl[0];
+            float b = bl[0];
+            result[j][row] += qdot<float, values_per_thread, 4>(wl, x_thread, s, b, sum);
+        }
+        xs[j] += block_size;
+    }
+    ws += block_size * bytes_per_pack / pack_factor;
+    sc += block_size / GROUP_SIZE;
+    bs += block_size / GROUP_SIZE;
+}
+#if !BLOCK_FAST
+const int remaining = clamp(
+    static_cast<int>(IN_WIDTH - k - simd_lid * values_per_thread),
+    0,
+    values_per_thread);
+if (remaining > 0) {
+#pragma unroll
+    for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+        if (pairs[j] == BLOCK_EMPTY) {
+            continue;
+        }
+        float sum = load_vector_safe<T, float, values_per_thread, 4>(
+            xs[j], x_thread, remaining);
+        for (int row = 0; row < live_rows; ++row) {
+            auto wl = (const device uint8_t*)(ws + row * in_vec_size_w);
+            decltype(sc) sl = sc + row * in_vec_size_g;
+            decltype(bs) bl = bs + row * in_vec_size_g;
+            float s = sl[0];
+            float b = bl[0];
+            result[j][row] += qdot_safe<float, values_per_thread, 4>(
+                wl, x_thread, s, b, sum, remaining);
+        }
+    }
+}
+#endif
+
+#pragma unroll
+for (int j = 0; j < BLOCK_ROWS_N; ++j) {
+    if (pairs[j] == BLOCK_EMPTY) {
+        continue;
+    }
+    for (int row = 0; row < live_rows; ++row) {
+        float value = simd_sum(result[j][row]);
+        uint col = row_base + row;
+        if (simd_lid == 0 && col < OUT_WIDTH) {
+            uint index = pairs[j] * OUT_WIDTH + col;
+#if BLOCK_SWIGLU
+            // Same rounded sigmoid sequence as the per-pair up+SwiGLU kernel.
+            T up_value = static_cast<T>(value);
+            T gate_value = gate_out[index];
+            T magnitude = metal::abs(gate_value);
+            T exponent = metal::exp(magnitude);
+            T denominator = T(1) + exponent;
+            T small_sigmoid = T(1) / denominator;
+            T sigmoid = (gate_value < T(0)) ? small_sigmoid :
+                T(1) - small_sigmoid;
+            out[index] = (gate_value * sigmoid) * up_value;
+#else
+            out[index] = static_cast<T>(value);
+#endif
+        }
+    }
+}
+"""
+
+_BODIES = {
+    "projection": _PROJECTION_BODY,
+    "up_swiglu": _FUSED_UP_SWIGLU_BODY,
+    "down_combine": _FUSED_DOWN_COMBINE_BODY,
+}
+_QMV_LABELS = {"gate_proj": "gate_qmv", "up_proj": "up_qmv", "down_proj": "down_qmv"}
+_KERNEL_TOKEN = re.compile(r"\b[A-Z][A-Z0-9_]*\b")
+
+
+def _render(source: str, values: Mapping[str, str]) -> str:
+    """Substitute whole-word placeholders; anything else stays as written."""
+    return _KERNEL_TOKEN.sub(lambda match: values.get(match.group(0), match.group(0)), source)
+
+
+def _template_head(name: str) -> "re.Pattern[str]":
+    """A template line of an MLX QMV helper, with any extra template parameters."""
+    return re.compile(
+        r"template <typename T, int group_size, int bits(?P<extra>(?:,[^>\n]*)?)>\n"
+        r"METAL_FUNC void " + name + r"\("
+    )
+
+
+_QMV_FAST_HEAD = _template_head("qmv_fast_impl")
+_QMV_IMPL_HEAD = _template_head("qmv_impl")
+_QOUTER_ANCHOR = "template <typename U, int values_per_thread, int bits>\ninline void\nqouter"
+_QMV_END_ANCHOR = "// Affine analog of fp_qmv_wide"
+_METADATA_TYPE_SWAPS = (
+    ("const device T* scales", "const device M* scales"),
+    ("const device T* biases", "const device M* biases"),
+    ("const device T* sl", "const device M* sl"),
+    ("const device T* bl", "const device M* bl"),
+)
+_ACCUMULATE_SWAPS = (
+    ("device T* y,", "thread float* combined, float score,"),
+)
+_Y_OFFSETS = (
+    "y += tid.x * out_vec_size + out_row;",
+    "y += tid.x * out_vec_size + used_out_row;",
+)
+_Y_STORE = "y[row] = static_cast<T>(result[row]);"
+
+
+def _require(source: str, pattern: str, what: str, version: str) -> None:
+    if pattern not in source:
+        raise RuntimeError(
+            f"MLX {version} quantized.h changed: {what} has no {pattern!r}"
+        )
+
+
+def _slice_qmv_header(text: str, fma_dequant: bool, version: str) -> str:
+    """Build the kernel header from the text of MLX's ``quantized.h``.
+
+    Every substitution must apply: a pattern that is absent raises instead of
+    producing a kernel that reads or writes somewhere else.
+    """
+    helper_end = text.find(_QOUTER_ANCHOR)
+    if helper_end < 0:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qouter helper anchor")
+    fast_head = _QMV_FAST_HEAD.search(text)
+    if fast_head is None:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qmv_fast_impl template")
+    qmv_start = fast_head.start()
+    impl_head = _QMV_IMPL_HEAD.search(text, qmv_start)
+    if impl_head is None:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no qmv_impl template")
+    qmv_end = text.find(_QMV_END_ANCHOR, qmv_start)
+    if qmv_end < 0:
+        raise RuntimeError(f"MLX {version} quantized.h changed: no end of qmv_impl anchor")
+    header = text[:helper_end] + text[qmv_start:qmv_end]
+    # The stock MLX helpers use one type for activations and affine metadata.
+    # FlashNext stores float32 activations with bfloat16 scales and biases.
+    # Keep the MLX reduction body, but use a separate metadata type so MLX
+    # does not insert per-projection metadata conversion kernels.
+    fast = text[qmv_start:impl_head.start()]
+    impl = text[impl_head.start():qmv_end]
+
+    def _mixed(src: str, head: "re.Match[str]", old_name: str, new_name: str, what: str) -> str:
+        # Insert the metadata type right after ``int bits``; any template
+        # parameters MLX adds after it keep their position and defaults.
+        extra = head.group("extra")
+        old = "template <typename T, int group_size, int bits" + extra + ">"
+        new = "template <typename T, int group_size, int bits, typename M" + extra + ">"
+        mixed = src.replace(old, new, 1).replace(old_name, new_name, 1)
+        for old_type, new_type in _METADATA_TYPE_SWAPS:
+            _require(mixed, old_type, what, version)
+            mixed = mixed.replace(old_type, new_type)
+        return mixed
+
+    fast = _mixed(fast, fast_head, "qmv_fast_impl", "qmv_fast_mixed_impl", "qmv_fast_impl")
+    impl = _mixed(impl, impl_head, "qmv_impl", "qmv_mixed_impl", "qmv_impl")
+    header += fast + impl
+
+    def _make_accumulate(src: str, old_name: str, new_name: str, offsets) -> str:
+        acc = src.replace(old_name, new_name, 1)
+        for old, new in _ACCUMULATE_SWAPS:
+            _require(acc, old, old_name, version)
+            acc = acc.replace(old, new, 1)
+        for old in offsets:
+            _require(acc, old, old_name, version)
+            acc = acc.replace(old, "// y unused", 1)
+        _require(acc, _Y_STORE, old_name, version)
+        return acc.replace(
+            _Y_STORE, "combined[row] += float(static_cast<T>(result[row])) * score;",
+        )
+
+    # qmv_fast_impl has one output pointer offset, qmv_impl one per branch.
+    fast_acc = _make_accumulate(fast, "qmv_fast_mixed_impl", "qmv_fast_accumulate_impl", _Y_OFFSETS[:1])
+    impl_acc = _make_accumulate(impl, "qmv_mixed_impl", "qmv_accumulate_impl", _Y_OFFSETS)
+    header += fast_acc + impl_acc
+    # Custom-kernel helpers receive small local dimensions, not buffer
+    # address-space constants. Pass them by value so older Metal compilers do
+    # not reject references without an explicit address space.
+    if fma_dequant:
+        old = "return scale * accum + sum * bias;"
+        if header.count(old) != 2:
+            raise RuntimeError(
+                f"MLX {version} affine dot helpers changed; cannot enable explicit FMA"
+            )
+        header = header.replace(old, "return metal::fma(scale, accum, sum * bias);")
+    _require(header, "const constant int&", "the helper dimensions", version)
+    return header.replace("const constant int&", "const int")
+
+
+@lru_cache(maxsize=2)
+def _mlx_qmv_header(fma_dequant: bool = False) -> str:
+    """Load the exact Q4 vector helpers shipped with the active MLX wheel."""
+    import mlx.core as mx
+
+    path = (
+        Path(mx.__file__).resolve().parent
+        / "include/mlx/backend/metal/kernels/quantized.h"
+    )
+    return _slice_qmv_header(path.read_text(), fma_dequant, mx.__version__)
+
+
+class MetalMoEExecutor:
+    """Bounded three-projection executor with an explicit reference path."""
+
+    def __init__(
+        self,
+        expert_count: int,
+        hidden_size: int,
+        top_k: int,
+        backend: Any = None,
+        *,
+        max_tokens: int = MAX_TOKENS,
+        max_width: int = MAX_WIDTH,
+        profile_boundaries: bool | None = None,
+        profile_boundary: str | None = None,
+        fused_up_swiglu: bool | None = None,
+        group_size: int = GROUP_SIZE,
+        header_size: int = 4096,
+        fma_dequant: bool | None = None,
+    ) -> None:
+        if not 1 <= expert_count <= MAX_EXPERTS:
+            raise ValueError(f"expert_count must be in 1..{MAX_EXPERTS}")
+        if hidden_size <= 0:
+            raise ValueError("hidden_size must be positive")
+        if not 1 <= top_k <= MAX_TOP_K:
+            raise ValueError(f"top_k must be in 1..{MAX_TOP_K}")
+        if top_k > expert_count:
+            raise ValueError("top_k cannot exceed expert_count")
+        if not 1 <= max_tokens <= MAX_TOKENS:
+            raise ValueError(f"max_tokens must be in 1..{MAX_TOKENS}")
+        if not 1 <= max_width <= MAX_WIDTH:
+            raise ValueError(f"max_width must be in 1..{MAX_WIDTH}")
+        if group_size not in SUPPORTED_GROUP_SIZES:
+            raise ValueError(
+                f"group_size must be one of {SUPPORTED_GROUP_SIZES}"
+            )
+        self.expert_count = int(expert_count)
+        self.hidden_size = int(hidden_size)
+        self.top_k = int(top_k)
+        self.max_tokens = int(max_tokens)
+        self.max_width = int(max_width)
+        self.group_size = int(group_size)
+        self.header_size = int(header_size)
+        self.fma_dequant = os.environ.get("FLASHNEXT_METAL_FMA_DEQUANT") == "1" if fma_dequant is None else fma_dequant
+        self.backend = backend
+        self.capabilities = probe_capabilities(backend)
+        self.last_path = "reference"
+        self.fallback_reason = self.capabilities["reason"]
+        self._kernels: dict[tuple[Any, ...], Any] = {}
+        self._boundary_profiler = BoundaryProfiler(
+            profile_boundaries, boundary=profile_boundary
+        )
+        if fused_up_swiglu is None:
+            fused_up_swiglu = os.environ.get("FLASHNEXT_FUSED_UP_SWIGLU") == "1"
+        self.fused_up_swiglu = bool(fused_up_swiglu)
+
+    @property
+    def boundary_profile(self) -> dict[str, Any]:
+        """Return boundary events and totals for the latest executor calls."""
+        return self._boundary_profiler.snapshot()
+
+    def reset_boundary_profile(self) -> None:
+        """Discard collected boundary events without changing the opt-in flag."""
+        self._boundary_profiler.reset()
+
+    @staticmethod
+    def _complete_boundary(value: Any) -> None:
+        # Injected backends can return NumPy arrays in checkpoint-free tests.
+        # They have no deferred device graph to drain.
+        if isinstance(value, np.ndarray):
+            return
+        import mlx.core as mx
+
+        mx.eval(value)
+
+    @property
+    def available(self) -> bool:
+        return bool(self.capabilities["available"])
+
+    def _kernel(
+        self,
+        kind: str,
+        x: Any,
+        tokens: int,
+        slots: int,
+        input_width: int,
+        output_width: int,
+        *,
+        proj_name: str,
+        slot_input: bool = False,
+        has_slab_pack: bool = False,
+        has_stream_pack: bool = False,
+        has_shared_y: bool = False,
+        has_shared_parts: bool = False,
+        block_rows: int = 0,
+    ) -> Any:
+        """Build, or reuse, one specialised Metal kernel.
+
+        ``block_rows`` selects the row-batched variant of a projection or
+        up+SwiGLU kind. It is specialised on rows per group only: neither the
+        token count nor the group count enters the source or the key.
+        """
+        if block_rows:
+            tokens = 0
+        key = (
+            kind, self.group_size, str(getattr(x, "dtype", None)), tokens, slots,
+            input_width, output_width, proj_name, slot_input, has_slab_pack,
+            has_stream_pack, has_shared_y, has_shared_parts, self.header_size,
+        )
+        if block_rows:
+            key += (block_rows,)
+        kernel = self._kernels.get(key)
+        if kernel is not None:
+            return kernel
+        fast = input_width % 512 == 0
+        values = {
+            "TOKENS": str(tokens),
+            "SLOTS": str(slots),
+            "IN_WIDTH": str(input_width),
+            "OUT_WIDTH": str(output_width),
+            "GROUP_SIZE": str(self.group_size),
+            "SLOT_INPUT": "1" if slot_input else "0",
+            "SLAB_PACK_ENABLED": "1" if has_slab_pack else "0",
+            "STREAM_PACK_ENABLED": "1" if has_stream_pack else "0",
+            "HAS_SHARED_Y": "1" if has_shared_y else "0",
+            "HAS_SHARED_PARTS": "1" if has_shared_parts else "0",
+            "QMV_MIXED_IMPL": "qmv_fast_mixed_impl" if fast else "qmv_mixed_impl",
+            "QMV_ACCUMULATE_IMPL": (
+                "qmv_fast_accumulate_impl" if fast else "qmv_accumulate_impl"
+            ),
+        }
+        if block_rows:
+            values.update({
+                "BLOCK_ROWS_N": str(block_rows),
+                "BLOCK_FAST": "1" if fast else "0",
+                "BLOCK_SWIGLU": "1" if kind == "up_swiglu" else "0",
+                "BLOCK_EMPTY": f"{BLOCK_EMPTY:#x}u",
+            })
+        if has_slab_pack:
+            from .slab_pack import get_slab_layout
+
+            header_size, record_stride = _slab_layout_constants(
+                self.group_size, self.header_size
+            )
+            layout = get_slab_layout(self.group_size)
+            values.update({
+                "SLAB_HEADER_SIZE": f"{header_size}u",
+                "SLAB_RECORD_STRIDE": f"{record_stride}u",
+                "W_OFFSET": f"{layout.offset(proj_name, 'weight')}u",
+                "S_OFFSET": f"{layout.offset(proj_name, 'scales')}u",
+                "B_OFFSET": f"{layout.offset(proj_name, 'biases')}u",
+            })
+        input_names = ["x", "weight", "scales", "biases", "routes"]
+        if block_rows:
+            input_names[4:] = ["group_routes", "group_pairs"]
+        if kind == "down_combine":
+            input_names.append("scores")
+        if has_slab_pack:
+            input_names.append("slab_pack")
+            if has_stream_pack:
+                input_names.append("stream_pack")
+        if kind == "up_swiglu":
+            input_names.append("gate_out")
+        if has_shared_y:
+            input_names.append("shared_y")
+        elif has_shared_parts:
+            input_names.extend(["shared", "shared_gate"])
+
+        base = f"flashnext_level1_q4g{self.group_size}"
+        if kind == "projection":
+            name = f"{base}_{proj_name}_pack" if has_slab_pack else base
+            if has_stream_pack:
+                name += "_stream"
+            label = _QMV_LABELS.get(proj_name)
+        elif kind == "up_swiglu":
+            name = f"{base}_up_swiglu_pack" if has_slab_pack else f"{base}_up_swiglu"
+            label = None
+        else:
+            name = f"{base}_down_combine"
+            if has_slab_pack:
+                name += "_pack_stream" if has_stream_pack else "_pack"
+            if has_shared_y:
+                name += "_shared"
+            elif has_shared_parts:
+                name += "_shared_parts"
+            label = "fused_down"
+        if block_rows:
+            name += f"_block{block_rows}"
+        if (
+            label is not None
+            and self._boundary_profiler.enabled
+            and self._boundary_profiler.selected_for(label)
+        ):
+            name += f"_boundary_{label}"
+        if self.fma_dequant:
+            name += "_affine_fma"
+        maker = getattr(self.backend, "metal_kernel", None)
+        if maker is None:
+            import mlx.core as mx
+
+            maker = mx.fast.metal_kernel
+        kernel = maker(
+            name=name,
+            input_names=input_names,
+            output_names=["out"],
+            source=_render(_BLOCK_BODY if block_rows else _BODIES[kind], values),
+            header=_mlx_qmv_header(self.fma_dequant),
+            ensure_row_contiguous=True,
+            compile_options={"math_mode": "safe"},
+        )
+        self._kernels[key] = kernel
+        return kernel
+
+    def _launch(self, label, kernel, inputs, x, grid, threadgroup, output_shape):
+        """Dispatch one kernel, timing it only when its boundary is profiled."""
+        trace = benchmark_trace.get()
+        if trace is not None and trace.capture_shapes:
+            trace.counts["custom_metal_dispatches"] += 1
+            trace.shape("metal." + (label or "projection"), inputs[:5],
+                        bits=BITS, group_size=self.group_size, output_shape=output_shape,
+                        grid=grid, threadgroup=threadgroup)
+        profiler = self._boundary_profiler
+        if label is None or not profiler.enabled or not profiler.selected_for(label):
+            result = kernel(
+                inputs=inputs, template=[("T", x.dtype)], grid=grid,
+                threadgroup=threadgroup, output_shapes=[output_shape],
+                output_dtypes=[x.dtype],
+            )
+            return result[0] if isinstance(result, (tuple, list)) else result
+
+        def issue():
+            result = kernel(
+                inputs=inputs, template=[("T", x.dtype)], grid=grid,
+                threadgroup=threadgroup, output_shapes=[output_shape],
+                output_dtypes=[x.dtype],
+            )
+            return result[0] if isinstance(result, (tuple, list)) else result
+
+        return profiler.measure(label, issue, self._complete_boundary)
+
+    @staticmethod
+    def _pack_inputs(inputs, slab_pack, stream_pack):
+        if stream_pack is not None and slab_pack is None:
+            raise ValueError("stream pack requires a resident slab pack")
+        if slab_pack is not None:
+            inputs.append(slab_pack)
+            if stream_pack is not None:
+                inputs.append(stream_pack)
+        return inputs
+
+    def _metal_projection(
+        self,
+        x: Any,
+        routes: Any,
+        projection: Q4G32Projection,
+        output_width: int,
+        slot_input: bool,
+        slab_pack: Any = None,
+        stream_pack: Any = None,
+        proj_name: str = "",
+    ) -> Any:
+        tokens, input_width = _shape(x)[0], _shape(x)[-1]
+        slots = _shape(routes)[1]
+        inputs = self._pack_inputs(
+            [x, projection.weight, projection.scales, projection.biases, routes],
+            slab_pack, stream_pack,
+        )
+        kernel = self._kernel(
+            "projection", x, tokens, slots, input_width, output_width,
+            proj_name=proj_name, slot_input=slot_input,
+            has_slab_pack=slab_pack is not None,
+            has_stream_pack=stream_pack is not None,
+        )
+        return self._launch(
+            _QMV_LABELS.get(proj_name), kernel, inputs, x,
+            (32, ((output_width + 7) // 8) * 2, tokens * slots), (32, 2, 1),
+            (tokens, slots, output_width),
+        )
+
+    def _metal_block(
+        self,
+        x: Any,
+        block: Any,
+        projection: Q4G32Projection,
+        output_width: int,
+        slot_input: bool,
+        slots: int,
+        slab_pack: Any = None,
+        stream_pack: Any = None,
+        proj_name: str = "",
+        gate_out: Any = None,
+    ) -> Any:
+        """Run one projection per distinct route, each applied to all its pairs.
+
+        With ``gate_out`` the up projection also applies SwiGLU, like
+        ``_metal_fused_up_swiglu``. The output has the per-pair layout.
+        """
+        group_routes, group_pairs = block
+        tokens, input_width = _shape(x)[0], _shape(x)[-1]
+        groups, rows = _shape(group_pairs)
+        inputs = self._pack_inputs(
+            [x, projection.weight, projection.scales, projection.biases,
+             group_routes, group_pairs],
+            slab_pack, stream_pack,
+        )
+        if gate_out is not None:
+            inputs.append(gate_out)
+        kernel = self._kernel(
+            "projection" if gate_out is None else "up_swiglu", x, tokens, slots,
+            input_width, output_width, proj_name=proj_name, slot_input=slot_input,
+            has_slab_pack=slab_pack is not None,
+            has_stream_pack=stream_pack is not None, block_rows=rows,
+        )
+        label = _QMV_LABELS.get(proj_name) if gate_out is None else "swiglu"
+        return self._launch(
+            label, kernel, inputs, x,
+            (32, ((output_width + 7) // 8) * 2, groups), (32, 2, 1),
+            (tokens, slots, output_width),
+        )
+
+    def affine_singleton(self, x, weight, scales, biases):
+        """Project one row through one unpacked Q4 expert using the MLX-derived kernel."""
+        import mlx.core as mx
+
+        if not self.available or x.shape[0] != 1:
+            return mx.quantized_matmul(x, weight, scales, biases, group_size=self.group_size, bits=4)
+        projection = Q4G32Projection(weight[None], scales[None], biases[None])
+        routes = mx.zeros((1, 1), dtype=mx.uint32)
+        return self._metal_projection(x, routes, projection, weight.shape[0], False)[:, 0, :]
+
+    def _metal_fused_up_swiglu(
+        self,
+        x: Any,
+        routes: Any,
+        gate_out: Any,
+        up: Q4G32Projection,
+        output_width: int,
+        slab_pack: Any = None,
+        stream_pack: Any = None,
+    ) -> Any:
+        """Run Up QMV and consume gate output in the same Metal dispatch."""
+        tokens, input_width = _shape(x)[0], _shape(x)[-1]
+        slots = _shape(routes)[1]
+        inputs = self._pack_inputs(
+            [x, up.weight, up.scales, up.biases, routes], slab_pack, stream_pack,
+        )
+        # Keeping gate_out as the final input makes the dependency explicit.
+        inputs.append(gate_out)
+        kernel = self._kernel(
+            "up_swiglu", x, tokens, slots, input_width, output_width,
+            proj_name="up_proj", has_slab_pack=slab_pack is not None,
+            has_stream_pack=stream_pack is not None,
+        )
+        return self._launch(
+            "swiglu", kernel, inputs, x,
+            (32, ((output_width + 7) // 8) * 2, tokens * slots), (32, 2, 1),
+            (tokens, slots, output_width),
+        )
+
+    def _metal_fused_down_combine(
+        self, x, routes, scores, down, output_width, slab_pack=None,
+        stream_pack=None, shared_y=None, shared=None, shared_gate=None,
+    ):
+        tokens, input_width = _shape(x)[0], _shape(x)[-1]
+        slots = _shape(routes)[1]
+        if (shared is None) != (shared_gate is None):
+            raise ValueError("shared and shared_gate must be provided together")
+        if shared_y is not None and shared is not None:
+            raise ValueError("provide shared_y or shared parts, not both")
+        inputs = self._pack_inputs(
+            [x, down.weight, down.scales, down.biases, routes, scores],
+            slab_pack, stream_pack,
+        )
+        if shared_y is not None:
+            inputs.append(shared_y.reshape(tokens, output_width))
+        elif shared is not None:
+            inputs.extend([
+                shared.reshape(tokens, output_width),
+                shared_gate.reshape(tokens),
+            ])
+        kernel = self._kernel(
+            "down_combine", x, tokens, slots, input_width, output_width,
+            proj_name="down_proj", has_slab_pack=slab_pack is not None,
+            has_stream_pack=stream_pack is not None,
+            has_shared_y=shared_y is not None,
+            has_shared_parts=shared is not None,
+        )
+        return self._launch(
+            "fused_down", kernel, inputs, x,
+            (((output_width + 7) // 8) * 64, 1, tokens), (64, 1, 1),
+            (tokens, output_width),
+        )
+
+    def _reference_projection(
+        self,
+        x: Any,
+        routes: Any,
+        projection: Q4G32Projection,
+        output_width: int,
+        slot_input: bool,
+    ) -> Any:
+        # Keep a NumPy reference for tests and non-MLX callers.  Its unpacking
+        # mirrors the Metal kernel and uses float32 accumulators.
+        if isinstance(x, np.ndarray):
+            return _numpy_projection(
+                x, np.asarray(routes), projection, output_width, slot_input,
+                self.group_size,
+            )
+        import mlx.core as mx
+
+        # MLX's dequantize uses the same affine Q4 representation.  This
+        # fallback preserves values and dtypes while avoiding custom Metal.
+        dense = mx.dequantize(
+            projection.weight,
+            projection.scales,
+            projection.biases,
+            group_size=self.group_size,
+            bits=BITS,
+            mode="affine",
+        )
+        selected = mx.take(dense, routes, axis=0)
+        if slot_input:
+            return mx.einsum("tki,tkoi->tko", x, selected)
+        return mx.einsum("ti,tkoi->tko", x, selected)
+
+    def pool_activations(self, x, routes, projections, slab_pack):
+        """Compute the per-route activations for a subset of a packed decode."""
+        from mlx_vlm.models.activations import swiglu
+
+        gate, up = (_as_projection(projection) for projection in projections[:2])
+        width = _shape(up.weight)[1]
+        gate_out = self._metal_projection(
+            x, routes, gate, width, False, slab_pack=slab_pack, proj_name="gate_proj",
+        )
+        if self.fused_up_swiglu:
+            return self._metal_fused_up_swiglu(x, routes, gate_out, up, width, slab_pack=slab_pack)
+        up_out = self._metal_projection(
+            x, routes, up, width, False, slab_pack=slab_pack, proj_name="up_proj",
+        )
+        return swiglu(gate_out, up_out)
+
+    def execute(
+        self,
+        x: Any,
+        routes: Any,
+        projections: Mapping[str, Any] | Sequence[Any] | Any = None,
+        *,
+        return_all: bool = False,
+        scores: Any = None,
+        slab_pack: Any = None,
+        stream_pack: Any = None,
+        shared_y: Any = None,
+        shared: Any = None,
+        shared_gate: Any = None,
+        pool_activation: Any = None,
+        block: Any = None,
+    ) -> Any:
+        """Run gate, up, activation, and down for bounded flattened inputs.
+
+        ``x`` has shape ``(tokens, hidden_size)`` and ``routes`` has shape
+        ``(tokens, top_k)``.  Projections are a mapping with ``gate_proj``,
+        ``up_proj``, and ``down_proj`` keys, or a three-item sequence.
+        ``block`` is a ``block_plan`` of the flattened routes
+        (``group_routes``, ``group_pairs``); gate, up and, outside the fused
+        down+combine kernel, down then read each distinct route's weights once
+        for all rows that use them, with unchanged per-pair results.
+        """
+        # Level-1 combine-only probes pass already projected values as the
+        # first argument and scores as the third.  Keep this small API useful
+        # for validating route math without allocating packed expert rows.
+        if projections is not None and not isinstance(projections, (Mapping, list, tuple)):
+            if not self.capabilities.supports_custom_moe:
+                raise RuntimeError("custom MoE is unavailable on this backend")
+            self.last_path = "custom-metal"
+            self.fallback_reason = None
+            return weighted_combine(x, routes, projections)
+
+        if projections is None and scores is not None:
+            if not self.capabilities.supports_custom_moe:
+                raise RuntimeError("custom MoE is unavailable on this backend")
+            self.last_path = "custom-metal"
+            self.fallback_reason = None
+            return weighted_combine(x, routes, scores)
+
+        if projections is None:
+            raise TypeError("packed execution needs gate, up, and down projections")
+        x_shape = _shape(x)
+        route_shape = _shape(routes)
+        if len(x_shape) != 2 or x_shape[1] != self.hidden_size:
+            raise ValueError("x must have shape (tokens, hidden_size)")
+        if len(route_shape) != 2 or route_shape[1] != self.top_k:
+            raise ValueError("routes must have shape (tokens, top_k)")
+        if scores is not None and _shape(scores) != route_shape:
+            raise ValueError("scores must have the same shape as routes")
+        if (shared is None) != (shared_gate is None):
+            raise ValueError("shared and shared_gate must be provided together")
+        if shared_y is not None and shared is not None:
+            raise ValueError("provide shared_y or shared parts, not both")
+        if stream_pack is not None and slab_pack is None:
+            raise ValueError("stream pack requires a resident slab pack")
+        tokens = x_shape[0]
+        if route_shape[0] != tokens:
+            raise ValueError("x and routes must have the same token count")
+        if not 1 <= tokens <= self.max_tokens:
+            raise ValueError(f"tokens must be in 1..{self.max_tokens}")
+        if block is not None:
+            if pool_activation is not None:
+                raise ValueError("block kernels cannot use a precomputed pool activation")
+            _validate_block(block, tokens * route_shape[1])
+        # Reading MLX route values with ``np.asarray`` forces a host sync.
+        # The production route tensor is already bounded by the router.  Do
+        # value validation only for NumPy callers, which are synchronous.
+        if isinstance(routes, np.ndarray):
+            if np.any(routes < 0):
+                raise ValueError("routes contain an expert outside the configured bank")
+        if isinstance(projections, Mapping):
+            gate = _as_projection(projections["gate_proj"])
+            up = _as_projection(projections["up_proj"])
+            down = _as_projection(projections["down_proj"])
+        else:
+            if len(projections) != 3:
+                raise ValueError("projections must contain gate, up, and down")
+            gate, up, down = (_as_projection(item) for item in projections)
+
+        gate_width = _shape(gate.weight)[1]
+        inter_width = _shape(up.weight)[1]
+        if gate_width != inter_width or gate_width > self.max_width:
+            raise ValueError("gate and up projection widths must match the bound")
+        _validate_projection(
+            gate, None, self.hidden_size, gate_width, self.group_size
+        )
+        _validate_projection(
+            up, None, self.hidden_size, inter_width, self.group_size
+        )
+        if self.hidden_size % self.group_size or inter_width % self.group_size:
+            raise ValueError(
+                f"Q4/G{self.group_size} projection inputs must be group aligned"
+            )
+        _validate_projection(
+            down, None, inter_width, self.hidden_size, self.group_size
+        )
+        if slab_pack is not None and (
+            self.hidden_size != 2560 or gate_width != 640 or inter_width != 640
+        ):
+            raise ValueError(
+                "packed slab execution requires hidden=2560 and intermediate=640"
+            )
+
+        if not self.available:
+            if stream_pack is not None:
+                raise RuntimeError("stream pack requires custom Metal")
+            gate_out, up_out, down_out = self._reference_all(x, routes, gate, up, down)
+            if scores is not None and not return_all:
+                down_out = weighted_combine(down_out, routes, scores)
+                if shared_y is not None:
+                    down_out = down_out + shared_y
+                elif shared is not None:
+                    down_out = down_out + shared_gate * shared
+            self.last_path = "reference"
+            self.fallback_reason = self.capabilities["reason"]
+            return (gate_out, up_out, down_out) if return_all else down_out
+
+        # Separate gate and up projections outperform the fused variant on
+        # M4. Fusion raises register pressure enough to exceed the saved
+        # launch. The down-plus-router fusion remains profitable.
+        # return_all exposes the raw Up projection for verification. Keep
+        # that diagnostic API unchanged when the fusion flag is enabled.
+        gate_out = up_out = None
+        if pool_activation is not None:
+            if (slab_pack is None or stream_pack is not None or return_all or
+                    _shape(pool_activation) != (*route_shape, inter_width)):
+                raise ValueError("invalid precomputed pool activation")
+            activation = pool_activation
+        else:
+            if block is not None:
+                gate_out = self._metal_block(
+                    x, block, gate, gate_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack, proj_name="gate_proj",
+                )
+            else:
+                gate_out = self._metal_projection(
+                    x, routes, gate, gate_width, False, slab_pack=slab_pack,
+                    stream_pack=stream_pack, proj_name="gate_proj",
+                )
+        if pool_activation is None and self.fused_up_swiglu and not return_all:
+            if block is not None:
+                activation = self._metal_block(
+                    x, block, up, inter_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="up_proj", gate_out=gate_out,
+                )
+            else:
+                activation = self._metal_fused_up_swiglu(
+                    x, routes, gate_out, up, inter_width,
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                )
+        elif pool_activation is None:
+            if block is not None:
+                up_out = self._metal_block(
+                    x, block, up, inter_width, False, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack, proj_name="up_proj",
+                )
+            else:
+                up_out = self._metal_projection(
+                    x, routes, up, inter_width, False, slab_pack=slab_pack,
+                    stream_pack=stream_pack, proj_name="up_proj",
+                )
+            from mlx_vlm.models.activations import swiglu
+
+            if (
+                self._boundary_profiler.enabled
+                and self._boundary_profiler.selected_for("swiglu")
+            ):
+                activation = self._boundary_profiler.measure(
+                    "swiglu",
+                    lambda: swiglu(gate_out, up_out),
+                    self._complete_boundary,
+                )
+            else:
+                activation = swiglu(gate_out, up_out)
+        if scores is not None and not return_all and self.group_size != 64:
+            down_out = self._metal_fused_down_combine(
+                activation, routes, scores, down, self.hidden_size,
+                slab_pack=slab_pack, stream_pack=stream_pack,
+                shared_y=shared_y, shared=shared, shared_gate=shared_gate,
+            )
+        else:
+            if block is not None:
+                down_out = self._metal_block(
+                    activation, block, down, self.hidden_size, True, route_shape[1],
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="down_proj",
+                )
+            else:
+                down_out = self._metal_projection(
+                    activation, routes, down, self.hidden_size, True,
+                    slab_pack=slab_pack, stream_pack=stream_pack,
+                    proj_name="down_proj",
+                )
+            if scores is not None and not return_all:
+                # Keep the G64 reduction in MLX. The generic path uses the
+                # score dtype for the product and sum, while the fused kernel
+                # accumulates in float32 before its final output cast. These
+                # orders differ for BF16 scores.
+                down_out = weighted_combine(down_out, routes, scores)
+                if shared_y is not None:
+                    down_out = down_out + shared_y
+                elif shared is not None:
+                    down_out = down_out + shared_gate * shared
+        self.last_path = "custom-metal"
+        self.fallback_reason = None
+        return (gate_out, up_out, down_out) if return_all else down_out
+
+    def _reference_all(self, x: Any, routes: Any, gate: Any, up: Any, down: Any):
+        gate_out = self._reference_projection(x, routes, gate, _shape(gate.weight)[1], False)
+        up_out = self._reference_projection(x, routes, up, _shape(up.weight)[1], False)
+        activation = up_out * (gate_out / (1.0 + _exp(-gate_out)))
+        down_out = self._reference_projection(
+            activation, routes, down, self.hidden_size, True
+        )
+        return gate_out, up_out, down_out
+
+
+def _validate_block(block: Any, pairs: int) -> None:
+    """Check a ``block_plan`` result against the number of (token, slot) pairs."""
+    if not isinstance(block, (tuple, list)) or len(block) != 2:
+        raise ValueError("block must be (group_routes, group_pairs)")
+    group_routes, group_pairs = block
+    route_shape, pair_shape = _shape(group_routes), _shape(group_pairs)
+    if len(route_shape) != 1 or len(pair_shape) != 2 or pair_shape[0] != route_shape[0]:
+        raise ValueError("block must be shaped (groups,) and (groups, rows)")
+    if pair_shape[1] not in BLOCK_ROWS:
+        raise ValueError(f"block rows must be one of {BLOCK_ROWS}")
+    if not 1 <= route_shape[0] <= pairs:
+        raise ValueError(f"block groups must be in 1..{pairs}")
+    for value in (group_routes, group_pairs):
+        if str(getattr(value, "dtype", None)) not in (
+            "mlx.core.uint32", "uint32", "<class 'numpy.uint32'>",
+        ):
+            raise TypeError("block arrays must be uint32")
+
+
+def _exp(value: Any) -> Any:
+    try:
+        import mlx.core as mx
+
+        if not isinstance(value, np.ndarray):
+            return mx.exp(value)
+    except ImportError:
+        pass
+    return np.exp(value)
+
+
+def _numpy_projection(
+    x: np.ndarray,
+    routes: np.ndarray,
+    projection: Q4G32Projection,
+    output_width: int,
+    slot_input: bool,
+    group_size: int = GROUP_SIZE,
+) -> np.ndarray:
+    packed = np.asarray(projection.weight)
+    scales = np.asarray(projection.scales)
+    biases = np.asarray(projection.biases)
+    tokens, input_width = x.shape[0], x.shape[-1]
+    slots = routes.shape[1]
+    out = np.zeros((tokens, slots, output_width), dtype=np.float32)
+    for token in range(tokens):
+        for slot in range(slots):
+            expert = int(routes[token, slot])
+            source = x[token, slot] if slot_input else x[token]
+            for row in range(output_width):
+                result = 0.0
+                for group in range(input_width // group_size):
+                    qsum = 0.0
+                    xsum = 0.0
+                    for i in range(group_size):
+                        k = group * group_size + i
+                        q = (int(packed[expert, row, k // 8]) >> ((k & 7) * 4)) & 15
+                        value = float(source[k])
+                        qsum += value * q
+                        xsum += value
+                    result += float(scales[expert, row, group]) * qsum
+                    result += float(biases[expert, row, group]) * xsum
+                out[token, slot, row] = result
+    return out.astype(x.dtype, copy=False)
+
+
+__all__ = [
+    "BITS",
+    "BLOCK_EMPTY",
+    "BLOCK_ROWS",
+    "GROUP_SIZE",
+    "MAX_EXPERTS",
+    "MAX_TOKENS",
+    "MAX_TOP_K",
+    "MAX_WIDTH",
+    "BoundaryProfiler",
+    "MetalCapabilities",
+    "MetalMoEExecutor",
+    "Q4G32Projection",
+    "SUPPORTED_GROUP_SIZES",
+    "block_plan",
+    "probe_capabilities",
+    "weighted_combine",
+]

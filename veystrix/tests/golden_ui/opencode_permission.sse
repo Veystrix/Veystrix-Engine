@@ -1,0 +1,2 @@
+data: {"data": {"action": "bash", "id": "per_1", "message": "run python -m unittest", "metadata": {}, "resources": ["python -m unittest"], "save": [], "sessionID": "ses_demo"}, "id": "evt_0021", "type": "permission.asked"}
+

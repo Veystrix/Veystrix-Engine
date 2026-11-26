@@ -1,0 +1,24 @@
+           ╚═══╝  ╚══════╝   ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
+
+   ╭─ Veystrix help ────────────────────────────────────────────────────────╮
+   │ Keys                                                                   │
+   │   Enter / Shift+Enter send / newline   Tab     complete /cmd & @file   │
+   │   Ctrl-K     command palette           ?       help (empty input)      │
+   │   Ctrl-R     show/hide reasoning       Ctrl-T  collapse/expand tools   │
+   │   PgUp/PgDn  scroll                    Ctrl-C  cancel (2x quit)        │
+   │   y / a / n  allow once / always / reject a permission request         │
+   │ Commands                                                               │
+   │   /new       start new chat            /restart  restart model         │
+   │   /settings  model, effort, KV, harness  /model  pick & load model     │
+   │   /models    install or delete models  /effort   reasoning effort      │
+   │   /kv        choose KV cache           /harness  switch harness        │
+   │   /start /stop /status /update /endpoint /resume [id] /clear /quit     │
+   ╰─ Esc close · ? toggle ─────────────────────────────────────────────────╯
+
+  The bug was an off-by-one: `total` dropped the last element. I changed it to
+  sum every item; please re-run the tests.
+ ╭─ ● ready ──────────────────────────────────────────────────────────────────╮
+ │ ❯ █                                                                        │
+ ╰─ ? help · Ctrl-K palette · /settings · /model · Tab complete ───── ctx 4% ─╯
+────────────────────────────────────────────────────────────────────────────────
+◆ VEYSTRIX · flashnext · ░░░░ 1.3k/32k · medium · ↺ cached · 7.2 t/s · therm 0

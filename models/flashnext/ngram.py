@@ -1,0 +1,224 @@
+"""N-gram embedding rows read straight from the checkpoint.
+
+The hashed trigram table spans 128 shards, but each lookup needs one small row.
+A token touches only a few rows. Holding a whole shard resident wastes memory,
+so the runtime fetches and dequantizes rows individually.
+"""
+from __future__ import annotations
+
+from veystrix.bench.telemetry import current as benchmark_trace
+
+from bisect import bisect_right
+import os
+import time
+
+import mlx.core as mx
+import mlx.nn as nn
+
+from .store import SafeTensorStore
+
+FLAG_DEDUP = "FLASHNEXT_NGRAM_DEDUP"
+
+
+def infer_quantization(store: SafeTensorStore, prefix: str, dims: int):
+    """Recover (group_size, bits) from the packed shapes."""
+    packed = store.shape(f"{prefix}.weight")[-1]
+    groups = store.shape(f"{prefix}.scales")[-1]
+    bits = packed * 32 // dims
+    group_size = dims // groups
+    return group_size, bits
+
+
+class StreamingQuantizedEmbedding(nn.Module):
+    """Quantized embedding whose rows live on disk.
+
+    A 1024-row cache per shard measured a 4.9% hit rate and ran slower, so
+    every lookup reads its rows.
+    """
+
+    def __init__(
+        self,
+        store: SafeTensorStore,
+        prefix: str,
+        dims: int,
+        mode: str = "affine",
+    ):
+        super().__init__()
+        self.store = store
+        self.prefix = prefix
+        self.dims = dims
+        self.mode = mode
+        self.group_size, self.bits = infer_quantization(store, prefix, dims)
+
+    def _rows(self, rows):
+        weight = self.store.rows(f"{self.prefix}.weight", rows)
+        scales = self.store.rows(f"{self.prefix}.scales", rows)
+        biases = self.store.rows(f"{self.prefix}.biases", rows)
+        return mx.dequantize(
+            weight,
+            scales,
+            biases,
+            group_size=self.group_size,
+            bits=self.bits,
+            mode=self.mode,
+        )
+
+    def __call__(self, indices: mx.array) -> mx.array:
+        flat = indices.reshape(-1)
+        mx.eval(flat)
+        rows = [int(v) for v in flat.tolist()]
+        if not rows:
+            return mx.zeros((0, self.dims), dtype=mx.bfloat16)
+        values = self._rows(rows)
+        return values.reshape(*indices.shape, self.dims)
+
+
+# Large lookups (prefill: 16 n-gram rows per prompt token across 128 shards)
+# read their rows on the I/O pool instead of serially on the main thread.
+# 0 disables it. Decode looks up 16 rows and stays serial.
+_PARALLEL_MIN_ROWS = [int(os.environ.get("FLASHNEXT_NGRAM_PARALLEL_MIN", "0"))]
+
+
+def set_parallel_min_rows(value: int) -> None:
+    _PARALLEL_MIN_ROWS[0] = int(value)
+
+
+class StreamingShardedEmbedding(nn.Module):
+    """Read only shards that own at least one requested n-gram row."""
+
+    def __init__(self, shards, shard_sizes, dims):
+        super().__init__()
+        self.shards = shards
+        self.shard_sizes = tuple(int(size) for size in shard_sizes)
+        offsets = [0]
+        for size in self.shard_sizes:
+            offsets.append(offsets[-1] + size)
+        self.shard_offsets = tuple(offsets)
+        self.dims = int(dims)
+        self.direct = os.environ.get("FLASHNEXT_NGRAM_DIRECT", "1") == "1"
+        # Experimental: deduplicate only within this bounded lookup. It makes
+        # no persistent allocation and does not change the checkpoint.
+        self.deduplicate = os.environ.get(FLAG_DEDUP, "0") == "1"
+
+    def _groups(self, global_rows):
+        groups = {}
+        for position, row in enumerate(global_rows):
+            if row < 0 or row >= self.shard_offsets[-1]:
+                shard_index = 0
+                local = row
+            else:
+                shard_index = bisect_right(self.shard_offsets, row) - 1
+                local = row - self.shard_offsets[shard_index]
+            local = min(max(local, 0), self.shard_sizes[shard_index] - 1)
+            positions, rows = groups.setdefault(shard_index, ([], []))
+            positions.append(position)
+            rows.append(local)
+        return groups
+
+    def _legacy(self, flat):
+        result = None
+        for shard, start, end in zip(
+            self.shards,
+            self.shard_offsets[:-1],
+            self.shard_offsets[1:],
+        ):
+            local = mx.clip(flat - start, 0, end - start - 1)
+            values = shard(local)
+            mask = (flat >= start) & (flat < end)
+            result = (
+                values
+                if result is None
+                else mx.where(mask[:, None], values, result)
+            )
+        return result
+
+    def _direct(self, flat):
+        from models.flashnext.expert_cache import _PROFILE, _TIMERS
+
+        trace = benchmark_trace.get()
+        if _PROFILE:
+            began = time.perf_counter()
+            result = self._direct_rows(flat)
+            elapsed = time.perf_counter() - began
+            _TIMERS["ngram_wait"] += elapsed
+            if trace is not None:
+                trace.counts["ngram_host_ns"] += round(elapsed * 1e9)
+            return result
+        if trace is None:
+            return self._direct_rows(flat)
+        started = trace.clock()
+        result = self._direct_rows(flat)
+        trace.counts["ngram_host_ns"] += trace.clock() - started
+        return result
+
+    def _parallel_blocks(self, groups):
+        """Read every shard's rows on the I/O pool, then dequantize in order."""
+        from models.flashnext.expert_cache import _resolve_future, _submit_read
+
+        pending = []
+        for shard_index, (_, rows) in groups.items():
+            shard = self.shards[shard_index]
+            pending.append((shard, [
+                _submit_read(shard.store.rows_np, f"{shard.prefix}.{part}", rows)
+                for part in ("weight", "scales", "biases")
+            ]))
+        blocks = []
+        for shard, futures in pending:
+            weight, scales, biases = (
+                shard.store.to_mx(
+                    f"{shard.prefix}.{part}", _resolve_future(future, None)
+                )
+                for part, future in zip(("weight", "scales", "biases"), futures)
+            )
+            blocks.append(mx.dequantize(
+                weight, scales, biases,
+                group_size=shard.group_size, bits=shard.bits, mode=shard.mode,
+            ))
+        return blocks
+
+    def _direct_rows(self, flat):
+        mx.eval(flat)
+        global_rows = [int(value) for value in flat.tolist()]
+        groups = self._groups(global_rows)
+
+        # Several tokens can hash to the same row. Fetch/dequantize each row
+        # once per shard, then gather it back to every original position.
+        # Preserve insertion order and use the *clamped local* row so invalid
+        # indices retain exactly the same behaviour as the normal direct path.
+        dedup_inverse = None
+        if self.deduplicate:
+            dedup_inverse = [0] * len(global_rows)
+            base = 0
+            unique_groups = {}
+            for shard_index, (positions, rows) in groups.items():
+                unique_rows = sorted(set(rows))
+                indices = {row: index for index, row in enumerate(unique_rows)}
+                for position, row in zip(positions, rows):
+                    dedup_inverse[position] = base + indices[row]
+                unique_groups[shard_index] = (positions, unique_rows)
+                base += len(unique_rows)
+            groups = unique_groups
+
+        blocks = []
+        packed_positions = []
+        if _PARALLEL_MIN_ROWS[0] > 0 and len(global_rows) >= _PARALLEL_MIN_ROWS[0]:
+            blocks = self._parallel_blocks(groups)
+        else:
+            for shard_index, (_, rows) in groups.items():
+                blocks.append(self.shards[shard_index]._rows(rows))
+        for positions, _ in groups.values():
+            packed_positions.extend(positions)
+        packed = blocks[0] if len(blocks) == 1 else mx.concatenate(blocks, axis=0)
+        if dedup_inverse is not None:
+            return packed[mx.array(dedup_inverse, dtype=mx.uint32)]
+        inverse = [0] * len(global_rows)
+        for packed_index, position in enumerate(packed_positions):
+            inverse[position] = packed_index
+        return packed[mx.array(inverse, dtype=mx.uint32)]
+
+    def __call__(self, indices: mx.array) -> mx.array:
+        flat = indices.reshape(-1)
+        if not flat.size:
+            return mx.zeros((*indices.shape, self.dims), dtype=mx.bfloat16)
+        values = self._direct(flat) if self.direct else self._legacy(flat)
+        return values.reshape(*indices.shape, self.dims)

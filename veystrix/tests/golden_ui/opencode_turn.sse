@@ -1,0 +1,42 @@
+: heartbeat
+
+data: {"data": {}, "id": "evt_0001", "type": "server.connected"}
+
+data: {"data": {"version": "9.9.9"}, "id": "evt_0002", "type": "installation.update-available"}
+
+data: {"data": {"message": "OpenCode 9.9.9 is available - update available", "variant": "info"}, "id": "evt_0003", "type": "tui.toast.show"}
+
+data: {"data": {"agent": "build", "assistantMessageID": "msg_a1", "model": {"modelID": "flashnext", "providerID": "veystrix"}, "sessionID": "ses_demo", "started": 1}, "id": "evt_0004", "type": "session.step.started"}
+
+data: {"data": {"assistantMessageID": "msg_x", "delta": "LEAK from another session", "ordinal": 0, "sessionID": "ses_other"}, "id": "evt_0005", "type": "session.text.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "Checking the failing test first. ", "ordinal": 0, "sessionID": "ses_demo"}, "id": "evt_0006", "type": "session.reasoning.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "Let me read app.py ", "ordinal": 0, "sessionID": "ses_demo"}, "id": "evt_0007", "type": "session.reasoning.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "\nthen patch the off-by-one.", "ordinal": 0, "sessionID": "ses_demo"}, "id": "evt_0008", "type": "session.reasoning.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "id": "call_1", "name": "read", "sessionID": "ses_demo"}, "id": "evt_0009", "type": "session.tool.input.started"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "executed": true, "id": "call_1", "input": {"path": "app.py"}, "sessionID": "ses_demo"}, "id": "evt_0010", "type": "session.tool.called"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "content": [{"text": "def total(xs):\n    return sum(xs[:-1])\n", "type": "text"}], "executed": true, "id": "call_1", "sessionID": "ses_demo"}, "id": "evt_0011", "type": "session.tool.success"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "id": "call_2", "name": "edit", "sessionID": "ses_demo"}, "id": "evt_0012", "type": "session.tool.input.started"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "executed": true, "id": "call_2", "input": {"path": "app.py"}, "sessionID": "ses_demo"}, "id": "evt_0013", "type": "session.tool.called"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "content": [{"text": "--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def total(xs):\n-    return sum(xs[:-1])\n+    return sum(xs)\n", "type": "text"}], "executed": true, "id": "call_2", "sessionID": "ses_demo"}, "id": "evt_0014", "type": "session.tool.success"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "The bug was an off-by-one: ", "ordinal": 1, "sessionID": "ses_demo"}, "id": "evt_0015", "type": "session.text.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "`total` dropped the last element. ", "ordinal": 1, "sessionID": "ses_demo"}, "id": "evt_0016", "type": "session.text.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "I changed it to sum every item; ", "ordinal": 1, "sessionID": "ses_demo"}, "id": "evt_0017", "type": "session.text.delta"}
+
+data: {"data": {"assistantMessageID": "msg_a1", "delta": "please re-run the tests.", "ordinal": 1, "sessionID": "ses_demo"}, "id": "evt_0018", "type": "session.text.delta"}
+
+data: {"data": {"cost": 0, "sessionID": "ses_demo", "tokens": {"cache": {"read": 900, "write": 0}, "input": 1200, "output": 86, "reasoning": 24}}, "id": "evt_0019", "type": "session.usage.updated"}
+
+data: {"data": {"sessionID": "ses_demo"}, "id": "evt_0020", "type": "session.execution.succeeded"}
+

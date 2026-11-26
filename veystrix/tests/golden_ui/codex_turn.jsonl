@@ -1,0 +1,14 @@
+{"method": "thread/started", "params": {"thread": {"id": "thr_1"}}}
+{"method": "turn/started", "params": {"threadId": "thr_1", "turn": {"id": "turn_1", "items": [], "status": "inProgress"}}}
+{"method": "item/reasoning/textDelta", "params": {"contentIndex": 0, "delta": "Need to run the tests.", "itemId": "r1", "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/started", "params": {"item": {"command": "python -m unittest", "commandActions": [], "cwd": "/w", "id": "cmd_1", "source": "agent", "status": "inProgress", "type": "commandExecution"}, "startedAtMs": 1, "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/commandExecution/outputDelta", "params": {"delta": "Ran 3 tests in 0.01s\n", "itemId": "cmd_1", "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/commandExecution/outputDelta", "params": {"delta": "OK\n", "itemId": "cmd_1", "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/completed", "params": {"completedAtMs": 2, "item": {"command": "python -m unittest", "commandActions": [], "cwd": "/w", "exitCode": 0, "id": "cmd_1", "source": "agent", "status": "completed", "type": "commandExecution"}, "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/started", "params": {"item": {"changes": [{"diff": "@@ -1 +1 @@\n-old\n+new\n", "kind": {"type": "update"}, "path": "app.py"}], "id": "fc_1", "status": "inProgress", "type": "fileChange"}, "startedAtMs": 3, "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/completed", "params": {"completedAtMs": 4, "item": {"changes": [{"diff": "@@ -1 +1 @@\n-old\n+new\n", "kind": {"type": "update"}, "path": "app.py"}], "id": "fc_1", "status": "completed", "type": "fileChange"}, "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/agentMessage/delta", "params": {"delta": "All tests ", "itemId": "m1", "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "item/agentMessage/delta", "params": {"delta": "pass now.", "itemId": "m1", "threadId": "thr_1", "turnId": "turn_1"}}
+{"method": "thread/tokenUsage/updated", "params": {"threadId": "thr_1", "tokenUsage": {"last": {"cacheWriteInputTokens": 0, "cachedInputTokens": 500, "inputTokens": 800, "outputTokens": 40, "reasoningOutputTokens": 10, "totalTokens": 840}, "modelContextWindow": 32768, "total": {"cacheWriteInputTokens": 0, "cachedInputTokens": 500, "inputTokens": 800, "outputTokens": 40, "reasoningOutputTokens": 10, "totalTokens": 840}}, "turnId": "turn_1"}}
+{"method": "account/rateLimits/updated", "params": {"rateLimits": {}}}
+{"method": "turn/completed", "params": {"threadId": "thr_1", "turn": {"id": "turn_1", "items": [], "status": "completed"}}}

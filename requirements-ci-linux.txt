@@ -1,0 +1,9 @@
+# Pure-Python dependencies for the Linux CI fast lane. The MLX packages in
+# pyproject.toml are macOS-only and are deliberately excluded; the macOS job
+# installs the full project and runs the complete suite.
+numpy==2.5.2
+requests==2.34.2
+huggingface-hub==1.29.0
+tomlkit==0.15.2
+transformers==5.16.1
+PyYAML

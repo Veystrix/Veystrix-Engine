@@ -1,0 +1,24 @@
+         ##    ## ####### ##    ## ####### ######## ######  ## ##   ##
+         ##    ## ##       ##  ##  ##         ##    ##   ## ##  ## ##
+         ##    ## #####     ####   #######    ##    ######  ##   ###
+          ##  ##  ##         ##         ##    ##    ##   ## ##  ## ##
+           ####   #######    ##    #######    ##    ##   ## ## ##   ##
+                local coding agent  .  your models, your machine
+
+   +- Home -----------------------------------------------------------------+
+   | Engine   o stopped                 Model    flashnext                  |
+   | Effort   medium                    Harness  OpenCode                   |
+   | KV mode  auto                      Thinking shown                      |
+   | Folder   /work/veystrix                                                |
+   | ---------------------------------------------------------------------- |
+   | /model     pick & load a model     /download  install / delete models  |
+   | /effort    reasoning effort        /kv        choose KV cache          |
+   | /settings  all runtime settings    /start     load selected model      |
+   | @file Tab  attach a file           Ctrl-K     command palette          |
+   | ?          all shortcuts           Ctrl-C     cancel, twice quits      |
+   +- type a message and press Enter to start ------------------------------+
+ +- * ready ------------------------------------------------------------------+
+ | > _                                                                        |
+ +- ? help | Ctrl-K palette | /settings | /model | Tab complete ----- ctx 0% -+
+--------------------------------------------------------------------------------
+* VEYSTRIX . flashnext . ---- 0/32k . medium . v cold . 0.0 t/s . therm 0

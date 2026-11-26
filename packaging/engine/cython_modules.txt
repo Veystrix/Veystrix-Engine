@@ -1,0 +1,21 @@
+# Tier-2 protection target list (owner decision 2026-11-18, brief section 2).
+# These modules carry the implementation know-how and must ship as native extensions,
+# not as .pyc. Do not compile with -OO: asserts may be safety checks.
+models/flashnext/*.py
+models/nemotron35/*.py
+veystrix/scheduler.py
+veystrix/cache_tools.py
+veystrix/fragment_cache.py
+veystrix/batch_scheduler.py
+veystrix/model_coordinator.py
+veystrix/model_process.py
+veystrix/model_router.py
+veystrix/pool.py
+veystrix/recipe.py
+veystrix/kv_policy.py
+veystrix/kv_gate.py
+veystrix/port_check.py
+veystrix/model_identity.py
+veystrix/model_inspect.py
+veystrix/backends/*.py
+veystrix/tool/*.py

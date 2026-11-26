@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veystrix"
+version = "0.1.0"
+description = "Veystrix: local inference engine for Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "LicenseRef-Veystrix"
+license-files = ["LICENSE", "NOTICE", "legal/FREEWARE-LICENSE.txt", "legal/THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "Veystrix" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+  "mlx==0.32.2",
+  "mlx-lm==0.31.3",
+  "mlx-vlm==0.6.17",
+  "transformers==5.16.1",
+  "numpy==2.5.2",
+  "requests==2.34.2",
+  "huggingface-hub==1.29.0",
+  "tomlkit==0.15.2",
+]
+
+[project.scripts]
+veystrix = "veystrix.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/joyboyreturns/Veystrix"
+Issues = "https://github.com/joyboyreturns/Veystrix/issues"
+
+[tool.setuptools.packages.find]
+include = ["veystrix*", "models*"]
+
+[tool.setuptools.package-data]
+"models.flashnext" = ["native_read.c"]
+"veystrix" = ["parity_refs/*.json"]

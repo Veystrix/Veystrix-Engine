@@ -1,0 +1,2 @@
+data: {"data": {"error": {"message": "OpenCode: sign in required. Update available.", "type": "auth"}, "sessionID": "ses_demo"}, "id": "evt_0022", "type": "session.execution.failed"}
+

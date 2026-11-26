@@ -7,7 +7,7 @@ and passing CI checks before merging.
 
 ## Pull request workflow
 
-1. Fork the repository and create a branch from `main`.
+1. Fork [Veystrix/veystrix-engine](https://github.com/Veystrix/veystrix-engine) and create a branch from `main`.
 2. Keep changes focused and include unit tests for any new or modified behavior.
 3. Run the local verification checks before opening a pull request:
 
@@ -29,3 +29,8 @@ On Apple Silicon macOS with MLX installed, you can also run the full test suite:
 - Keep `main` green: CI runs pure-Python tests on Linux, full tests on macOS, and a secret scan on every push and pull request.
 - Do not commit model weights, local cache artifacts, credentials, or personal paths.
 - Preserve bit-exact greedy parity and memory/swap ceilings on 16 GB Apple Silicon hardware.
+
+## License
+
+By contributing to Veystrix, you agree that your contributions will be licensed
+under the [Apache License 2.0](LICENSE).

@@ -54,7 +54,7 @@ run "$PY" "$ROOT/packaging/release/brew_formula.py" "$VERSION" "$OUTDIR/$ASSET" 
 echo "==> 7. DRAFT release in the public repo (owner publishes by hand)"
 NOTES_FILE="$ROOT/docs/release/RELEASE_NOTES.md"
 [[ ! -f "$NOTES_FILE" ]] && NOTES_FILE="$ROOT/docs/release/EARLY_BUILD_NOTES.md"
-[[ $UPLOAD == 1 ]] && run gh release create "v$VERSION" -R joyboyreturns/Veystrix --draft \
+[[ $UPLOAD == 1 ]] && run gh release create "v$VERSION" -R Veystrix/veystrix-engine --draft \
     --title "Veystrix $VERSION" --notes-file "$NOTES_FILE" \
     "$OUTDIR/$ASSET" "$OUTDIR/SHA256SUMS.txt" "$OUTDIR/SHA256SUMS.txt.minisig"
 

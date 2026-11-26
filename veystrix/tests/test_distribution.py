@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PUBLIC_REPOSITORY = "https://github.com/joyboyreturns/Veystrix"
+PUBLIC_REPOSITORY = "https://github.com/Veystrix/veystrix-engine"
 
 
 class DistributionTests(unittest.TestCase):

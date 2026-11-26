@@ -6,7 +6,7 @@ Security fixes target the latest `main` branch and the latest published release.
 
 ## Report a vulnerability
 
-Use GitHub private vulnerability reporting on the public repository, https://github.com/joyboyreturns/Veystrix/security/advisories/new, for sensitive reports.
+Use GitHub private vulnerability reporting on the public repository, https://github.com/Veystrix/veystrix-engine/security/advisories/new, for sensitive reports.
 
 Do not open a public issue with credentials, private prompts, session files, or
 vulnerability details that enable exploitation.
@@ -35,8 +35,7 @@ Saved sessions can contain private prompt state, repository text, and model
 cache data. Keep these directories private:
 
 ```text
-~/.cache/flashnext/sessions/
-~/.cache/veystrix/nemotron35/sessions/
+~/.cache/veystrix/cpp/sessions/
 ```
 
 Do not publish session files.

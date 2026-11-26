@@ -13,8 +13,8 @@ from pathlib import Path
 
 TEMPLATE = '''class Veystrix < Formula
   desc "Commercial local LLM inference engine & terminal coding agent for Apple Silicon"
-  homepage "https://github.com/joyboyreturns/Veystrix"
-  url "https://github.com/joyboyreturns/Veystrix/releases/download/v{version}/{asset}",
+  homepage "https://github.com/Veystrix/veystrix-engine"
+  url "https://github.com/Veystrix/veystrix-engine/releases/download/v{version}/{asset}",
       using: :nounzip
   sha256 "{sha256}"
   version "{version}"

@@ -139,9 +139,9 @@ def write_sbom(rows: list[dict], out: Path, stamp: str, root_version: str) -> No
         "downloadLocation": "NOASSERTION",
         "filesAnalyzed": False,
         "licenseConcluded": "NOASSERTION",
-        "licenseDeclared": "LicenseRef-Veystrix",
+        "licenseDeclared": "Apache-2.0",
         "copyrightText": "Copyright (c) 2026 Vardhanapu Kiran Vincent",
-        "comment": "Veystrix Commercial and Personal Use License v1.0: free for personal use incl. benchmarking; paid commercial license required for business use.",
+        "comment": "Licensed under the Apache License, Version 2.0.",
     }]
     rels = []
     for i, r in enumerate(rows):
@@ -170,13 +170,8 @@ def write_sbom(rows: list[dict], out: Path, stamp: str, root_version: str) -> No
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": "Veystrix runtime SBOM",
-        "documentNamespace": f"https://github.com/joyboyreturns/Veystrix/sbom/{root_version}/{stamp}",
+        "documentNamespace": f"https://github.com/Veystrix/veystrix-engine/sbom/{root_version}/{stamp}",
         "creationInfo": {"created": stamp + "T00:00:00Z", "creators": ["Tool: veystrix-generate-legal"]},
-        "hasExtractedLicensingInfos": [{
-            "licenseId": "LicenseRef-Veystrix",
-            "name": "Veystrix Commercial and Personal Use License v1.0",
-            "extractedText": (ROOT / "LICENSE").read_text(),
-        }],
         "packages": packages,
         "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Veystrix"}] + rels,
     }
@@ -187,8 +182,7 @@ def write_notices(rows: list[dict], out: Path, stamp: str, public_out: Path | No
     body = [
         "# Third-party notices",
         "",
-        "Veystrix is licensed under the Veystrix Commercial and Personal Use License v1.0 (see LICENSE),",
-        "which is free for personal use and requires a paid license for business/commercial use.",
+        "Veystrix is licensed under the Apache License, Version 2.0 (see LICENSE).",
         "It uses the third-party open-source packages listed below, each under its own license.",
         "",
         f"_Generated {stamp}. Full license texts of the Python packages ship with the binary_",

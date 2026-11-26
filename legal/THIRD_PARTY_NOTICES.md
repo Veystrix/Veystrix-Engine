@@ -1,7 +1,6 @@
 # Third-party notices
 
-Veystrix is licensed under the Veystrix Commercial and Personal Use License v1.0 (see LICENSE),
-which is free for personal use and requires a paid license for business/commercial use.
+Veystrix is licensed under the Apache License, Version 2.0 (see LICENSE).
 It uses the third-party open-source packages listed below, each under its own license.
 
 _Generated 2026-11-26. Full license texts of the Python packages ship with the binary_

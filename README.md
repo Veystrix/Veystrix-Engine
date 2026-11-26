@@ -3,9 +3,9 @@
 **Local LLM inference engine & terminal coding agent for Apple Silicon Macs.**
 **Native 4-bit with zero quality loss · 1M context · `< 35 ms` cached TTFT · Runs on a 16 GB MacBook Air · Zero telemetry.**
 
-[![License](https://img.shields.io/badge/License-Veystrix_Commercial_&_Personal_v1.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Apple_Silicon_macOS_14+-black.svg)](docs/supported-hardware.md)
-[![Release](https://img.shields.io/github/v/release/joyboyreturns/Veystrix)](https://github.com/joyboyreturns/Veystrix/releases)
+[![Release](https://img.shields.io/github/v/release/Veystrix/veystrix-engine)](https://github.com/Veystrix/veystrix-engine/releases)
 
 <p align="center">
   <img src="assets/veystrix-terminal-tui.jpg" alt="Veystrix Terminal Interface" width="100%">
@@ -23,7 +23,7 @@ brew install joyboyreturns/veystrix/veystrix
 
 *Or via the official direct install script:*
 ```sh
-curl -fsSL https://raw.githubusercontent.com/joyboyreturns/Veystrix/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Veystrix/veystrix-engine/main/install.sh | bash
 ```
 
 ### 2. Launch the Interactive Coding Agent
@@ -142,19 +142,15 @@ veystrix storage clear        # Clear all SSD prompt-cache snapshots
 
 ---
 
-## Licensing: Commercial and Personal Use
+## License
 
-Veystrix is distributed under the **[Veystrix Commercial and Personal Use License v1.0](LICENSE)**:
-
-- **Free Tier (Personal Use):** Free to download, run, and evaluate for personal, non-commercial, benchmarking, research, and educational purposes. No fees, accounts, or activation keys required.
-- **Commercial Tier (Business Use):** Any use by or on behalf of a company, corporation, employer, consultancy, or commercial entity requires explicit written permission and a commercial license agreement from the Licensor.
-- To request a commercial license or business deployment terms, open an issue at [GitHub Issues](https://github.com/joyboyreturns/Veystrix/issues) with the subject `Commercial license`.
+Veystrix is open-source software licensed under the **[Apache License 2.0](LICENSE)**. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [GitHub Issues](https://github.com/Veystrix/veystrix-engine/issues).
 
 ---
 
 ## Security & Verification
 
-Official builds are distributed exclusively via [GitHub Releases](https://github.com/joyboyreturns/Veystrix/releases). Every release archive is cataloged in `SHA256SUMS.txt` and cryptographically signed with Minisign using the official release key:
+Official builds are distributed exclusively via [GitHub Releases](https://github.com/Veystrix/veystrix-engine/releases). Every release archive is cataloged in `SHA256SUMS.txt` and cryptographically signed with Minisign using the official release key:
 
 ```
 RWRqvDsIRe4F5ZmA+iMcMf+cnRjiG+k6NDEQFm7m0BsyVNmP/p9IUceg

@@ -20,7 +20,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-REPO = "joyboyreturns/Veystrix"
+REPO = "Veystrix/veystrix-engine"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 ASSET = re.compile(r"^veystrix-engine-(?P<version>[0-9][0-9A-Za-z.\-]*)-arm64\.tar\.gz$")
 SUMS, SIG = "SHA256SUMS.txt", "SHA256SUMS.txt.minisig"

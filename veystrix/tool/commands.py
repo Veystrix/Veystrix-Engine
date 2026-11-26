@@ -29,7 +29,7 @@ def cmd_install(argv: list[str], home: Path, config: Config, *, apply: bool = Fa
     if argv and not argv[0].startswith("--"):
         version = argv[0]
     asset = f"veystrix-engine-{version or 'latest'}-arm64.tar.zst"
-    base = "https://github.com/joyboyreturns/Veystrix/releases/"
+    base = "https://github.com/Veystrix/veystrix-engine/releases/"
     tag = "v" + version.lstrip("v") if version else ""
     url = base + (f"download/{tag}/" if tag else "latest/download/") + asset
     plan = {"url": url, "artifact": asset, "target": str(engine_mod.bundle_root(home)),
@@ -243,7 +243,7 @@ def cmd_doctor(argv: list[str], home: Path, config: Config, selected_engine: str
     return 0
 
 
-RELEASES_URL = "https://api.github.com/repos/joyboyreturns/Veystrix/releases/latest"
+RELEASES_URL = "https://api.github.com/repos/Veystrix/veystrix-engine/releases/latest"
 
 
 def cmd_update(argv: list[str], home: Path, config: Config, *, url: str = RELEASES_URL) -> int:

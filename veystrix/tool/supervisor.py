@@ -14,6 +14,7 @@ and run a mock server with ``--command``; no real checkpoint or harness config i
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -78,18 +79,19 @@ def stop_marker(home: Path | None = None) -> Path:
 
 def health(port: int, timeout: float = 1.0, api_key: str | None = None) -> dict | None:
     """GET /health on loopback only, never through a proxy. None means unreachable."""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    request = urllib.request.Request(f"http://127.0.0.1:{port}/health")
-    if api_key:
-        request.add_header("Authorization", "Bearer " + api_key)
+    headers = {"Authorization": "Bearer " + api_key} if api_key else {}
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
-        with opener.open(request, timeout=timeout) as response:
-            if response.status != 200:
-                return None
-            data = json.loads(response.read().decode("utf-8", "replace"))
-            return data if isinstance(data, dict) else None
-    except (OSError, ValueError, urllib.error.URLError):
+        conn.request("GET", "/health", headers=headers)
+        response = conn.getresponse()
+        if response.status != 200:
+            return None
+        data = json.loads(response.read().decode("utf-8", "replace"))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError, http.client.HTTPException):
         return None
+    finally:
+        conn.close()
 
 
 def power_state(environ=None, runner=None) -> dict:
@@ -479,14 +481,15 @@ def start(options: StartOptions) -> dict:
         time.sleep(0.05)
     st = _read_state(home) or {}
     probe_err = ""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1.0)
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
-        if api_key:
-            req.add_header("Authorization", "Bearer " + api_key)
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.0) as resp:
-            probe_err = f"http={resp.status}"
+        conn.request("GET", "/health", headers={"Authorization": "Bearer " + api_key} if api_key else {})
+        resp = conn.getresponse()
+        probe_err = f"http={resp.status}"
     except Exception as exc:
         probe_err = f"probe={exc!r}"
+    finally:
+        conn.close()
     detail = _tail(log, 12).strip()
     msg = (f"veystrix: engine did not become healthy within {options.timeout:g}s "
            f"(watcher_poll={watcher.poll()}, status={st.get('status')}, "

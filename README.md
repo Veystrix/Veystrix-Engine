@@ -48,6 +48,8 @@ veystrix run hermes      # NousResearch tool-calling agent
 
 Upgrade anytime via `brew upgrade veystrix` or `veystrix update`.
 
+> **Guides & Docs:** [Getting Started Guide](docs/getting-started.md) · [Harness Integration](docs/harness-integration.md) · [Endpoints & Harnesses](docs/ENDPOINT_AND_HARNESSES.md) · [Remote Access](docs/REMOTE_ACCESS.md)
+
 ---
 
 ## Hardware Matrix & Performance: Inkling 2 Mini

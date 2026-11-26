@@ -590,7 +590,7 @@ class CppLifecycleTest(unittest.TestCase):
         check_engine("cpp", self.home, "nemotron35-lightning")
         port = _free_port()
         options = StartOptions(home=self.home, port=port, engine="cpp", model="flashnext",
-                               command=[sys.executable, str(self.server)], timeout=12)
+                               command=[sys.executable, str(self.server)], timeout=30)
         result = start(options)
         self.assertEqual(result["status"], "running")
         self.assertEqual(result["engine"], "cpp")

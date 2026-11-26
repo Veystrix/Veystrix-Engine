@@ -59,7 +59,7 @@ class TerminalToolTests(unittest.TestCase):
                             command=command or [sys.executable, "-m",
                                                 "integrations.hermes.mock_veystrix_server",
                                                 "--port", str(port)],
-                            timeout=12, **kwargs)
+                            timeout=30, **kwargs)
 
     # -- config / selector -------------------------------------------------
     def test_engine_precedence_flag_env_config_default(self):

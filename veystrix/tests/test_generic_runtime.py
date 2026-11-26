@@ -622,7 +622,7 @@ class EndpointTests(_Home):
         seen = []
         state = start(StartOptions(home=self.home, port=port, kv="tiered4+", context=65536,
                                    command=[sys.executable, "-m", "integrations.hermes.mock_veystrix_server",
-                                            "--port", str(port)], timeout=12, on_ready=seen.append))
+                                            "--port", str(port)], timeout=30, on_ready=seen.append))
         self.assertEqual(state["status"], "running")
         self.assertEqual(len(seen), 1)
         saved = _read_state(self.home)

@@ -477,7 +477,13 @@ def start(options: StartOptions) -> dict:
                     options.on_ready(result)
                 return result
         time.sleep(0.05)
-    raise SystemExit(f"veystrix: engine did not become healthy within {options.timeout:g}s; see {log}")
+    detail = _tail(log, 12).strip()
+    msg = f"veystrix: engine did not become healthy within {options.timeout:g}s; see {log}"
+    if detail:
+        last_lines = [ln.strip() for ln in detail.splitlines() if ln.strip()][-3:]
+        if last_lines:
+            msg += "\n  " + "\n  ".join(last_lines)
+    raise SystemExit(msg)
 
 
 def stop(home: Path | None = None, timeout: float = 15.0) -> dict:

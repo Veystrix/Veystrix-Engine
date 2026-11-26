@@ -477,8 +477,20 @@ def start(options: StartOptions) -> dict:
                     options.on_ready(result)
                 return result
         time.sleep(0.05)
+    st = _read_state(home) or {}
+    probe_err = ""
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
+        if api_key:
+            req.add_header("Authorization", "Bearer " + api_key)
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.0) as resp:
+            probe_err = f"http={resp.status}"
+    except Exception as exc:
+        probe_err = f"probe={exc!r}"
     detail = _tail(log, 12).strip()
-    msg = f"veystrix: engine did not become healthy within {options.timeout:g}s; see {log}"
+    msg = (f"veystrix: engine did not become healthy within {options.timeout:g}s "
+           f"(watcher_poll={watcher.poll()}, status={st.get('status')}, "
+           f"engine_pid={st.get('engine_pid')}, {probe_err}); see {log}")
     if detail:
         last_lines = [ln.strip() for ln in detail.splitlines() if ln.strip()][-3:]
         if last_lines:

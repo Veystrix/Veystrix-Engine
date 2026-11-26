@@ -89,7 +89,7 @@ veystrix run pi
 veystrix run hermes
 ```
 
-See [Harness Integration](harness-integration.md) and [Endpoints & Harnesses](ENDPOINT_AND_HARNESSES.md) for one-time `veystrix connect` setup and client details.
+See [Harness Integration](harness-integration.md) for one-time `veystrix connect` setup and client details.
 
 ## 4. KV Cache & SSD Storage
 

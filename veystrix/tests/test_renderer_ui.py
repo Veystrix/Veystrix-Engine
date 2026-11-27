@@ -217,12 +217,14 @@ class EngineIndicator(unittest.TestCase):
     """Veystrix is one engine to its users: which runtime serves a model is never on screen."""
 
     def test_python_and_cpp_render_identically(self):
+        from unittest.mock import patch
         for case in CASES:
             for cols, rows in SIZES:
                 for theme_name in THEMES:
                     with self.subTest(f"{case}/{cols}x{rows}/{theme_name}"):
-                        py = case_frame(case, cols, rows, theme_name, engine="python")
-                        cpp = case_frame(case, cols, rows, theme_name, engine="cpp")
+                        with patch("veystrix.tests.test_tui_fixtures.time.perf_counter", return_value=0.0):
+                            py = case_frame(case, cols, rows, theme_name, engine="python")
+                            cpp = case_frame(case, cols, rows, theme_name, engine="cpp")
                         self.assertEqual(py, cpp)
                         footer = R.strip_ansi(cpp[-1])
                         for word in ("python", "cpp", "C++"):

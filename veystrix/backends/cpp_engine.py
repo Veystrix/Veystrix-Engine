@@ -1145,14 +1145,9 @@ class CppEngineBackend(Conversation):
             return None
         chunk = int(os.environ.get("FLASHNEXT_PREFILL_CHUNK_TOKENS", "0") or 0)
         if chunk > 0:
-            try:
-                from models.flashnext.prefill import plan_chunks
-                spans = list(plan_chunks(total, chunk, offset=offset))
-                return spans if len(spans) > 1 else None
-            except Exception:
-                if total > chunk:
-                    return [(off, min(total, off + chunk)) for off in range(0, total, chunk)]
-                return None
+            if total > chunk:
+                return [(off, min(total, off + chunk)) for off in range(0, total, chunk)]
+            return None
         if for_progress and getattr(self._binding, "has_v2", False):
             pchunk = self._profile_prefill_chunk()
             if pchunk > 0 and total > pchunk:

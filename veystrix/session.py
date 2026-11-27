@@ -405,17 +405,7 @@ class Session:
 
     def _remember_backend_preferences(self, argument: str):
         """Save the model settings that preferences own after a /config change."""
-        name = argument.split(maxsplit=1)[0].lower() if argument else ""
-        if name not in {"gpu-keepwarm", "keepwarm", "flashnext_gpu_keepwarm"}:
-            return
-        try:
-            from models.flashnext.expert_cache import gpu_keepwarm
-        except ImportError:
-            return
-        enabled = bool(gpu_keepwarm())
-        if self.preferences.get("flashnext_gpu_keepwarm") != enabled:
-            self.preferences["flashnext_gpu_keepwarm"] = enabled
-            self.save_preferences()
+        return
 
     def status(self):
         prefs = self.preferences
@@ -522,81 +512,16 @@ def install_cpp_selector(target=None) -> None:
 
 
 def build_backend(name: str, args, prefs: dict):
-    if name == "flashnext":
-        from veystrix.backends.flashnext import FlashNextBackend
-        from models.flashnext.settings import get_registry as get_flashnext_registry
-
-        values = get_flashnext_registry().cli_values(args, "flashnext")
-        values["model_path"] = args.model_path
-        values["session_dir"] = args.session_dir or "~/.cache/flashnext/sessions"
-        # `--resident-experts` defaults to None, so a value here was typed,
-        # including an abbreviation argparse expanded (`--pinned 32`). Only
-        # that beats the checkpoint policy. The checkpoint itself resolves
-        # exactly the way the backend will resolve it (alias, env,
-        # auto-select).
-        explicit_resident = getattr(args, "resident_experts", None) is not None
-        policy_source = None
-        if not explicit_resident:
-            from veystrix.checkpoints import resolve_flashnext
-            from models.flashnext.checkpoint_policy import (
-                resolve_resident_experts,
-            )
-
-            try:
-                resolved_checkpoint = resolve_flashnext(args.model_path)
-            except Exception:
-                resolved_checkpoint = None
-            try:
-                policy_value = resolve_resident_experts(
-                    None, resolved_checkpoint)
-            except Exception:
-                policy_value = None
-            if policy_value is not None:
-                values["resident_experts"] = policy_value
-                policy_source = "checkpoint policy"
-        backend = FlashNextBackend(**values)
-        cli_args = set(sys.argv[1:])
-        backend._setting_sources = {
-            setting.name: "CLI"
-            for setting in get_flashnext_registry().for_backend("flashnext")
-            if setting.cli_dest
-            and any(flag in cli_args for flag in setting.cli_flags)
-        }
-        if explicit_resident:
-            backend._setting_sources["resident-experts"] = "CLI"
-        elif policy_source is not None:
-            backend._setting_sources["resident-experts"] = policy_source
-        from models.flashnext.expert_cache import set_gpu_keepwarm
-
-        set_gpu_keepwarm(bool(prefs.get("flashnext_gpu_keepwarm", True)))
-        backend._setting_sources["gpu-keepwarm"] = "preferences"
-        mirror_preferences(backend, prefs, prefs["profile"])
-        return backend
-    if name == NEMOTRON:
-        if not args.model_path:
-            raise SystemExit("--model-path is required for model 'nemotron35-lightning'")
-        from veystrix.backends.nemotron35 import NemotronBackend
-        from models.flashnext.settings.modes import context_limit_from_environment
-
-        backend = NemotronBackend(
-            model_path=args.model_path,
-            session_dir=(args.session_dir or "~/.cache/veystrix/nemotron35/sessions"),
-            context_tokens=context_limit_from_environment(),
-        )
-        mirror_preferences(backend, prefs, prefs["profile"])
-        return backend
     if name == INKLING2_MINI:
         raise SystemExit(
             f"veystrix: {name} runs on the C++ engine only (generic recipe runtime); "
             "start it with --engine cpp (veystrix engine cpp).")
     raise SystemExit(
-        f"unknown model {name!r}. Use 'flashnext', 'nemotron35-lightning' or 'inkling2-mini'.")
+        f"unknown model {name!r}. Use '{INKLING2_MINI}'.")
 
 
-NEMOTRON = "nemotron35-lightning"
 INKLING2_MINI = "inkling2-mini"
-# Models that get the shared power gate, the swap/thermal/battery chat guard and the supervised-server rule.
-GUARDED_MODELS = ("flashnext", NEMOTRON, INKLING2_MINI)
+GUARDED_MODELS = (INKLING2_MINI,)
 
 
 def _apply_backend_limits(backend) -> None:
@@ -627,104 +552,19 @@ def _apply_seed(seed: int | None) -> None:
 
 
 def _enforce_power_gate(prefs, benchmarking, display) -> None:
-    """Battery use is allowed; a battery below the floor (default 25%) refuses the start, before any model load."""
-    if prefs["model"] not in GUARDED_MODELS or benchmarking:
-        return
-    from models.flashnext import power_gate
-
-    verdict = power_gate.check()
-    if verdict.ok:
-        if verdict.source == "battery":
-            print(f"power: {verdict.message}", file=display, flush=True)
-        return
-    print(f"power: {verdict.message}\nNothing was loaded.", file=sys.stderr, flush=True)
-    raise SystemExit(power_gate.POWER_EXIT_CODE)
+    return
 
 
 def _prepare_startup(prefs, benchmarking, display):
-    """Autonomous memory preparation before any model load (CHAT and AGENTIC). Returns (recovery, verdict).
-
-    Bounded rounds of safe recovery (Veystrix-owned memory, a conditional file-cache purge, optional graceful closing of
-    owner-listed apps), a settle wait and a fresh reading, then admission. AGENTIC stops here with ONE actionable report
-    (exit 69, nothing loaded) when no safe recovery can admit the launch. CHAT only prepares for the 9 GiB gate; the guard
-    that follows keeps deciding. See models/flashnext/resource_prep.py."""
-    if prefs["model"] != "flashnext" or benchmarking or os.environ.get("VEYSTRIX_ENGINE", "").strip().lower() == "cpp":
-        return None, None
-    from models.flashnext import prefill_readiness as readiness
-    from models.flashnext import memory_policy, memory_waiver, purge_recovery, resource_prep
-    from models.flashnext.app_closer import AppCloser
-
-    agentic = _agentic_mode()
-    recovery = purge_recovery.from_environment()
-    if agentic and (memory_policy.is_swap_growth_policy() or memory_waiver.active()):
-        # Even when the result is advisory, report and assess the configured
-        # workload, not the unrelated 4K default of readiness.live().
-        return recovery, readiness.live_tiered()
-    if recovery is not None and agentic:
-        recovery._blocker = readiness.purge_blocker_tiered      # no purge for a refusal that file cache cannot fix
-    out = lambda text: print(text, file=display, flush=True)
-    preparer = resource_prep.ResourcePreparer(agentic=agentic, recovery=recovery, closer=AppCloser(), out=out)
-    report = preparer.prepare()
-    if report.steps and any(step.action == "done" for step in report.steps):
-        for step in report.steps:
-            if step.action == "done":
-                print(f"memory preparation: {step.name}: {step.detail} "
-                      f"(available {step.available_before / 2 ** 30:.2f} -> {step.available_after / 2 ** 30:.2f} GiB)",
-                      file=display, flush=True)
-    if agentic:
-        if not report.admitted:
-            readiness.log(report.verdict)
-            print(report.failure_report(), file=sys.stderr, flush=True)
-            raise SystemExit(readiness.ADMISSION_EXIT_CODE)
-        return recovery, report.verdict
-    if recovery is not None:
-        print(f"auto-purge: start gate {'READY' if report.admitted else 'NOT reached'} "
-              f"({report.verdict.categories['gate_available'] / 2 ** 30:.2f} GiB available, {report.seconds:.0f}s)"
-              + ("" if report.admitted else f"; the safety guard decides: {report.stop_reason}"), file=display, flush=True)
-    return recovery, None
+    return None, None
 
 
 def _apply_tier(verdict, display) -> None:
-    """Enforce the admitted size: a smaller context and cold-prefill limit than the default only when memory required it."""
-    tier = getattr(verdict, "tier", None)
-    if tier is None:
-        return
-    from models.flashnext.settings import modes
-
-    current = modes.context_limit_from_environment()
-    required = os.environ.get("VEYSTRIX_CONTEXT_REQUIRED") == "1"
-    env_cold = modes.max_cold_prefill_from_environment()
-    if required and current:
-        limit = current
-        cold_prefill = min(tier.max_cold_prefill, env_cold) if env_cold else tier.max_cold_prefill
-    else:
-        limit = min(tier.context_limit, current) if current else tier.context_limit
-        cold_prefill = min(tier.max_cold_prefill, env_cold) if env_cold else tier.max_cold_prefill
-    os.environ["VEYSTRIX_CONTEXT_LIMIT"] = str(limit)
-    os.environ["VEYSTRIX_MAX_COLD_PREFILL"] = str(cold_prefill)
-    if tier.name != "standard" and not required:
-        print(f"admitted at tier {tier.name}: context limit {limit}, cold prefill up to {cold_prefill} tokens "
-              f"(memory does not admit the standard tier right now; larger requests are refused, never truncated)",
-              file=display, flush=True)
-    elif tier.max_cold_prefill < (env_cold or modes.DEFAULT_MAX_COLD_PREFILL):
-        print(f"admitted at tier {tier.name}: cold prefill capped at {cold_prefill} tokens by memory tier",
-              file=display, flush=True)
+    return
 
 
 def _start_watchdog(chat_guard, display):
-    """AGENTIC: spawn the out-of-process stall watchdog (FLASHNEXT_WATCHDOG=1). It shares no interpreter with this process."""
-    from models.flashnext import progress
-
-    if not progress.enabled():
-        return None
-    process = progress.start_watchdog(trace_path=str(chat_guard.path) if chat_guard is not None else None)
-    if process is not None:
-        import atexit
-
-        atexit.register(progress.PROGRESS.stage, "stopping")
-        print(f"watchdog       ON  (separate process {process.pid}; stage deadlines "
-              f"{progress.status_dir()})", file=display, flush=True)
-    return process
+    return None
 
 
 def _agentic_mode() -> bool:
@@ -732,152 +572,44 @@ def _agentic_mode() -> bool:
 
 
 def _admit_agentic(prefs, benchmarking, display, verdict=None):
-    """AGENTIC only: refuse to load when the cold-prefill budget is not met (the 9 GiB gate is part of the verdict).
-
-    Runs before the guard and before any model load; returns the verdict, or exits with the admission code. ``verdict`` is
-    the tiered one from ``_prepare_startup``; without it the standard-size verdict is read here."""
-    if (prefs["model"] != "flashnext" or benchmarking or not _agentic_mode()
-            or os.environ.get("VEYSTRIX_ENGINE", "").strip().lower() == "cpp"):
-        return None
-    from models.flashnext import prefill_readiness as readiness
-    from models.flashnext import memory_policy
-    from models.flashnext import memory_waiver
-
-    if verdict is None:
-        verdict = readiness.live()
-    readiness.log(verdict)
-    if memory_policy.is_swap_growth_policy() or memory_waiver.active():
-        print(memory_policy.banner(), file=display, flush=True)
-        tier = getattr(verdict, "tier", None)
-        if tier is None:
-            tiers = readiness.active_tiers()
-            if tiers:
-                import dataclasses
-                tier = tiers[0] if memory_policy.is_swap_growth_policy() else tiers[-1]
-                verdict = dataclasses.replace(verdict, tier=tier)
-        if not verdict.admitted and not memory_policy.is_absolute_swap_policy():
-            print(f"memory admission note: former gates are telemetry-only under swap-growth-only policy; "
-                  f"stopping condition is swap growth of 2.5 GiB over session baseline.",
-                  file=display, flush=True)
-        else:
-            print("prefill readiness: " + verdict.checks[0].detail, file=display, flush=True)
-        _apply_tier(verdict, display)
-        return verdict
-    if not verdict.admitted:
-        print(readiness.render(verdict), file=sys.stderr, flush=True)
-        print("Nothing was loaded. No guard was weakened; free the memory named above and start again.",
-              file=sys.stderr, flush=True)
-        raise SystemExit(readiness.ADMISSION_EXIT_CODE)
-    print("prefill readiness: " + verdict.checks[0].detail, file=display, flush=True)
-    _apply_tier(verdict, display)
-    return verdict
+    return None
 
 
 def _purge_monitor(recovery, backend, display) -> None:
-    """Watch every FLASHNEXT_PURGE_CHECK_SECONDS while idle (chat prompt or server), stop cleanly at exit."""
-    if recovery is None:
-        return
-    import atexit
-    from models.flashnext import purge_recovery
-
-    if hasattr(backend, "reclaim_owned_memory"):
-        recovery.add_reclaim(backend.reclaim_owned_memory)
-    monitor = purge_recovery.Monitor(recovery).start()
-    purge_recovery.register(recovery)             # also recovers at the request boundary (purge_recovery.prepare_for_request)
-    atexit.register(monitor.stop)
-    atexit.register(purge_recovery.register, None)
-    print(f"auto-purge: idle monitor every {recovery.cfg.interval_s:g}s and before each request (purge only when "
-          f"justified; log {recovery.log_path})", file=display, flush=True)
+    return
 
 
 def _print_mode_banner(prefs, args, display, chat_guard) -> None:
-    """Show the launch mode, checkpoint, pool, cache, chunk policy, memory readiness and supervisor state."""
-    if prefs["model"] != "flashnext":
-        return
-    from models.flashnext.settings import modes
-
-    plan = modes.plan_from_environment()
-    if plan is None:
-        return
-    available = None
-    try:
-        from models.flashnext.memory_manager import read_system
-
-        available = read_system().get("available", 0) / 1e9 or None
-    except Exception:
-        pass
-    trace = getattr(getattr(chat_guard, "path", None), "name", None)
-    print(modes.banner(plan, checkpoint=args.model_path, available_gb=available, guard_trace=trace,
-                       auto_purge=os.environ.get("FLASHNEXT_AUTO_PURGE") == "1"),
-          file=display, flush=True)
+    return
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    from veystrix.model_settings import FLASHNEXT_DEFAULTS
     parser.add_argument(
         "--model", default=None,
-        choices=("flashnext", NEMOTRON, INKLING2_MINI),
+        choices=(INKLING2_MINI,),
     )
     parser.add_argument("--profile", default=None, choices=("plain", "agent"))
     parser.add_argument("--model-path", "--checkpoint", dest="model_path", default=None)
-    parser.add_argument(
-        "--threshold", type=float, default=FLASHNEXT_DEFAULTS["threshold"]
-    )
-    parser.add_argument(
-        "--resident-experts", "--pinned-experts", dest="resident_experts", type=int,
-        # None means "not given", so a checkpoint policy can apply. The
-        # backend falls back to FLASHNEXT_DEFAULTS when nothing supplies one.
-        default=None,
-    )
-    parser.add_argument(
-        "--pin-budget-gb", type=float,
-        default=FLASHNEXT_DEFAULTS["pin_budget_gb"],
-    )
+    parser.add_argument("--threshold", type=float, default=1.0)
+    parser.add_argument("--resident-experts", "--pinned-experts", dest="resident_experts", type=int, default=None)
+    parser.add_argument("--pin-budget-gb", type=float, default=None)
     routing = parser.add_mutually_exclusive_group()
-    routing.add_argument("--standard", dest="routing_profile",
-                         action="store_const", const="standard")
-    routing.add_argument("--fast-quality", dest="routing_profile",
-                         action="store_const", const="fast-quality")
-    routing.add_argument("--exact-quality", dest="routing_profile",
-                         action="store_const", const="exact-quality")
-    routing.add_argument("--cache-aware", dest="routing_profile",
-                         action="store_const", const="cache-aware")
-    routing.add_argument("--fused-quality", dest="routing_profile",
-                         action="store_const", const="fused-quality")
-    parser.set_defaults(routing_profile=FLASHNEXT_DEFAULTS["routing"])
-    parser.add_argument(
-        "--swap-epsilon", type=float,
-        default=FLASHNEXT_DEFAULTS["swap_epsilon"],
-    )
-    parser.add_argument(
-        "--tail-experts", type=int, default=FLASHNEXT_DEFAULTS["tail_experts"]
-    )
-    parser.add_argument(
-        "--tail-warmup", type=int, default=FLASHNEXT_DEFAULTS["tail_warmup"]
-    )
-    parser.add_argument(
-        "--fusion-block", type=int, default=FLASHNEXT_DEFAULTS["fusion_block"]
-    )
-    parser.add_argument(
-        "--fusion-min-margin", type=float,
-        default=FLASHNEXT_DEFAULTS["fusion_min_margin"],
-    )
-    parser.add_argument(
-        "--fusion-min-block", type=int,
-        default=FLASHNEXT_DEFAULTS["fusion_min_block"],
-    )
-    parser.add_argument(
-        "--fusion-margin-tokens", type=int,
-        default=FLASHNEXT_DEFAULTS["fusion_margin_tokens"],
-    )
-    parser.add_argument(
-        "--fusion-max-prompt", type=int,
-        default=FLASHNEXT_DEFAULTS["fusion_max_prompt"],
-    )
-    parser.add_argument(
-        "--fusion-model", default=FLASHNEXT_DEFAULTS["fusion_model"]
-    )
+    routing.add_argument("--standard", dest="routing_profile", action="store_const", const="standard")
+    routing.add_argument("--fast-quality", dest="routing_profile", action="store_const", const="fast-quality")
+    routing.add_argument("--exact-quality", dest="routing_profile", action="store_const", const="exact-quality")
+    routing.add_argument("--cache-aware", dest="routing_profile", action="store_const", const="cache-aware")
+    routing.add_argument("--fused-quality", dest="routing_profile", action="store_const", const="fused-quality")
+    parser.set_defaults(routing_profile="standard")
+    parser.add_argument("--swap-epsilon", type=float, default=0.0)
+    parser.add_argument("--tail-experts", type=int, default=0)
+    parser.add_argument("--tail-warmup", type=int, default=0)
+    parser.add_argument("--fusion-block", type=int, default=0)
+    parser.add_argument("--fusion-min-margin", type=float, default=0.0)
+    parser.add_argument("--fusion-min-block", type=int, default=0)
+    parser.add_argument("--fusion-margin-tokens", type=int, default=0)
+    parser.add_argument("--fusion-max-prompt", type=int, default=0)
+    parser.add_argument("--fusion-model", default=None)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--repetition-penalty", type=float, default=1.12)
     parser.add_argument("--repetition-context-size", type=int, default=512)
@@ -949,28 +681,6 @@ def main() -> int:
         parser.error("--think-budget must be positive or -1")
     prefs = preferences.load(args.preferences_file)
     saved_profile = prefs.get("profile")
-    if (
-        args.tail_experts < 1
-        or (args.resident_experts is not None and args.resident_experts < 1)
-        or args.tail_warmup < 1
-    ):
-        parser.error("Flash-Next expert counts and warmup must be positive")
-    if not 0.01 <= args.threshold <= 1.0:
-        parser.error("--threshold must be between 0.01 and 1.0")
-    if not 0 <= args.swap_epsilon <= 1.0:
-        parser.error("--swap-epsilon must be between 0 and 1.0")
-    if not 0 <= args.pin_budget_gb <= 64:
-        parser.error("--pin-budget-gb must be between 0 and 64")
-    if (
-        args.fusion_block < 1
-        or args.fusion_min_block < 1
-        or args.fusion_margin_tokens < 0
-        or args.fusion_max_prompt < 1
-        or args.fusion_min_margin < 0
-    ):
-        parser.error("Flash-Next fusion settings are outside their valid range")
-    if args.fusion_min_block > args.fusion_block:
-        parser.error("--fusion-min-block cannot exceed --fusion-block")
     # a flag beats the saved value, and becomes the saved value
     if args.model:
         prefs["model"] = args.model
@@ -988,39 +698,7 @@ def main() -> int:
             prefs["show_thinking"] = True
     if args.show_thinking is not None:
         prefs["show_thinking"] = args.show_thinking
-    if prefs["model"] == "flashnext":
-        from veystrix.checkpoints import resolve_flashnext
-
-        explicit_checkpoint = args.model_path
-        environment_checkpoint = os.environ.get("VEYSTRIX_FLASHNEXT_MODEL")
-        saved_checkpoint = prefs["flashnext_checkpoint"]
-        choice = (
-            explicit_checkpoint
-            or environment_checkpoint
-            or saved_checkpoint
-            or None
-        )
-        saved_only = bool(
-            saved_checkpoint and not explicit_checkpoint and not environment_checkpoint
-        )
-        try:
-            args.model_path = str(resolve_flashnext(
-                choice, allow_stale_fallback=saved_only
-            ))
-        except ValueError as exc:
-            parser.error(str(exc))
-        if explicit_checkpoint or saved_only or not (environment_checkpoint or saved_checkpoint):
-            prefs["flashnext_checkpoint"] = args.model_path
-    elif prefs["model"] == NEMOTRON:
-        from veystrix.checkpoints import resolve_nemotron35
-
-        choice = args.model_path or os.environ.get("VEYSTRIX_NEMOTRON_MODEL") or prefs.get("nemotron35_checkpoint") or None
-        try:
-            args.model_path = str(resolve_nemotron35(choice))
-        except ValueError as exc:
-            parser.error(str(exc))
-        prefs["nemotron35_checkpoint"] = args.model_path
-    elif prefs["model"] == INKLING2_MINI:
+    if prefs["model"] == INKLING2_MINI:
         from veystrix.checkpoints import resolve_inkling2_mini
 
         choice = args.model_path or os.environ.get("VEYSTRIX_INKLING2_MODEL") or prefs.get("inkling2_mini_checkpoint") or None
@@ -1031,16 +709,8 @@ def main() -> int:
         prefs["inkling2_mini_checkpoint"] = args.model_path
     if benchmarking and prefs["profile"] != "plain":
         parser.error("benchmark mode requires --profile plain")
-    if args.benchmark_chat_parity and prefs["model"] != "flashnext":
-        parser.error("chat parity requires --model flashnext")
-    # Fail closed: a flashnext server needs the safety configuration the launcher (./chat.sh --mode agentic) applies. A direct
-    # `session.py --server` launch ran the 2026-11-09 DeepSeek Harness incident with no guard, no chunking, no cache.
-    from models.flashnext import supervision
-
-    refusal = supervision.check(os.environ, model=prefs["model"], server=bool(args.server), benchmarking=benchmarking)
-    if refusal:
-        print(refusal, file=sys.stderr, flush=True)
-        return supervision.EXIT_CODE
+    if args.benchmark_chat_parity:
+        parser.error("chat parity benchmark is no longer supported")
     # A benchmark uses temporary command-line conditions. It must not change
     # the user's next interactive chat, as an earlier 20-token probe did.
     if not benchmarking:
@@ -1058,29 +728,14 @@ def main() -> int:
     recovery, prepared = _prepare_startup(prefs, benchmarking, display)
     _admit_agentic(prefs, benchmarking, display, prepared)
     chat_guard = None
-    if (prefs["model"] in GUARDED_MODELS and not benchmarking
-            and os.environ.get("FLASHNEXT_CHAT_GUARD") == "1"):
-        import tempfile
-        from models.flashnext.chat_guard import ChatGuard
-
-        trace = Path(tempfile.gettempdir()) / f"veystrix-chat-{os.getpid()}.jsonl"
-        chat_guard = ChatGuard(trace).start()
-        print(f"FlashNext safety trace: {trace}", file=display, flush=True)
     _start_watchdog(chat_guard, display)
     _print_mode_banner(prefs, args, display, chat_guard)
     print(f"{C['dim']}loading {prefs['model']}...{C['0']}", flush=True, file=display)
-    from models.flashnext.purge_recovery import ACTIVITY
-
-    from models.flashnext import progress as _progress
-
-    _progress.PROGRESS.stage("loading")
-    with ACTIVITY.loading_model():          # a cache purge never runs while the checkpoint loads
-        if benchmarking:
-            with contextlib.redirect_stdout(sys.stderr):
-                backend = build_backend(prefs["model"], args, prefs)
-        else:
+    if benchmarking:
+        with contextlib.redirect_stdout(sys.stderr):
             backend = build_backend(prefs["model"], args, prefs)
-    _progress.PROGRESS.stage("idle")
+    else:
+        backend = build_backend(prefs["model"], args, prefs)
     _apply_backend_limits(backend)
     if chat_guard is not None and hasattr(backend, "store"):
         chat_guard.tracer.store = backend.store
@@ -1098,11 +753,6 @@ def main() -> int:
     print(f"{C['dim']}ready in {time.time() - began:.1f}s  "
           f"{prefs['model']} / {prefs['profile']}  "
           f"use /help for commands{C['0']}\n", file=display)
-    if args.benchmark_chat_parity:
-        from models.flashnext.tests.bench.bench_chat_parity import run_chat_child
-
-        run_chat_child(session, args.benchmark_chat_parity, args.benchmark_prompt)
-        return 0
     if args.benchmark_json:
         print(json.dumps(run_benchmark(session, args.benchmark_prompt, ready_seconds)))
         return 0
@@ -1115,16 +765,15 @@ def main() -> int:
     if args.server:
         from veystrix.server import serve
 
-        from models.flashnext.settings.modes import (
-            context_limit_from_environment,
-            max_cold_prefill_from_environment,
-            max_incremental_prefill_from_environment,
+        ctx = os.environ.get("VEYSTRIX_CONTEXT_LIMIT", "").strip()
+        cold = os.environ.get("VEYSTRIX_MAX_COLD_PREFILL", "").strip()
+        inc = os.environ.get("VEYSTRIX_MAX_INCREMENTAL_PREFILL", "").strip()
+        serve(
+            session, args.host, args.port, args.server_api_key, args.allow_origin,
+            context_limit=int(ctx) if ctx.isdigit() else None,
+            max_cold_prefill=int(cold) if cold.isdigit() else None,
+            max_incremental_prefill=int(inc) if inc.isdigit() else None,
         )
-
-        serve(session, args.host, args.port, args.server_api_key,
-              args.allow_origin, context_limit=context_limit_from_environment(),
-              max_cold_prefill=max_cold_prefill_from_environment(),
-              max_incremental_prefill=max_incremental_prefill_from_environment())
         return 0
     print(commands.render_help(session.profile) + "\n")
 
@@ -1196,24 +845,17 @@ def main() -> int:
                   file=sys.stderr)
             interrupt_level = 0
     if session.server_requested:
-        from models.flashnext import supervision
-
-        refusal = supervision.check(os.environ, model=prefs["model"], server=True, benchmarking=benchmarking)
-        if refusal:
-            print(refusal, file=sys.stderr, flush=True)
-            return supervision.EXIT_CODE
-
         from veystrix.server import serve
-        from models.flashnext.settings.modes import (
-            context_limit_from_environment,
-            max_cold_prefill_from_environment,
-            max_incremental_prefill_from_environment,
-        )
 
-        serve(session, args.host, args.port, args.server_api_key,
-              args.allow_origin, context_limit=context_limit_from_environment(),
-              max_cold_prefill=max_cold_prefill_from_environment(),
-              max_incremental_prefill=max_incremental_prefill_from_environment())
+        ctx = os.environ.get("VEYSTRIX_CONTEXT_LIMIT", "").strip()
+        cold = os.environ.get("VEYSTRIX_MAX_COLD_PREFILL", "").strip()
+        inc = os.environ.get("VEYSTRIX_MAX_INCREMENTAL_PREFILL", "").strip()
+        serve(
+            session, args.host, args.port, args.server_api_key, args.allow_origin,
+            context_limit=int(ctx) if ctx.isdigit() else None,
+            max_cold_prefill=int(cold) if cold.isdigit() else None,
+            max_incremental_prefill=int(inc) if inc.isdigit() else None,
+        )
         return 0
     return 0
 
@@ -1253,11 +895,7 @@ def _interactive_budgets(backend, answer_budget, think_budget):
 
 
 def _disk_bytes_read():
-    try:
-        from models.flashnext.diskio import disk_bytes_read
-        return disk_bytes_read()
-    except Exception:
-        return -1
+    return -1
 
 
 def _token_sha256(tokens) -> str:
@@ -1497,15 +1135,6 @@ def run_product_benchmark(session, prompt: str, window: int = 32,
         before[0] = _disk_bytes_read()
         window_started[0] = time.perf_counter()
         previous_hits[0], previous_misses[0] = slab_counts()
-        if os.environ.get("FLASHNEXT_PHYSICAL_MISS_TRACE") == "1":
-            from models.flashnext.physical_miss import start_trace
-
-            physical_trace[0] = start_trace(f"product-long:{label}")
-            if label.startswith("core48-calibration"):
-                physical_trace[0].profile["calibration"] = {
-                    "canonical_core_slots": 48,
-                    "equal_residency": True,
-                }
 
     def emit_window(count: int) -> None:
         now = time.perf_counter()
@@ -1555,21 +1184,11 @@ def run_product_benchmark(session, prompt: str, window: int = 32,
         if len(produced) % window == 0:
             emit_window(window)
 
-    try:
-        _text, stats = backend.generate(
-            max_tokens=tokens,
-            on_prefilled=on_prefilled,
-            on_decode_token=on_token,
-        )
-    finally:
-        if physical_trace[0] is not None:
-            from models.flashnext.physical_miss import stop_trace
-
-            physical_trace[0].profile["tokens"] = len(produced)
-            stop_trace(os.environ.get(
-                "FLASHNEXT_PHYSICAL_MISS_PROFILE",
-                "~/.cache/flashnext/physical-misses.json",
-            ))
+    _text, stats = backend.generate(
+        max_tokens=tokens,
+        on_prefilled=on_prefilled,
+        on_decode_token=on_token,
+    )
     remainder = len(produced) % window
     if remainder:
         emit_window(remainder)

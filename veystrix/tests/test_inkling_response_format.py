@@ -398,35 +398,5 @@ class SwapSafetyTests(unittest.TestCase):
             self.assertEqual(backend2._live_at, 512)
             cpp_engine._CPP_PREFIX_CACHE.clear()
 
-    def test_strict_probe_native_mach_readings_match_schema(self):
-        import sys
-        if sys.platform != "darwin":
-            self.skipTest("vm_stat is macOS-only")
-        from models.flashnext import chat_guard
-
-        probe = chat_guard.StrictProbe()
-        vm = probe.machine()
-        self.assertIsInstance(vm, dict)
-        for key in (
-            "page_bytes", "available_mb", "free_mb", "compressor_mb",
-            "wired_mb", "active_mb", "file_backed_mb", "anonymous_mb", "counters",
-        ):
-            self.assertIn(key, vm)
-            self.assertIsNotNone(vm[key], f"missing native vm field: {key}")
-        self.assertGreater(vm["page_bytes"], 0)
-        self.assertGreaterEqual(vm["available_mb"], vm["free_mb"])
-        for ckey in ("swapin", "swapout", "pagein", "pageout", "compress", "decompress"):
-            self.assertIn(ckey, vm["counters"])
-            self.assertIsInstance(vm["counters"][ckey], int)
-        rss = probe.rss_bytes()
-        self.assertIsInstance(rss, int)
-        self.assertGreater(rss, 0)
-        swap_mb = probe.swap_used_mb()
-        self.assertIsInstance(swap_mb, float)
-        self.assertGreaterEqual(swap_mb, 0.0)
-        pressure = probe.pressure_level()
-        self.assertIn(pressure, (1, 2, 4))
-
-
 if __name__ == "__main__":
     unittest.main()

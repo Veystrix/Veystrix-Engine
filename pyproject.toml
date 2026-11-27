@@ -37,8 +37,7 @@ Homepage = "https://github.com/Veystrix/veystrix-engine"
 Issues = "https://github.com/Veystrix/veystrix-engine/issues"
 
 [tool.setuptools.packages.find]
-include = ["veystrix*", "models*"]
+include = ["veystrix*"]
 
 [tool.setuptools.package-data]
-"models.flashnext" = ["native_read.c"]
 "veystrix" = ["parity_refs/*.json"]

@@ -14,7 +14,7 @@ import uuid
 from argparse import Namespace
 from pathlib import Path
 
-from models.flashnext.overnight import server_command
+from veystrix.supervisor_policy import server_command
 
 
 class ProcessDriver:

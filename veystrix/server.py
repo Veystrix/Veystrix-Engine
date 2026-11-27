@@ -57,8 +57,26 @@ from veystrix.backends.base import GenerationCancelled
 from veystrix import effort_slot
 from veystrix import usage_log
 from veystrix import warm as warm_module
-from models.flashnext import flight_recorder
-from models.flashnext.settings.modes import default_cold_prefill
+
+
+class _NoopFlightRecorder:
+    enabled = False
+
+    def install(self):
+        return self
+
+    def uninstall(self):
+        return None
+
+    def record(self, *args, **kwargs):
+        return None
+
+
+flight_recorder = _NoopFlightRecorder()
+
+
+def default_cold_prefill(kv_cache=None):
+    return 65536 if kv_cache == "tiered4" else 32768
 
 
 MAX_BODY = 16 * 1024 * 1024
@@ -913,11 +931,7 @@ def model_entry(card: dict, service) -> dict:
             "telemetry_only_checks": mem.get("telemetry_only_checks", []),
         }
     else:
-        try:
-            from models.flashnext import memory_policy
-            policy_info = memory_policy.policy_summary()
-        except ImportError:
-            policy_info = None
+        policy_info = None
     return {
         "id": card["slug"],
         "object": "model",
@@ -953,19 +967,6 @@ def _context_report(service, limit, enforced) -> dict:
     native = context_budget.native_context_window(getattr(backend, "model_path", None)) if backend is not None else None
     if native is None:
         native = 262144
-    if type(backend).__name__ == "NemotronBackend":
-        from models.nemotron35.admission import MAX_CONTEXT
-        return {
-            "native_positional_capability": native,
-            "architectural_context_maximum": MAX_CONTEXT,
-            "configured_server_limit": backend.configured_context,
-            "memory_admitted_context": backend.context_limit,
-            "kv_format": backend.kv_format,
-            "million_token_validation": False,
-            "max_cold_prefill": service.max_cold_prefill,
-            "max_incremental_prefill": service.max_incremental_prefill,
-            "preferred_internal_chunk_size": backend.plan.chunk_tokens,
-        }
     cold = getattr(service, "max_cold_prefill", None) or MAX_COLD_PREFILL_DEFAULT
     incremental = getattr(service, "max_incremental_prefill", None) or MAX_INCREMENTAL_PREFILL_DEFAULT
     family = getattr(backend, "family", None) or str(getattr(service, "model", "")).removeprefix("veystrix-")
@@ -1003,26 +1004,12 @@ def runtime_info(service) -> dict:
 
 
 def health(service, scheduler) -> dict:
-    """Liveness plus readiness. ``ready`` is false after a GPU lifecycle fault (the process must be restarted)."""
-    try:
-        from models.flashnext import pool_lifecycle
-
-        fault = pool_lifecycle.lifecycle_fault()
-    except Exception:
-        fault = None
+    """Liveness plus readiness."""
     loaded = _service_backend(service) is not None
-    ready = loaded and not fault
+    ready = loaded
     status = "ok" if ready else "unavailable"
     worker = _worker_state(scheduler)
-    controller = None
-    try:
-        from models.flashnext import memory_controller as _mc
-        controller = _mc.current()
-    except Exception:
-        pass
-    if ready and controller is not None and not controller.can_admit():
-        ready, status = False, "stopped"          # safety stop: work admission is closed for the rest of this process
-    elif ready and worker["stalled"]:
+    if ready and worker["stalled"]:
         ready, status = False, "stalled"          # a job is running but nothing has advanced for stall_seconds
     report = {"status": status, "ready": ready, "worker": worker, "model": getattr(service, "model", ""),
               "busy": scheduler.busy, "queue": scheduler.snapshot(),
@@ -1041,8 +1028,6 @@ def health(service, scheduler) -> dict:
     activity = getattr(service, "activity_snapshot", None)
     if callable(activity):
         report["activity"] = activity()
-    if fault:
-        report["fault"] = str(fault)
     state = getattr(service, "cache_state", None)
     if callable(state):
         cache = state()
@@ -1076,12 +1061,6 @@ def health(service, scheduler) -> dict:
             "probe_availability": mem.get("probe_availability", {}),
             "telemetry_only_checks": mem.get("telemetry_only_checks", []),
         }
-    else:
-        try:
-            from models.flashnext import memory_policy
-            report["memory_policy"] = memory_policy.policy_summary()
-        except ImportError:
-            pass
     return report
 
 
@@ -1098,23 +1077,12 @@ def _restart_command() -> str:
 
 
 def _memory_stopped() -> bool:
-    try:
-        from models.flashnext import memory_controller
-        return memory_controller.is_stopped()
-    except ImportError:
-        return False
+    return False
 
 
 def _safety_stop_error(prefix: str = "request cancelled") -> RequestError:
     """The actionable failure a client gets when the memory safety stop ends its request (never a silent hang)."""
     reason = "memory limit exceeded"
-    try:
-        from models.flashnext import memory_controller
-        c = memory_controller.current()
-        if c is not None and c.stop_reason:
-            reason = c.stop_reason
-    except ImportError:
-        pass
     return RequestError(
         f"{prefix} by the memory safety stop: {reason}. This server will exit and accepts no further work. "
         f"Do NOT retry automatically: restart it deliberately with `{_restart_command()}` once memory pressure has eased.",
@@ -1122,14 +1090,8 @@ def _safety_stop_error(prefix: str = "request cancelled") -> RequestError:
 
 
 def _worker_state(scheduler, clock=time.monotonic) -> dict:
-    """Forward progress of the inference worker. ``stalled`` means a job is active and no streamed layer or decoded token has
-    completed for ``stall_seconds``: the server must not call itself healthy then. Heavy prefill is not a stall: every
-    streamed MoE layer ticks the counter."""
-    try:
-        from models.flashnext import progress
-        snap = progress.PROGRESS.snapshot(clock)
-    except Exception:
-        snap = {"stage": "unknown", "seconds_since_progress": 0.0, "progress_ticks": 0, "in_request": False}
+    """Forward progress of the inference worker."""
+    snap = {"stage": "unknown", "seconds_since_progress": 0.0, "progress_ticks": 0, "in_request": False}
     busy = bool(getattr(scheduler, "busy", False))
     snap["busy"] = busy
     snap["stall_seconds"] = STALL_SECONDS
@@ -1179,12 +1141,7 @@ def _log_request(backend, stats, wall: float, first_piece, calls: int, started: 
 
 
 def _memory_ledger():
-    """The staged memory controller's counters (swap at launch, peak swap increase, recoveries); None when no guard runs."""
-    try:
-        from models.flashnext import memory_controller
-        return memory_controller.ledger()
-    except Exception:
-        return None
+    return None
 
 
 class ModelService:
@@ -1301,15 +1258,6 @@ class ModelService:
         swap_growth_mb = 0.0
         swap_base_mb = 0.0
         swap_peak_growth_mb = 0.0
-        try:
-            from models.flashnext import memory_controller
-            c = memory_controller.current()
-            if c:
-                swap_growth_mb = round(c.swap_increase_mb(), 2)
-                swap_base_mb = round(getattr(c, "baseline_swap_used_mb", 0.0), 2)
-                swap_peak_growth_mb = round(getattr(c, "_peak_swap_growth_mb", 0.0), 2)
-        except Exception:
-            pass
 
         last_prefill_tok = getattr(last_prefix, "prefilled_tokens", 0) if last_prefix else 0
         last_prefill_sec = getattr(backend, "last_prefill_seconds", None)
@@ -1528,10 +1476,9 @@ class ModelService:
         """Insert the effort turn right after the system message's ``<|im_end|>\\n`` (see veystrix/effort_slot.py)."""
         if not effort_text:
             return ids
-        from models.flashnext import prefix_session
 
         encode = self.session.backend.encode
-        marker = [int(t) for t in encode(prefix_session.IM_END)]
+        marker = [int(t) for t in encode("<|im_end|>\n")]
         ids = [int(t) for t in ids]
         width = len(marker)
         for index in range(len(ids) - width + 1):
@@ -1588,24 +1535,12 @@ class ModelService:
                         cached_tokens = 0
             prefix_session = getattr(backend, "_prefix_session", None)
             if cached_tokens == 0 and self.batch_scheduler is None and callable(prefix_session):
-                can_restore = True
                 try:
-                    from veystrix.backends.flashnext import FlashNextBackend
-                    # With VEYSTRIX_ENGINE=cpp the selected backend is a CppEngineBackend,
-                    # so this FlashNext-only prefix-restore path is skipped by design.
-                    if isinstance(backend, FlashNextBackend):
-                        from models.flashnext import prefix_session as ps_mod
-                        if getattr(backend, "decoder", None) is not None or not (ps_mod.enabled() and ps_mod.restore_enabled()):
-                            can_restore = False
-                except ImportError:
-                    pass
-                if can_restore:
-                    try:
-                        cached_tokens = int(prefix_session().reusable_tokens(ids))
-                        cache_outcome = "SNAPSHOT_HIT" if cached_tokens > 0 else "MISS"
-                    except Exception:
-                        cached_tokens = 0
-                        cache_outcome = "ERROR"
+                    cached_tokens = int(prefix_session().reusable_tokens(ids))
+                    cache_outcome = "SNAPSHOT_HIT" if cached_tokens > 0 else "MISS"
+                except Exception:
+                    cached_tokens = 0
+                    cache_outcome = "ERROR"
         parked = 0
         if not extends and not replay and self.batch_scheduler is None and hasattr(type(backend), "parked_prefix"):
             parked_fn = getattr(backend, "parked_prefix", None)
@@ -1687,14 +1622,6 @@ class ModelService:
         return R.resolve({}, prefs["thinking_enabled"], prefs["effort"])
 
     def complete(self, messages, tools, max_tokens, on_text=None, gone=None) -> Completion:
-        try:
-            from models.flashnext import memory_controller
-            if not memory_controller.can_admit_work():
-                c = memory_controller.current()
-                reason = c.stop_reason if c and c.stop_reason else "memory controller stopped work admission"
-                raise RequestError(f"request rejected: {reason}", status=503, code="memory_critical_stop")
-        except ImportError:
-            pass
         session = self.session
         backend = session.backend
         response_format = response_format_for(
@@ -1848,12 +1775,6 @@ class ModelService:
                 return gone()
 
             def cancel_check() -> bool:
-                try:
-                    from models.flashnext import memory_controller
-                    if memory_controller.is_stopped():
-                        return True
-                except ImportError:
-                    pass
                 return client_disconnected()
 
             requested_output = (
@@ -2040,9 +1961,6 @@ class ModelService:
                 session.reset()
             self.sessions.dropped()
             flight_recorder.record("request_error", error=type(error).__name__, detail=str(error)[:300])
-            from models.flashnext.request_admission import RequestMemoryRefused
-            if isinstance(error, RequestMemoryRefused):
-                raise RequestError(str(error), status=503, code="memory_admission_refused") from error
             raise
         finally:
             self._activity_update(active=False)
@@ -2208,10 +2126,6 @@ class VeystrixHandler(BaseHTTPRequestHandler):
         return False
 
     def _headers(self, status=200, content_type="application/json"):
-        from models.flashnext import progress
-
-        if getattr(self, "_batch_service", None) is None:
-            progress.PROGRESS.response_started()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         origin = self._allowed_origin()
@@ -2640,21 +2554,16 @@ class VeystrixHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path, payload):
         """Serve one response. Cooperative requests dispatch model work separately."""
-        from models.flashnext import progress
-
         service = self._inference_service()
-        batch = getattr(service, "batch_scheduler", None) is not None
         try:
             service.session_hint = explicit_id(self.headers, payload)
         except Exception:
             pass
 
-        if not batch:
-            progress.PROGRESS.request_begin(getattr(self, "connection", None), path)
         try:
             tools_value = payload.get("tools")
             flight_recorder.record(
-                "request_begin", path=path, seq=progress.PROGRESS._request,
+                "request_begin", path=path, seq=0,
                 user_agent=str(self.headers.get("User-Agent", ""))[:80],
                 session_header=bool(service.session_hint),
                 stream=bool(payload.get("stream")),
@@ -2698,8 +2607,6 @@ class VeystrixHandler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
         finally:
-            if not batch:
-                progress.PROGRESS.request_end()
             flight_recorder.record("request_end", path=path)
 
     @staticmethod
@@ -3076,11 +2983,6 @@ def serve(session, host: str, port: int, api_key: str | None = None,
     flight_recorder.record("server_start", host=host, port=server.server_port, context_limit=context_limit,
                            max_cold_prefill=server.service.max_cold_prefill or MAX_COLD_PREFILL_DEFAULT,
                            max_incremental_prefill=max_incremental_prefill or MAX_INCREMENTAL_PREFILL_DEFAULT)
-    try:
-        from models.flashnext import memory_controller as _mc
-        _mc.register_worker_probe(lambda: server.scheduler.busy)
-    except ImportError:
-        pass
     print(f"server ready at http://{host}:{server.server_port}")
     if allowed_origins:
         print(f"browser origins allowed: {', '.join(allowed_origins)}")

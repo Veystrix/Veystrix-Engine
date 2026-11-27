@@ -423,7 +423,7 @@ def main(argv=None):
     thread = threading.Thread(target=startup, daemon=True)
     thread.start()
     def supervise():
-        from models.flashnext.overnight import Policy, swap_used_mb
+        from veystrix.supervisor_policy import Policy, swap_used_mb
         policy = Policy()
         while not stopping.wait(2):
             snap = coordinator.snapshot()

@@ -19,18 +19,10 @@ case "$mode" in
     ;;
   --python-only)
     run "Shared runtime tests" "$PY" -m unittest discover -s veystrix/tests -t . -p 'test_*.py' -q
-    if [ -d models/flashnext/tests/unit ]; then
-      run "Flash-Next runtime tests" "$PY" -m unittest discover -s models/flashnext/tests/unit -t . -p 'test_*.py' -q
-    fi
-    run "Nemotron runtime tests" "$PY" -m unittest discover -s models/nemotron35/tests/unit -t . -p 'test_*.py' -q
     run "Secret scan" "$PY" scripts/security/secret_scan.py
     ;;
   full)
     run "Shared runtime tests" "$PY" -m unittest discover -s veystrix/tests -t . -p 'test_*.py' -q
-    if [ -d models/flashnext/tests/unit ]; then
-      run "Flash-Next runtime tests" "$PY" -m unittest discover -s models/flashnext/tests/unit -t . -p 'test_*.py' -q
-    fi
-    run "Nemotron runtime tests" "$PY" -m unittest discover -s models/nemotron35/tests/unit -t . -p 'test_*.py' -q
     run "Secret scan" "$PY" scripts/security/secret_scan.py
     run "macOS app build" swift build --package-path apps/macos/Veystrix
     run "macOS app logic tests" swift test --package-path apps/macos/Veystrix

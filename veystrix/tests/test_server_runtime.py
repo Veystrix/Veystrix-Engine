@@ -131,17 +131,6 @@ class StatusRouteTests(unittest.TestCase):
         thread.join(5)
         self.assertFalse(request(run.port, "GET", "/health")[1]["activity"]["active"])
 
-    def test_ready_is_503_after_a_gpu_lifecycle_fault(self):
-        from models.flashnext import pool_lifecycle
-
-        run = Running(self)
-        self.addCleanup(lambda: pool_lifecycle._LIFECYCLE_FAULT.__setitem__(0, None))
-        pool_lifecycle._LIFECYCLE_FAULT[0] = "GPU synchronization failed: device lost"
-        status, body, _ = request(run.port, "GET", "/ready")
-        self.assertEqual((status, body["ready"], body["status"]), (503, False, "unavailable"))
-        self.assertIn("device lost", body["fault"])
-        self.assertEqual(request(run.port, "GET", "/health")[0], 200)     # liveness stays answerable
-
     def test_models_lists_one_model_with_the_enforced_window_not_the_theoretical_one(self):
         run = Running(self, context_limit=4096)
         status, body, _ = request(run.port, "GET", "/v1/models")

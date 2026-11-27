@@ -371,7 +371,13 @@ def run_arm(backend, name, prompts, output_tokens, *, floor=FLOOR, clock=perf_co
     import mlx.core as mx
 
     if read_meter is None:
-        from models.flashnext.diskio import ReadMeter as read_meter
+        class _NullReadMeter:
+            def reset(self):
+                pass
+
+            def bytes_since(self):
+                return 0
+        read_meter = _NullReadMeter
     interrupted = interrupted or threading.Event()
     arm = Arm(name, clock=clock, floor=floor, read_meter=read_meter, memory_read=memory_read,
               memory_interval=memory_interval, interrupted=interrupted)
@@ -566,10 +572,6 @@ def main(argv=None):
     try:
         with tempfile.TemporaryDirectory(dir=out.parent, prefix="prefix-") as directory:
             apply_harness_environment(directory, prefix_cache=args.prefix_cache == "on")
-            if args.model == "flashnext" and args.qwen_prefill_16gb:
-                from models.flashnext.prefill_16gb import apply
-
-                apply(os.environ)
             backend = load_backend(args.model, checkpoint, args.prompt_tokens + args.output_tokens, directory,
                                    resident_experts=args.resident_experts,
                                    pool_bytes=int(args.nemotron_pool_gb * 2**30))

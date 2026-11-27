@@ -375,23 +375,6 @@ class ReasoningAndMemoryGuardTests(unittest.TestCase):
         self.assertTrue(any(reasoning_deltas))
         self.assertIn("final answer", "".join(x for x in content_deltas if x))
 
-    def test_memory_guard_stops_request_with_503(self):
-        from models.flashnext import memory_controller
-
-        svc = ModelService(_Session(_Backend(["ok"])))
-        fake_mc = SimpleNamespace(
-            can_admit_work=lambda: False,
-            current=lambda: SimpleNamespace(stop_reason="host memory critical"),
-        )
-        with mock.patch.dict(sys.modules, {"models.flashnext.memory_controller": fake_mc}):
-            with mock.patch.object(memory_controller, "can_admit_work", return_value=False):
-                with mock.patch.object(memory_controller, "current", return_value=SimpleNamespace(stop_reason="host memory critical")):
-                    with self.assertRaises(RequestError) as ctx:
-                        svc.complete([{"role": "user", "content": "hi"}], [], -1)
-        self.assertEqual(ctx.exception.status, 503)
-        self.assertEqual(ctx.exception.code, "memory_critical_stop")
-
-
 class HarnessConfigGeneratorTests(unittest.TestCase):
     def test_hermes_deepseek_and_qwen_configs_have_no_small_output_caps(self):
         from integrations.hermes import configure_profile as hermes_cfg

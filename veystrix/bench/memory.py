@@ -11,7 +11,7 @@ from .provenance import output
 
 
 def system_sample():
-    from models.flashnext.watchdog import swap_used_mib
+    from veystrix.supervisor_policy import swap_used_mb as swap_used_mib
 
     vm = output("vm_stat") or ""
     page = re.search(r"page size of (\d+) bytes", vm)
@@ -69,7 +69,7 @@ def kernel_sample():
     inactive_count`` here. Raises OSError when the call is unavailable.
     """
     global _HOST
-    from models.flashnext.watchdog import swap_used_mib
+    from veystrix.supervisor_policy import swap_used_mb as swap_used_mib
 
     libc = ctypes.CDLL(None, use_errno=True)
     if _HOST is None:

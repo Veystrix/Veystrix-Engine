@@ -9,7 +9,6 @@ from veystrix import effort_slot as E
 from veystrix import reasoning as R
 from veystrix.server import ModelService
 from veystrix.tests.test_server import FakeSession
-from models.flashnext import prefix_session
 
 TEMPLATE = "/Users/vincent/models/Qwen3.8-Flash-Next-MLX-4bit-MTP"
 RENDER = "<|im_start|>system\n# Tools\n...SYSTEM PROMPT<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n<think>\n"
@@ -142,12 +141,12 @@ class RealTokenizerTests(unittest.TestCase):
         text = E.block_text(effort, thinking)
         if not text:
             return ids
-        marker = self.encode(prefix_session.IM_END)
+        marker = self.encode(END)
         cut = next(i for i in range(len(ids)) if ids[i:i + len(marker)] == marker) + len(marker)
         return ids[:cut] + self.encode(text) + ids[cut:]
 
     def system_end(self, ids):
-        marker = self.encode(prefix_session.IM_END)
+        marker = self.encode(END)
         return next(i for i in range(len(ids)) if ids[i:i + len(marker)] == marker) + len(marker)
 
     @staticmethod

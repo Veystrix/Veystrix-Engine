@@ -5,8 +5,6 @@ import unittest
 from veystrix import preferences, reasoning as R
 from veystrix.conversation import EXTRA_REASONING
 from veystrix.server import ModelService, RequestError, _check_chat_fields
-from veystrix.tests.test_agentic_long_fixtures import RealTokenizerBackend, TOKENIZER
-from veystrix.tests.test_server import FakeSession
 
 LOW = "Reasoning effort is set to low."
 XHIGH = "Reasoning effort is set to xhigh."
@@ -75,94 +73,6 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(ignored, [])
         with self.assertRaises(RequestError):
             _check_chat_fields({"model": "m", "messages": [], "thinking_budget": 100})
-
-
-@unittest.skipIf(TOKENIZER is None, "the checkpoint tokenizer is not available")
-class RealTemplateTests(unittest.TestCase):
-    """The scripted model, the REAL tokenizer and chat template: what the model would be shown for each level."""
-
-    def setUp(self):
-        self.session = FakeSession([])
-        self.session.backend = RealTokenizerBackend(TOKENIZER, [f"answer {i}" for i in range(20)])
-        self.session.preferences = dict(preferences.DEFAULTS, model="flashnext", thinking_enabled=False, effort="medium")
-        self.service = ModelService(self.session, context_limit=16384)
-        self.messages = [{"role": "system", "content": "You are a coding agent."}, {"role": "user", "content": "fix it"}]
-
-    def ask(self, payload):
-        self.service._request.reasoning = R.resolve(payload, self.session.preferences["thinking_enabled"],
-                                                    self.session.preferences["effort"])
-        try:
-            self.service.complete(self.messages, [], 64)
-        finally:
-            self.service._request.reasoning = None
-        return TOKENIZER.decode(self.session.backend.tape)
-
-    def test_each_level_changes_the_rendered_prompt_the_way_the_template_defines(self):
-        low = self.ask({"reasoning": {"effort": "low"}})
-        self.assertIn(LOW, low)
-        self.assertTrue(low.rstrip().split("answer")[0].rstrip().endswith("<think>") or "<think>\n" in low)
-        self.setUp()
-        xhigh = self.ask({"reasoning": {"effort": "xhigh"}})
-        self.assertIn(XHIGH, xhigh)
-        self.setUp()
-        medium = self.ask({"reasoning": {"effort": "medium"}})
-        self.assertNotIn("Reasoning effort is set to", medium)
-        self.assertIn("<think>\n", medium)
-        self.setUp()
-        high = self.ask({"reasoning": {"effort": "high"}})
-        self.assertIn(EXTRA_REASONING["high"], high)
-        self.assertNotIn("Reasoning effort is set to", high)
-        self.setUp()
-        off = self.ask({"reasoning": {"effort": "none"}})
-        self.assertIn("<think>\n\n</think>", off)
-        self.assertEqual(len({low, xhigh, medium, high, off}), 5)
-
-    def test_switching_low_high_medium_xhigh_low_in_one_session_follows_each_request_and_stores_nothing(self):
-        before = dict(self.session.preferences)
-        sequence = ("low", "high", "medium", "xhigh", "low")
-        rendered, applied = [], []
-        for level in sequence:
-            rendered.append(self.ask({"reasoning": {"effort": level}}))
-            applied.append(self.service.last_reasoning.effort)
-        self.assertEqual(applied, list(sequence))
-        self.assertEqual(self.session.preferences, before)              # nothing was written to the shared session
-        self.assertIn(LOW, rendered[0])
-        self.assertIn(EXTRA_REASONING["high"], rendered[1])
-        self.assertIn(XHIGH, rendered[3])
-        self.assertIn(LOW, rendered[4])
-        # every switch changes the prompt prefix (the template puts the instruction first), so the live tape is rebuilt,
-        # never reused across a level change: exact token identity is the cache identity
-        self.assertEqual(self.service.reused, 0)
-        self.assertEqual(self.service.rebuilt, 5)
-
-    def test_the_same_setting_twice_in_a_row_reuses_the_live_state_when_thinking_is_off(self):
-        self.ask({"reasoning": {"effort": "none"}})
-        self.messages = self.messages + [{"role": "assistant", "content": "answer 0"}, {"role": "user", "content": "again"}]
-        self.ask({"reasoning": {"effort": "none"}})
-        self.assertEqual((self.service.rebuilt, self.service.reused), (1, 1))
-
-    def test_with_thinking_on_a_resent_history_rebuilds_but_the_divergence_is_the_think_tail_not_the_effort_text(self):
-        """Known property, not an effort bug: the client echoes the reply without its reasoning, so the template re-renders the
-        past turn as an empty think block and differs from the tape the model really produced. The system prompt (which holds
-        the effort sentence) is identical, and the recorded first difference is after it."""
-        self.ask({"reasoning": {"effort": "low"}})
-        system_tokens = len(TOKENIZER.encode(self.session.backend.render_prefix)) if hasattr(self.session.backend, "render_prefix") else 0
-        self.messages = self.messages + [{"role": "assistant", "content": "answer 0"}, {"role": "user", "content": "again"}]
-        self.ask({"reasoning": {"effort": "low"}})
-        self.assertEqual(self.service.rebuilt, 2)
-        divergence = self.service.last_divergence
-        self.assertGreater(divergence["first_difference"], system_tokens)
-        window = TOKENIZER.decode(divergence["prompt_window"])
-        self.assertIn("think", window)
-
-    def test_an_auxiliary_request_with_other_controls_does_not_change_the_next_main_request(self):
-        main = self.ask({"reasoning": {"effort": "xhigh"}})
-        self.ask({"reasoning": {"effort": "none"}})                     # e.g. a title/summary side request
-        again = self.ask({"reasoning": {"effort": "xhigh"}})
-        self.assertIn(XHIGH, main)
-        self.assertIn(XHIGH, again)
-        self.assertEqual(self.session.preferences["effort"], "medium")
-        self.assertFalse(self.session.preferences["thinking_enabled"])
 
 
 if __name__ == "__main__":

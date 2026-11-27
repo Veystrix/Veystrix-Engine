@@ -14,8 +14,7 @@ class VerificationEntrypointTests(unittest.TestCase):
         self.assertTrue(script.is_file())
         self.assertTrue(os.access(script, os.X_OK))
         text = script.read_text()
-        for fragment in ("veystrix/tests", "models/flashnext/tests/unit",
-                         "models/nemotron35/tests/unit", "secret_scan.py",
+        for fragment in ("veystrix/tests", "secret_scan.py",
                          "swift build", "swift test", "linux_unit_tests.py"):
             self.assertIn(fragment, text)
 

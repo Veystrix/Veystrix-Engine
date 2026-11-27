@@ -57,7 +57,7 @@ class EngineBundleClosureTests(unittest.TestCase):
     """
 
     SCRIPT = ROOT / "packaging" / "engine" / "build_engine_bundle.sh"
-    PACKAGES = ("veystrix", "models/flashnext", "models/nemotron35", "models/shared")
+    PACKAGES = ("veystrix",)
 
     def shipped(self):
         import re

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MODELS = sorted(
     path for path in (ROOT / "models").iterdir()
     if path.is_dir() and (path / "__init__.py").is_file()
-)
+) if (ROOT / "models").is_dir() else []
 OUTPUT_OPTIONS = {"--json", "--jsonl", "--out", "--output", "--log", "--record"}
 # Machine state that later runs read back. These are caches, not results.
 STATE_FILES = (

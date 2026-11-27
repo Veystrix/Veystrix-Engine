@@ -18,7 +18,7 @@ message(STATUS "MLX version: ${MLX_VERSION}  include: ${MLX_INCLUDE_DIRS}")
 # Copy native_read.c into this build so CMake tracks it as a source of this target
 # (an absolute path outside the tree is silently dropped by the Makefile generator).
 set(NATIVE_READ_C ${CMAKE_CURRENT_BINARY_DIR}/native_read.c)
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../../models/flashnext/native_read.c
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../decode/src/native_read.c
                ${NATIVE_READ_C} COPYONLY)
 set(PAGER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../decode)
 add_library(veystrix_pager STATIC ${NATIVE_READ_C} ${PAGER_DIR}/src/io_pager.cpp ${PAGER_DIR}/src/io_pager_async.cpp)

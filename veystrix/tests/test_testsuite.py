@@ -20,7 +20,6 @@ from veystrix.testsuite.terminal import choose_model
 class TestSuiteDiscoveryTests(unittest.TestCase):
     def test_discovers_runtime_providers(self):
         runtimes = runtime_directories()
-        self.assertIn("nemotron35", runtimes)
         for removed in ("bonsai2", "k2_horizon", "qwen27b"):
             self.assertNotIn(removed, runtimes)
         for runtime in runtimes:
@@ -29,8 +28,8 @@ class TestSuiteDiscoveryTests(unittest.TestCase):
     def test_explicit_checkpoint_skips_installed_checkpoint_prompt(self):
         checkpoint = Path("/tmp/test-checkpoint")
         with patch("veystrix.testsuite.terminal.installed_checkpoints", return_value=[]):
-            self.assertEqual(choose_model("nemotron35-lightning", str(checkpoint)),
-                             ("nemotron35-lightning", checkpoint.resolve()))
+            self.assertEqual(choose_model("inkling2-mini", str(checkpoint)),
+                             ("inkling2-mini", checkpoint.resolve()))
 
     def test_runner_records_explicit_interrupted_outcome(self):
         class InterruptingOutput:

@@ -226,13 +226,13 @@ class InteractiveChatFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             prefs_path = str(Path(root) / "prefs.json")
             with patch.object(sys, "argv", [
-                "session.py", "--model", "flashnext",
+                "session.py", "--model", "inkling2-mini",
                 "--profile", "plain",
                 "--preferences-file", prefs_path,
             ]), patch(
                 "veystrix.session.build_backend", return_value=backend
             ), patch(
-                "veystrix.checkpoints.resolve_flashnext", return_value=Path(root)   # the backend is a fake: no checkpoint needed
+                "veystrix.checkpoints.resolve_inkling2_mini", return_value=Path(root)   # the backend is a fake: no checkpoint needed
             ), patch(
                 "veystrix.session.read_prompt", side_effect=inputs
             ), redirect_stdout(io.StringIO()) as out:

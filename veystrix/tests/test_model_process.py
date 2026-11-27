@@ -21,59 +21,6 @@ S(('127.0.0.1',int(sys.argv[1])),H).serve_forever()
 '''
 
 class ModelProcessTests(unittest.TestCase):
- def test_tiered_cache_is_only_passed_to_flashnext(self):
-  driver = ProcessDriver(flashnext_kv_cache="tiered4", flashnext_memory_policy="absolute-swap-only")
-  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
-  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
-  command = driver._command(flashnext, 8080)
-  self.assertIn("kv-tiered4", command)
-  self.assertIn("--no-auto-purge", command)
-  self.assertEqual(command[command.index("--max-cold-prefill") + 1], "65536")
-  self.assertEqual(command[command.index("--max-incremental-prefill") + 1], "32768")
-  self.assertNotIn("kv-tiered4", driver._command(nemotron, 8080))
-
- def test_pool_setting_is_flashnext_only_and_nemotron_sizes_its_own(self):
-  from unittest.mock import patch
-  driver = ProcessDriver(pool_gb="2")
-  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
-  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
-  with patch.dict(os.environ):
-   os.environ.pop("VEYSTRIX_NEMOTRON_POOL_GB", None)
-   command = driver._command(flashnext, 8080)
-   self.assertEqual(command[command.index("--pool-gb") + 1], "2")
-   command = driver._command(nemotron, 8080)
-   self.assertEqual(command[command.index("--pool-gb") + 1], "auto")
-   os.environ["VEYSTRIX_NEMOTRON_POOL_GB"] = "1"
-   command = driver._command(nemotron, 8080)
-   self.assertEqual(command[command.index("--pool-gb") + 1], "1")
-
- def test_speed_profile_only_applies_to_qwen(self):
-  driver = ProcessDriver(flashnext_speed=True)
-  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
-  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
-  self.assertIn("short-throughput", driver._command(flashnext, 8080))
-  self.assertNotIn("short-throughput", driver._command(nemotron, 8080))
-
- def test_exact_speed_only_applies_to_qwen_and_is_independent(self):
-  driver = ProcessDriver(flashnext_exact_speed=True)
-  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
-  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
-  self.assertIn("exact-speed", driver._command(flashnext, 8080))
-  self.assertNotIn("exact-speed", driver._command(nemotron, 8080))
-  self.assertNotIn("short-throughput", driver._command(flashnext, 8080))
-
- def test_bounded_prefill_only_applies_to_qwen_and_excludes_the_speed_profile(self):
-  driver = ProcessDriver(flashnext_bounded_prefill=True)
-  flashnext = InstalledModel("flash", "flashnext", "test", "/tmp/flash", "qwen4_exp", {}, None, "test")
-  nemotron = InstalledModel("nemo", "nemotron35-lightning", "test", "/tmp/nemo", "nemotron_h", {}, None, "test")
-  command = driver._command(flashnext, 8080)
-  self.assertEqual(command[command.index("prefill-16gb") - 1], "--enable")
-  self.assertNotIn("short-throughput", command)
-  self.assertNotIn("prefill-16gb", driver._command(nemotron, 8080))
-  self.assertNotIn("prefill-16gb", ProcessDriver()._command(flashnext, 8080))
-  with self.assertRaises(ValueError):
-   ProcessDriver(flashnext_speed=True, flashnext_bounded_prefill=True)
-
  def test_real_child_is_verified_and_unloaded(self):
   m=InstalledModel('test-model','flashnext','test','/tmp/test','qwen4_exp',{},None,'test')
   driver=ProcessDriver(startup_timeout=5,stop_timeout=5,command_factory=lambda model,port:[sys.executable,'-c',CHILD,str(port)])

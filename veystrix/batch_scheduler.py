@@ -154,15 +154,12 @@ class BatchScheduler(Scheduler):
             return ticket
 
     def serve_jobs(self, stop):
-        from models.flashnext import progress
-
         continuous_active = False
         with self._lock:
             self.loop_running = True
         try:
             while not stop.is_set():
                 if continuous_active and not self.admission.used:
-                    progress.PROGRESS.request_end()
                     continuous_active = False
                 # Legacy jobs share backend and experiment globals. Execute
                 # one only after all cooperative conversations have released.
@@ -188,13 +185,11 @@ class BatchScheduler(Scheduler):
                     if not self._memory_ready:
                         raise Busy("available memory is below the batching reserve")
                     if not continuous_active:
-                        progress.PROGRESS.request_begin(path="continuous-batch")
                         continuous_active = True
                     if work.decode_args is None:
                         work.value = work.call()
                     else:
                         self._run_decode_group(group)
-                    progress.PROGRESS.tick()
                 except KeyboardInterrupt:
                     for entry in group:
                         entry.error = Busy("the inference scheduler is stopping")
@@ -206,8 +201,7 @@ class BatchScheduler(Scheduler):
                     for entry in group:
                         entry.done.set()
         finally:
-            if continuous_active:
-                progress.PROGRESS.request_end()
+            pass
             with self._lock:
                 self._closing = True
                 self.loop_running = False

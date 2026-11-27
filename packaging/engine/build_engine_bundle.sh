@@ -57,38 +57,20 @@ rm -rf "$OUT"/python/lib/python3.12/{test,idlelib,tkinter,turtledemo,turtle.py} 
        "$OUT"/python/lib/{tcl*,tk*,itcl*,thread*,Tix*,sqlite3*} "$OUT"/python/bin/{idle*,2to3*,pydoc*} 2>/dev/null || true
 
 echo "==> Engine sources -> compiled lib"
-for pkg in veystrix models/__init__.py models/flashnext models/nemotron35 models/shared; do
+for pkg in veystrix; do
   mkdir -p "$OUT/lib/$(dirname "$pkg")" 2>/dev/null || true
   ditto "$ROOT/$pkg" "$OUT/lib/$pkg"
 done
-# Nemotron ships its runtime, not its model-free tests.
-find "$OUT/lib/models/nemotron35" -name 'test_*.py' -delete
 find "$OUT/lib" \( -name tests -o -name bench -o -name __pycache__ -o -name '*.md' \) -prune -exec rm -rf {} +
 # The engine imports its telemetry and memory sampler at module load (veystrix.bench.telemetry is a no-op
 # unless a benchmark activates it). Ship exactly that import closure, not the qualification harnesses.
 mkdir -p "$OUT/lib/veystrix/bench"
 cp "$ROOT/veystrix/bench/"{__init__.py,telemetry.py,memory.py,provenance.py} "$OUT/lib/veystrix/bench/"
-# The production safety guard and optional layer diagnostics currently share these
-# benchmark utilities. Ship only their exact import closure, not the test suite.
-mkdir -p "$OUT/lib/models/flashnext/tests/bench"
-cp "$ROOT/models/flashnext/tests/__init__.py" "$OUT/lib/models/flashnext/tests/"
-cp "$ROOT/models/flashnext/tests/bench/"{__init__.py,prefill_memory_harness.py,bench_prefill_memory.py,layer_gate_probe.py} "$OUT/lib/models/flashnext/tests/bench/"
-# Precompile the native helper. Packaged builds then need no C source and no
-# compiler on the user's Mac (a normal macOS install has no xcrun/clang).
-echo "==> Precompiling native_read.dylib"
-SRCDIR="$ROOT/models/flashnext"
-xcrun clang -O2 -dynamiclib -arch "$(uname -m)" \
-  -install_name @rpath/native_read.bundled.dylib "$SRCDIR/native_read.c" \
-  -o "$OUT/lib/models/flashnext/native_read.bundled.dylib"
-[[ -f "$OUT/lib/models/flashnext/native_read.bundled.dylib" ]] || { echo "ERROR: native dylib missing"; exit 1; }
-
 # Compile next to the source (-b = legacy .pyc location, importable without the .py), then drop every .py file.
 # -s "$OUT" strips the build path from the stored module filename, so no /Users/<name>/... leaks via co_filename.
-# The settings registry now globs setting_*.pyc first, so no provider source is shipped.
 "$PY" -m compileall -q -b -s "$OUT" "$OUT/lib"
 find "$OUT/lib" -name '*.py' -delete
 find "$OUT/lib" -name '*.c' -delete
-[[ -f "$OUT/lib/models/flashnext/settings/registry.pyc" ]] || { echo "ERROR: registry missing"; exit 1; }
 [[ -z "$(find "$OUT/lib" -type f \( -name '*.py' -o -name '*.c' \) -print -quit)" ]] || { echo "ERROR: source files remain in bundle"; exit 1; }
 
 # Encrypt all compiled modules. Decompilers then see ciphertext instead of

@@ -141,12 +141,12 @@ class SessionTests(unittest.TestCase):
         backend = LoadedBackend()
         with tempfile.TemporaryDirectory() as root, \
                 patch.object(sys, "argv", [
-                    "session.py", "--model", "nemotron35-lightning",
+                    "session.py", "--model", "inkling2-mini",
                     "--model-path", str(Path(root) / "model"),
                     "--preferences-file", str(Path(root) / "preferences.json"),
                     "--api-keys-file", str(Path(root) / "keys.json"),
                 ]), \
-                patch("veystrix.checkpoints.resolve_nemotron35", side_effect=lambda p=None: Path(p)), \
+                patch("veystrix.checkpoints.resolve_inkling2_mini", side_effect=lambda p=None: Path(p)), \
                 patch("veystrix.session._enforce_power_gate"), \
                 patch("veystrix.session.build_backend", return_value=backend), \
                 patch("veystrix.session.read_prompt", side_effect=(
@@ -180,13 +180,13 @@ class SessionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root, \
                 patch.object(sys, "argv", [
-                    "session.py", "--model", "nemotron35-lightning",
+                    "session.py", "--model", "inkling2-mini",
                     "--model-path", str(Path(root) / "model"),
                     "--preferences-file", str(Path(root) / "preferences.json"),
                     "--api-keys-file", str(Path(root) / "keys.json"),
                     "--seed", "37",
                 ]), \
-                patch("veystrix.checkpoints.resolve_nemotron35", side_effect=lambda p=None: Path(p)), \
+                patch("veystrix.checkpoints.resolve_inkling2_mini", side_effect=lambda p=None: Path(p)), \
                 patch("veystrix.session._enforce_power_gate"), \
                 patch("veystrix.session.build_backend", side_effect=load_backend), \
                 patch("veystrix.session.run_turn_plain", side_effect=generate), \
@@ -455,35 +455,6 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(result, "threshold: 1.0")
             self.assertEqual(session.backend.threshold, 1.0)
             self.assertFalse(preferences_path.exists())
-
-
-    def test_gpu_keepwarm_toggle_is_saved(self):
-        from models.flashnext import expert_cache
-
-        previous = expert_cache.gpu_keepwarm()
-
-        class KeepWarmBackend(FakeBackend):
-            def configure(self, argument):
-                _name, value = argument.split()
-                expert_cache.set_gpu_keepwarm(value == "on")
-                return f"gpu-keepwarm: {value}"
-
-        try:
-            expert_cache.set_gpu_keepwarm(True)
-            with tempfile.TemporaryDirectory() as root:
-                preferences_path = Path(root) / "preferences.json"
-                session = Session(
-                    KeepWarmBackend(), "plain", dict(preferences.DEFAULTS),
-                    preferences_path, Path(root) / "keys.json",
-                )
-                session.model_settings("gpu-keepwarm off")
-                self.assertFalse(session.preferences["flashnext_gpu_keepwarm"])
-                saved = preferences.load(preferences_path)
-                self.assertFalse(saved["flashnext_gpu_keepwarm"])
-                session.model_settings("gpu-keepwarm on")
-                self.assertTrue(preferences.load(preferences_path)["flashnext_gpu_keepwarm"])
-        finally:
-            expert_cache.set_gpu_keepwarm(previous)
 
 
 class StartupSettingRefusalTests(unittest.TestCase):

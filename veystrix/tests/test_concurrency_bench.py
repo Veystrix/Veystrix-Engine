@@ -404,8 +404,7 @@ class MainTests(HarnessCase):
         for stub in (mock.patch.object(concurrency, "load_backend", return_value=backend),
                      mock.patch.object(concurrency, "collect", return_value={"host": "stub"}),
                      mock.patch.object(concurrency, "checkpoint_metadata", return_value={"files": "stub"}),
-                     mock.patch("veystrix.bench.memory.sample", healthy_memory),
-                     mock.patch("models.flashnext.diskio.ReadMeter", FakeMeter)):
+                     mock.patch("veystrix.bench.memory.sample", healthy_memory)):
             self.enterContext(stub)
         with contextlib.redirect_stdout(io.StringIO()):
             return concurrency.main([
@@ -477,61 +476,6 @@ class MainTests(HarnessCase):
             concurrency.apply_harness_environment(directory, prefix_cache=True)
             observed = {key: os.environ.get(key) for key in expected}
         self.assertEqual(observed, expected)
-
-
-class TinyNemotronTests(HarnessCase):
-    """The same core function on the tiny synthetic Nemotron checkpoint: real forks, real grouped decode, main-thread loop."""
-
-    @classmethod
-    def setUpClass(cls):
-        from models.nemotron35.tiny_checkpoint import write_checkpoint
-
-        cls.directory = Path(tempfile.mkdtemp(prefix="concurrency-tiny-"))
-        write_checkpoint(cls.directory / "ck")
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.directory, ignore_errors=True)
-
-    def backend(self):
-        from models.nemotron35.tests.unit.test_backend import StubTokenizer, machine
-        from models.nemotron35.tiny_checkpoint import permissive_config_check
-        from veystrix.backends.nemotron35 import NemotronBackend
-
-        backend = NemotronBackend(
-            self.directory / "ck", authorized=True, config_check=permissive_config_check, machine=machine(),
-            tokenizer=StubTokenizer(), pool_bytes=64 * 1024, chunk_tokens=4, session_dir=str(self.directory / "s"),
-            prefix_dir=str(self.directory / "p"), snapshot_tokens=8, prefix_cache=False)
-        backend._current_machine = lambda: machine()
-        self.addCleanup(backend.close)
-        return backend
-
-    def test_dedicated_cooperative_1_2_and_4_agree_token_for_token(self):
-        backend = self.backend()
-        arms = ["dedicated", "cooperative-1", "cooperative-2", "cooperative-4"]
-        prompts = concurrency.prompt_variants(backend, 400, 4)
-        report = {"model": "nemotron35-tiny"}
-        with mock.patch("veystrix.bench.memory.sample", healthy_memory):
-            code = concurrency.run_benchmark(
-                backend, report, self.out, arms=arms, prompts=prompts, output_tokens=6, read_meter=FakeMeter,
-                headroom=lambda: 1 << 62, memory_interval=0.05)
-        self.assertEqual(report["status"], "completed", report.get("error"))
-        self.assertEqual(code, concurrency.EXIT_CLEAN)
-        counts = [len(arm["streams"]) for arm in report["arms"]]
-        self.assertEqual(counts, [1, 1, 2, 4])
-        for arm in report["arms"]:
-            for stream in arm["streams"]:
-                self.assertTrue(stream["completed"], stream["error"])
-                self.assertTrue(stream["digests_match_single"], (arm["arm"], stream["variant"]))
-                self.assertEqual(stream["output_tokens"], 6)
-        # (The random tiny model continues these long, near-periodic prompts alike, so token streams are not asked to
-        # differ here; the disconnect tests use short prompts whose continuations do.)
-        self.assertEqual(len({row["prompt_sha256"] for row in report["arms"][3]["streams"]}), 4)
-        self.assertEqual(len(report["reference_runs"]), 3)
-        self.assertEqual(report["arms"][3]["scheduler"]["max_active"], 4)
-        self.assertTrue(report["exactness"]["all_match"])
-        self.assertIsNotNone(report["cooperative_1_overhead_pct"])
-        self.assertEqual(json.loads(self.out.read_text())["status"], "completed")
 
 
 if __name__ == "__main__":

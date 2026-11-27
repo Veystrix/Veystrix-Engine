@@ -13,15 +13,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from veystrix import model_identity, preferences
-from models.flashnext.settings import modes
 from veystrix.checkpoints import installed_checkpoints
 from veystrix.tool.cli import TOOL_COMMANDS as _TOOL_COMMANDS, dispatch_tool as _dispatch_tool
 
 
 PYTHON_ENV = {
     "shared": "VEYSTRIX_PYTHON",
-    "flashnext": "VEYSTRIX_FLASHNEXT_PYTHON",
-    "nemotron35-lightning": "VEYSTRIX_NEMOTRON_PYTHON",
     "inkling2-mini": "VEYSTRIX_INKLING2_PYTHON",
 }
 MANAGED_ENV = ROOT / ".venv"
@@ -36,21 +33,6 @@ RUNTIME_VERSIONS = {
     "huggingface-hub": "1.29.0",
 }
 RUNTIME_PROBES = {
-    "flashnext": """
-from mlx_vlm.utils import (apply_generation_config_defaults, get_model_and_args,
-                           load_config, update_module_configs)
-""",
-    "nemotron35-lightning": """
-from mlx_lm.models.nemotron_h import Model, ModelArgs
-from mlx_lm.models.cache import ArraysCache, KVCache
-from transformers import AutoTokenizer
-""",
-    # Ornith and Inkling 2 Mini run on the C++ generic runtime; the Python side only needs the
-    # tokenizer and MLX (recipe generation reads safetensors headers, no weights).
-    "ornith": """
-import mlx.core
-from transformers import AutoTokenizer
-""",
     "inkling2-mini": """
 import mlx.core
 from transformers import AutoTokenizer
@@ -259,39 +241,11 @@ def command(argv: list[str]) -> tuple[list[str], dict[str, str]]:
     parser.add_argument("--model-path", "--checkpoint", dest="model_path")
     parser.add_argument("--preferences-file", default=preferences.DEFAULT_PATH)
     parser.add_argument("--v4", action="store_true")
-    parser.add_argument("--mode", choices=modes.MODES)
-    parser.add_argument("--pool-gb", help="auto (default), 0, or a fixed size up to 2")
-    parser.add_argument("--native-mtp", choices=("off", "on"), help="Flash-Next native multi-token prediction")
-    parser.add_argument("--mtp-depth", type=int, choices=range(1, 9), help="Flash-Next native MTP draft length")
-    parser.add_argument("--enable", action="append", default=[], choices=tuple(modes.EXPERIMENTAL))
     parser.add_argument("--context-limit", type=int)
-    parser.add_argument("--max-cold-prefill", type=int,
-                        help="largest cold prefill in tokens (32768 default, 65536 with kv-tiered4, 2048-token internal chunks)")
-    parser.add_argument("--max-incremental-prefill", type=int,
-                        help="largest uncached increment per request in tokens (AGENTIC default 32768)")
     parser.add_argument("--prefix-dir")
-    parser.add_argument("--auto-purge", action="store_true")
-    parser.add_argument("--no-auto-purge", action="store_true",
-                        help="turn off the automatic memory preparation purge (on by default for flashnext)")
     known, remaining = parser.parse_known_args(argv)
 
-    model = known.model or "flashnext"
-    if known.mode and model != "flashnext":
-        raise SystemExit("--mode applies to the flashnext model only")
-    # A benchmark launch states its own conditions and must not be re-configured by a mode.
-    benchmarking = any(value.startswith("--benchmark") for value in remaining)
-    plan = None
-    if model == "flashnext" and (known.mode or not benchmarking):
-        try:
-            serve = "--server" in remaining
-            default_mode = modes.AGENTIC if serve else modes.CHAT
-            plan = modes.plan_mode(
-                known.mode or default_mode, pool_gb=known.pool_gb, enable=known.enable,
-                prefix_dir=known.prefix_dir, context_limit=known.context_limit,
-                serve=serve, max_cold_prefill=known.max_cold_prefill,
-                max_incremental_prefill=known.max_incremental_prefill)
-        except modes.ModeError as exc:
-            raise SystemExit(f"veystrix: {exc}") from exc
+    model = known.model or model_identity.MODEL_CHOICES[0]
     interpreter = _interpreter(model)
 
     # A source checkout runs the session script; the packaged app ships compiled modules only, so it runs the module.
@@ -303,82 +257,32 @@ def command(argv: list[str]) -> tuple[list[str], dict[str, str]]:
         "--model", model,
         "--preferences-file", known.preferences_file,
     ]
-    if known.profile or plan:
-        chat_args += ["--profile", known.profile or plan.profile]
+    if known.profile:
+        chat_args += ["--profile", known.profile]
     if known.model_path:
         chat_args += ["--model-path", known.model_path]
     if os.environ.get("VEYSTRIX_WORKSPACE") and "--workspace" not in remaining:
         chat_args += ["--workspace", os.environ["VEYSTRIX_WORKSPACE"]]
     chat_args.extend(remaining)
-    if plan and plan.mode == modes.AGENTIC and "--server" not in chat_args:
-        chat_args.append("--server")
 
     environment = dict(os.environ)
-    output_key = "VEYSTRIX_FLASHNEXT_OUTPUT_TOKENS" if model == "flashnext" else "VEYSTRIX_NEMOTRON_OUTPUT_TOKENS"
-    if output_key in environment:
-        environment["VEYSTRIX_DEFAULT_MAX_OUTPUT_TOKENS"] = environment[output_key]
-    buffer_key = "FLASHNEXT_MLX_AUTO_BUFFER_CAPS" if model == "flashnext" else "VEYSTRIX_NEMOTRON_MLX_AUTO_BUFFER_CAPS"
-    if environment.get("VEYSTRIX_MLX_AUTO_BUFFER_CAPS") == "1" or environment.get(buffer_key) == "1":
+    if environment.get("VEYSTRIX_MLX_AUTO_BUFFER_CAPS") == "1":
         # MLX reads these once in the child, before its first Metal command buffer.
         environment.setdefault("MLX_MAX_OPS_PER_BUFFER", "200")
         environment.setdefault("MLX_MAX_MB_PER_BUFFER", "1024")
     if known.prefix_dir:
         environment["VEYSTRIX_CACHE_ROOT"] = known.prefix_dir
-    if plan:
-        modes.apply_mode(environment, plan)
-        if not known.profile:
-            environment["VEYSTRIX_PROFILE_EPHEMERAL"] = "1"
-    if model == "flashnext":
-        for key in ("NATIVE_MTP", "MTP_DEPTH"):
-            configured = environment.get(f"VEYSTRIX_FLASHNEXT_{key}")
-            if configured is not None:
-                environment[f"FLASHNEXT_{key}"] = configured
-    if known.native_mtp is not None or known.mtp_depth is not None:
-        if model != "flashnext":
-            parser.error("native MTP startup flags are available only for Flash-Next")
-        if known.native_mtp is not None:
-            environment["FLASHNEXT_NATIVE_MTP"] = known.native_mtp
-        if known.mtp_depth is not None:
-            environment["FLASHNEXT_MTP_DEPTH"] = str(known.mtp_depth)
-    if known.no_auto_purge:
-        environment["FLASHNEXT_AUTO_PURGE"] = "0"
-    elif known.auto_purge:
-        environment["FLASHNEXT_AUTO_PURGE"] = "1"
-    elif model == "flashnext" and not known.no_auto_purge and "FLASHNEXT_AUTO_PURGE" not in environment:
-        # Autonomous memory preparation: a conditional, authorized file-cache purge is part of normal startup. It never
-        # runs during a load or a request, needs sudo -n permission, and backs off; FLASHNEXT_AUTO_PURGE=0 or
-        # --no-auto-purge turns it off.
-        environment["FLASHNEXT_AUTO_PURGE"] = "1"
-    if model == "flashnext":
-        from models.flashnext.settings.launch import apply_chat_environment
-
-        apply_chat_environment(environment)
-    if model == "nemotron35-lightning":
-        # Same supervised-server contract as Flash-Next: guard on, chunked prefill, agentic mode for a server.
-        # Real inference is allowed by default; VEYSTRIX_NEMOTRON_AUTHORIZED=0 is a kill switch.
-        if "--server" in chat_args:
-            environment.setdefault("VEYSTRIX_MODE", "agentic")
-            environment.setdefault("FLASHNEXT_WATCHDOG", "1")
-            environment.setdefault("FLASHNEXT_WATCHDOG_MEMORY", "1")
-        environment.setdefault("FLASHNEXT_CHAT_GUARD", "1")
-        environment.setdefault("FLASHNEXT_PREFILL_CHUNK_TOKENS", "2048")
-        if known.pool_gb:
-            environment["VEYSTRIX_NEMOTRON_POOL_GB"] = known.pool_gb
-        if known.context_limit is not None:
-            environment["VEYSTRIX_CONTEXT_LIMIT"] = str(known.context_limit)
-    if model in ("ornith", "inkling2-mini"):
-        # Generic C++ runtime only: same guarded supervised-server contract as the other models.
-        environment["VEYSTRIX_ENGINE"] = "cpp"
-        if "--server" in chat_args:
-            environment.setdefault("VEYSTRIX_MODE", "agentic")
-            environment.setdefault("FLASHNEXT_WATCHDOG", "1")
-            environment.setdefault("FLASHNEXT_WATCHDOG_MEMORY", "1")
-        environment.setdefault("FLASHNEXT_CHAT_GUARD", "1")
-        environment.setdefault("FLASHNEXT_PREFILL_CHUNK_TOKENS", "2048")
-        if known.context_limit is not None:
-            environment["VEYSTRIX_CONTEXT_LIMIT"] = str(known.context_limit)
-        if known.kv:
-            environment["VEYSTRIX_KV_MODE"] = known.kv
+    environment["VEYSTRIX_ENGINE"] = "cpp"
+    if "--server" in chat_args:
+        environment.setdefault("VEYSTRIX_MODE", "agentic")
+        environment.setdefault("FLASHNEXT_WATCHDOG", "1")
+        environment.setdefault("FLASHNEXT_WATCHDOG_MEMORY", "1")
+    environment.setdefault("FLASHNEXT_CHAT_GUARD", "1")
+    environment.setdefault("FLASHNEXT_PREFILL_CHUNK_TOKENS", "2048")
+    if known.context_limit is not None:
+        environment["VEYSTRIX_CONTEXT_LIMIT"] = str(known.context_limit)
+    if known.kv:
+        environment["VEYSTRIX_KV_MODE"] = known.kv
     if not session_script.is_file():
         environment["PYTHONPATH"] = os.pathsep.join(p for p in (str(ROOT), environment.get("PYTHONPATH", "")) if p)
     return ["/usr/bin/caffeinate", "-i", *chat_args], environment
@@ -438,28 +342,6 @@ def main() -> int:
         from veystrix.workflows.__main__ import main as workflow_main
         return workflow_main(sys.argv[2:])
 
-    # Keep this check before runtime discovery or setup: it must never download
-    # dependencies or load the user's model.
-    probe = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    probe.add_argument("--model")
-    probe.add_argument("--model-path", "--checkpoint", dest="checkpoint")
-    probe.add_argument("--check", action="store_true")
-    options, _ = probe.parse_known_args(sys.argv[1:])
-    if options.model == "nemotron35-lightning":
-        if options.checkpoint and not Path(options.checkpoint).expanduser().is_dir():
-            raise SystemExit(f"Nemotron checkpoint folder does not exist: {options.checkpoint}; no download was attempted.")
-        if options.check and not options.checkpoint:
-            raise SystemExit("Nemotron --check requires --checkpoint /path/to/model; no download was attempted.")
-        if options.check:
-            import json
-            from models.nemotron35.config import ConfigurationError, inspect_checkpoint
-            try:
-                print(json.dumps(inspect_checkpoint(options.checkpoint, hashes="--hashes" in sys.argv), indent=2))
-            except ConfigurationError as exc:
-                raise SystemExit(f"Nemotron check: {exc}") from exc
-            return 0
-        if os.environ.get("VEYSTRIX_NEMOTRON_AUTHORIZED") == "0":
-            raise SystemExit("Nemotron is disabled by VEYSTRIX_NEMOTRON_AUTHORIZED=0.")
     if len(sys.argv) > 1 and sys.argv[1] == "setup":
         return setup_environment(sys.argv[2:])
     warning = branch_sync_warning()
